@@ -66,7 +66,7 @@ export function LandingHeader() {
         {/* Desktop Actions */}
         <div className="hidden items-center gap-6 md:flex">
           <a
-            href="/welcome-page#signin"
+            href="/signin"
             className="text-sm font-medium text-white transition-colors hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-primary focus-visible:ring-offset-2 focus-visible:ring-offset-obsidian-graphite"
           >
             Sign In
@@ -107,7 +107,7 @@ export function LandingHeader() {
             ))}
             <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4">
               <a
-                href="/welcome-page#signin"
+                href="/signin"
                 onClick={closeMobileMenu}
                 className="rounded-lg px-4 py-2.5 text-center text-sm font-medium text-white transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-primary"
               >

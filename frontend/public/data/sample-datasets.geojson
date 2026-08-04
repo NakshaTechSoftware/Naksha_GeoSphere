@@ -1,0 +1,200 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "New Delhi",
+        "type": "Capital City",
+        "population": 32941000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.2090, 28.6139]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Mumbai",
+        "type": "Metropolitan City",
+        "population": 21043000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [72.8777, 19.0760]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Bengaluru",
+        "type": "Technology Hub",
+        "population": 13608000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.5946, 12.9716]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Kolkata",
+        "type": "Metropolitan City",
+        "population": 15134000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [88.3639, 22.5726]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Chennai",
+        "type": "Metropolitan City",
+        "population": 11503000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [80.2707, 13.0827]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Hyderabad",
+        "type": "Technology Hub",
+        "population": 10494000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [78.4867, 17.3850]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Pune",
+        "type": "Metropolitan City",
+        "population": 7764000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [73.8567, 18.5204]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Ahmedabad",
+        "type": "Metropolitan City",
+        "population": 8450000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [72.5714, 23.0225]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Jaipur",
+        "type": "Heritage City",
+        "population": 3460000,
+        "category": "heritage"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [75.7873, 26.9124]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Surat",
+        "type": "Industrial City",
+        "population": 6538000,
+        "category": "industrial"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [72.8311, 21.1702]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Lucknow",
+        "type": "Heritage City",
+        "population": 3382000,
+        "category": "heritage"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [80.9462, 26.8467]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Kanpur",
+        "type": "Industrial City",
+        "population": 3162000,
+        "category": "industrial"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [80.3319, 26.4499]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Nagpur",
+        "type": "Regional Hub",
+        "population": 2497000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [79.0882, 21.1458]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Indore",
+        "type": "Commercial Hub",
+        "population": 2201000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [75.8577, 22.7196]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Thane",
+        "type": "Satellite City",
+        "population": 1890000,
+        "category": "urban"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [72.9781, 19.2183]
+      }
+    }
+  ]
+}

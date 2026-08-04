@@ -1,0 +1,85 @@
+# Naksha GeoSphere — production overlay.
+#
+# No source mounts, no hot reload, multi-stage production images, no
+# database/Redis/MinIO ports published to the host, resource limits.
+#
+#   docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+#
+# NOTE: Mailpit is a local-mail-testing tool and is intentionally not
+# defined here — production email delivery is out of scope for this
+# foundation (see docs/DEPLOYMENT.md).
+
+services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    # No `ports:` — only reachable from other containers on naksha-network.
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    # No `ports:` — only reachable from other containers on naksha-network.
+
+  minio:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    # No `ports:` — production should sit behind a managed/private
+    # S3-compatible endpoint or an internal-only load balancer; see
+    # docs/DEPLOYMENT.md.
+
+  api:
+    build:
+      target: runner
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    environment:
+      API_DOCS_ENABLED: "false"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  worker:
+    build:
+      target: runner
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  web:
+    build:
+      target: runner
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must be set in .env}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
+    ports:
+      - "${WEB_HOST_PORT:-3000}:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M

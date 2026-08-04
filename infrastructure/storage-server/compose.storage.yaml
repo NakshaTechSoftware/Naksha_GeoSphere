@@ -1,0 +1,119 @@
+# Naksha GeoSphere — storage server Compose configuration.
+#
+# Runs ONLY PostgreSQL/PostGIS, Redis, and S3-compatible object storage
+# (+ its one-shot bucket-init job). No frontend, API, worker, mail, or
+# any customer-facing service belongs in this file.
+#
+# This machine already runs other, unrelated Docker projects. This file
+# uses a fixed, dedicated Compose project name (below) and a dedicated
+# network so it can never collide with, depend on, or be confused for
+# those other projects. It defines NO named Docker volumes — all data is
+# bind-mounted to explicit Windows paths under E:/Naksha_GeoSphere_Storage
+# so it is never touched by `docker volume prune` or similar commands run
+# for unrelated projects.
+#
+# ALWAYS run this with an explicit project name and env file — never rely
+# on the directory name:
+#
+#   docker compose -p naksha-geosphere-storage --env-file .env.storage -f compose.storage.yaml up -d
+#
+# (scripts/start-storage.ps1 does exactly this.)
+
+name: naksha-geosphere-storage
+
+networks:
+  storage-network:
+    name: naksha-geosphere-storage-network
+    driver: bridge
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: naksha-geosphere-storage-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env.storage}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env.storage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.storage}
+      # Explicit, not left to image-version defaults.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "${STORAGE_SERVER_IP:?STORAGE_SERVER_IP must be set in .env.storage}:${POSTGRES_HOST_PORT:?POSTGRES_HOST_PORT must be set in .env.storage}:5432"
+    volumes:
+      - E:/Naksha_GeoSphere_Storage/data/postgres:/var/lib/postgresql/data
+      - ./init/database:/docker-entrypoint-initdb.d:ro
+      - E:/Naksha_GeoSphere_Storage/backups:/backups
+      - E:/Naksha_GeoSphere_Storage/logs:/logs
+    networks:
+      - storage-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7.4.1-alpine
+    container_name: naksha-geosphere-storage-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.storage}
+    command: >
+      sh -c 'redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --appendfsync everysec'
+    ports:
+      - "${STORAGE_SERVER_IP:?STORAGE_SERVER_IP must be set in .env.storage}:${REDIS_HOST_PORT:?REDIS_HOST_PORT must be set in .env.storage}:6379"
+    volumes:
+      - E:/Naksha_GeoSphere_Storage/data/redis:/data
+    networks:
+      - storage-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: naksha-geosphere-storage-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set in .env.storage}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set in .env.storage}
+      MINIO_REGION_NAME: ${S3_REGION:-geosphere}
+    ports:
+      - "${STORAGE_SERVER_IP:?STORAGE_SERVER_IP must be set in .env.storage}:${S3_API_HOST_PORT:?S3_API_HOST_PORT must be set in .env.storage}:9000"
+      - "${STORAGE_SERVER_IP:?STORAGE_SERVER_IP must be set in .env.storage}:${S3_CONSOLE_HOST_PORT:?S3_CONSOLE_HOST_PORT must be set in .env.storage}:9001"
+    volumes:
+      - E:/Naksha_GeoSphere_Storage/data/object-storage:/data
+    networks:
+      - storage-network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+    container_name: naksha-geosphere-storage-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set in .env.storage}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set in .env.storage}
+      S3_SOURCE_BUCKET: ${S3_SOURCE_BUCKET:-geosphere-source-data}
+      S3_PREVIEW_BUCKET: ${S3_PREVIEW_BUCKET:-geosphere-preview-data}
+      S3_ORDER_BUCKET: ${S3_ORDER_BUCKET:-geosphere-order-output}
+      S3_TEMPORARY_BUCKET: ${S3_TEMPORARY_BUCKET:-geosphere-temporary-data}
+    entrypoint: ["/bin/sh", "/init/create-buckets.sh"]
+    volumes:
+      - ./init/object-storage/create-buckets.sh:/init/create-buckets.sh:ro
+    networks:
+      - storage-network
+    restart: "no"

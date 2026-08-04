@@ -1,0 +1,146 @@
+name: security-ci
+
+# Severity policy (documented here since this workflow is the
+# enforcement point):
+#   - Secret scanning: ANY finding fails the build.
+#   - Dependency vulnerability scanning: fails on HIGH or CRITICAL.
+#   - Container image scanning: fails on CRITICAL only (HIGH is reported
+#     but does not block, since base-image HIGH findings are common and
+#     frequently unfixable on a given day — CRITICAL must still be
+#     addressed before merge).
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  schedule:
+    # Catches newly disclosed CVEs in already-merged dependencies.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  dependency-scan-frontend:
+    name: Dependency scan (frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.15.4"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.1"
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit (fails on high/critical)
+        run: pnpm audit --audit-level=high
+
+  dependency-scan-backend:
+    name: Dependency scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api, worker]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.8"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+
+      - name: Install service dependencies
+        working-directory: services/${{ matrix.service }}
+        run: pip install .
+
+      - name: pip-audit (fails on any known vulnerability)
+        working-directory: services/${{ matrix.service }}
+        run: pip-audit --strict
+
+  container-scan:
+    name: Container image scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: web
+            context: .
+            dockerfile: apps/web/Dockerfile
+          - service: api
+            context: services/api
+            dockerfile: services/api/Dockerfile
+          - service: worker
+            context: services/worker
+            dockerfile: services/worker/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.service }} image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: runner
+          push: false
+          load: true
+          tags: naksha-${{ matrix.service }}:scan
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+      - name: Trivy scan (report HIGH, fail on CRITICAL)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: naksha-${{ matrix.service }}:scan
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+        env:
+          TRIVY_SEVERITY: "HIGH,CRITICAL"
+
+  iac-scan:
+    name: IaC / filesystem scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy filesystem + config scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          skip-dirs: "node_modules,.venv,.next"

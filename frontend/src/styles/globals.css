@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "./tokens.css";
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  body {
+    background-color: var(--color-page-background);
+    color: var(--color-primary-text);
+    font-family: var(--font-inter), system-ui, sans-serif;
+    font-weight: 400;
+  }
+
+  /* Typography weights */
+  h1, h2, h3 {
+    font-family: var(--font-inter), system-ui, sans-serif;
+    font-weight: 600;
+  }
+
+  button {
+    font-family: var(--font-inter), system-ui, sans-serif;
+    font-weight: 600;
+  }
+
+  ::selection {
+    background-color: var(--color-atlas-cobalt);
+    color: var(--color-text-on-dark);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-atlas-cobalt);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Hero Title Styles */
+  .hero-title {
+    margin: 0;
+    font-family: var(--font-inter), "Inter", system-ui, sans-serif;
+    font-weight: 700;
+    color: var(--color-obsidian-graphite);
+    letter-spacing: -0.045em;
+    line-height: 0.98;
+    font-size: clamp(3rem, 4.2vw, 4.5rem);
+  }
+
+  .hero-title-line {
+    display: block;
+    white-space: nowrap;
+  }
+
+  .hero-title-dot {
+    color: var(--color-atlas-cobalt);
+  }
+
+  /* Responsive sizing for mobile */
+  @media (max-width: 768px) {
+    .hero-title {
+      font-size: clamp(2.35rem, 11vw, 3.25rem);
+    }
+  }
+
+  /* Geospatial Background Pattern */
+  .geospatial-background {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    background-color: var(--color-polar-pearl);
+  }
+
+  .geospatial-background::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    opacity: 1;
+    background-repeat: repeat;
+    background-size: 480px 360px;
+    background-position: 0 0;
+    background-image: url("/patterns/topographic-contours.svg");
+  }
+
+  .geospatial-background::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgba(53, 99, 233, 0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(53, 99, 233, 0.025) 1px, transparent 1px),
+      radial-gradient(circle, rgba(53, 99, 233, 0.07) 1px, transparent 1.2px);
+    background-size: 40px 40px;
+    background-position: 0 0, 0 0, 20px 20px;
+    opacity: 0.72;
+  }
+
+  /* Mobile responsive adjustments */
+  @media (max-width: 768px) {
+    .geospatial-background::before {
+      opacity: 0.65;
+      background-size: 540px 405px;
+    }
+
+    .geospatial-background::after {
+      opacity: 0.48;
+    }
+  }
+}

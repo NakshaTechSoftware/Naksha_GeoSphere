@@ -1,0 +1,130 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/api/**"
+      - "services/worker/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "services/api/**"
+      - "services/worker/**"
+      - ".github/workflows/backend-ci.yml"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12.8"
+  # CI-only ephemeral database credentials — never used outside this
+  # workflow's disposable service container.
+  CI_POSTGRES_DB: naksha_geosphere_ci
+  CI_POSTGRES_USER: ci_test_user
+  CI_POSTGRES_PASSWORD: ci_test_password_ephemeral
+
+jobs:
+  lint-type-test:
+    name: Lint, typecheck, test, validate migrations
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: ${{ env.CI_POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.CI_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.CI_POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_test_user -d naksha_geosphere_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.4.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://ci_test_user:ci_test_password_ephemeral@localhost:5432/naksha_geosphere_ci
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+      MINIO_ACCESS_KEY: ci-test-access-key
+      MINIO_SECRET_KEY: ci-test-secret-key
+      SECRET_KEY: ci-test-secret-key-not-for-production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # pyproject.toml pins every dependency to an exact version, which
+      # is this project's equivalent of a lockfile (no separate lock
+      # artifact is generated).
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy .
+
+      - name: Unit tests
+        run: pytest
+
+      - name: Validate migrations against a live database
+        run: alembic upgrade head
+
+      - name: Confirm PostGIS is enabled after migration
+        run: |
+          RUN_INTEGRATION_TESTS=1 pytest -m integration
+
+  worker-lint-type-test:
+    name: Lint, typecheck, test (worker)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/worker
+    env:
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy .
+
+      - name: Unit tests
+        run: pytest

@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "./tokens.css";
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-cloud-mist);
+    color: var(--color-spatial-navy);
+    font-family: var(--font-sans);
+  }
+
+  ::selection {
+    background-color: var(--color-geo-teal);
+    color: var(--color-cloud-mist);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-geo-teal);
+    outline-offset: 2px;
+  }
+}

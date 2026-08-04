@@ -1,0 +1,45 @@
+{
+  "name": "naksha-geosphere",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Naksha GeoSphere — The Geospatial Data Marketplace (engineering foundation)",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @naksha/web dev",
+    "build": "pnpm --filter @naksha/web build",
+    "lint": "pnpm --filter @naksha/web lint",
+    "format": "pnpm --filter @naksha/web format",
+    "format:check": "pnpm --filter @naksha/web format:check",
+    "typecheck": "pnpm --filter @naksha/web typecheck",
+    "test": "pnpm --filter @naksha/web test",
+    "test:e2e": "pnpm --filter @naksha/web test:e2e",
+
+    "docker:up": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d",
+    "docker:down": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml down",
+    "docker:logs": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml logs -f",
+    "docker:prod:config": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.prod.yaml config",
+    "docker:prod:build": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.prod.yaml build",
+
+    "docker:remote:up": "docker compose -f compose.yaml -f compose.dev.yaml -f compose.remote-storage.yaml up --build -d",
+    "docker:remote:down": "docker compose -f compose.yaml -f compose.dev.yaml -f compose.remote-storage.yaml down",
+    "docker:remote:logs": "docker compose -f compose.yaml -f compose.dev.yaml -f compose.remote-storage.yaml logs -f",
+
+    "api:migrate": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec api alembic upgrade head",
+    "api:test": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec api pytest",
+    "api:lint": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec api ruff check .",
+
+    "worker:ping": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec worker celery -A worker.main call system.ping",
+    "worker:test": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec worker pytest",
+
+    "health:check": "bash ./scripts/check-health.sh"
+  }
+}

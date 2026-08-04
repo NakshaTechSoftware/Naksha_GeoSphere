@@ -1,0 +1,67 @@
+[project]
+name = "naksha-geosphere-worker"
+version = "0.1.0"
+description = "Naksha GeoSphere background processing worker (Celery) — engineering foundation phase"
+# Broad range for local tooling; the Docker image pins an exact GDAL/Python base (see Dockerfile).
+requires-python = ">=3.10,<3.13"
+license = { text = "UNLICENSED" }
+dependencies = [
+  "celery[redis]==5.4.0",
+  "pydantic==2.10.4",
+  "pydantic-settings==2.7.1",
+  "rasterio==1.4.3",
+  "geopandas==1.0.1",
+  "shapely==2.0.6",
+  "pyproj==3.7.0",
+  "fiona==1.10.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff==0.8.4",
+  "mypy==1.14.1",
+  "pytest==8.3.4",
+  "pytest-cov==6.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["worker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["worker", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008", "UP017"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["worker"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+exclude = []
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "kombu.*", "rasterio.*", "geopandas.*", "shapely.*", "pyproj.*", "fiona.*", "osgeo.*"]
+ignore_missing_imports = true
+
+# Celery's @app.task / @signal.connect decorators aren't typed upstream,
+# which strict mode otherwise flags as "untyped decorator". Scoped to the
+# two modules that touch Celery decorators directly.
+[[tool.mypy.overrides]]
+module = ["worker.main", "worker.tasks.*"]
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["worker"]

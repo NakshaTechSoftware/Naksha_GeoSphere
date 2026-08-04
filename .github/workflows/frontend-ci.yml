@@ -1,0 +1,67 @@
+name: frontend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/frontend-ci.yml"
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.13.1"
+  PNPM_VERSION: "9.15.4"
+
+jobs:
+  build-and-test:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm --filter @naksha/web format:check
+
+      - name: Lint
+        run: pnpm --filter @naksha/web lint
+
+      - name: Typecheck
+        run: pnpm --filter @naksha/web typecheck
+
+      - name: Unit tests
+        run: pnpm --filter @naksha/web test
+
+      - name: Production build
+        run: pnpm --filter @naksha/web build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.placeholder.invalid
+          NEXT_PUBLIC_APP_NAME: Naksha GeoSphere

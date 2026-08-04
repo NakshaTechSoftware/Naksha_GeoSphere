@@ -1,0 +1,74 @@
+/**
+ * Naksha GeoSphere design tokens.
+ * Single source of truth for the brand palette — components must
+ * reference these variables (or the Tailwind color aliases that wrap
+ * them) rather than hard-coding hex values.
+ *
+ * Palette usage follows the 60/30/10 rule:
+ *   60% Polar Pearl   — page backgrounds, surfaces
+ *   30% Obsidian Graphite — headers, footers, primary text, dark surfaces
+ *   10% Atlas Cobalt     — accents, CTAs, active states, links
+ */
+:root {
+  /* Core brand colors */
+  --color-polar-pearl: #F6F8FB;
+  --color-polar-pearl-rgb: 246, 248, 251;
+  --color-obsidian-graphite: #151A23;
+  --color-obsidian-graphite-rgb: 21, 26, 35;
+  --color-atlas-cobalt: #3563E9;
+  --color-atlas-cobalt-rgb: 53, 99, 233;
+
+  /* Legacy aliases for backward compatibility */
+  --color-spatial-navy: #0b1f33;
+  --color-spatial-navy-rgb: 11, 31, 51;
+  --color-geo-teal: #0f8b8d;
+  --color-geo-teal-rgb: 15, 139, 141;
+  --color-cloud-mist: #f3f7f9;
+  --color-cloud-mist-rgb: 243, 247, 249;
+
+  /* Semantic token mappings */
+  --color-page-background: var(--color-polar-pearl);
+  --color-primary-text: var(--color-obsidian-graphite);
+  --color-primary-action: var(--color-atlas-cobalt);
+  --color-surface: #FFFFFF;
+  
+  /* Derived tones */
+  --color-border-subtle: rgba(21, 26, 35, 0.08);
+  --color-border-medium: rgba(21, 26, 35, 0.14);
+  --color-text-secondary: rgba(21, 26, 35, 0.68);
+  --color-text-on-dark: #FFFFFF;
+  --color-cobalt-soft: rgba(53, 99, 233, 0.08);
+  --color-cobalt-medium: rgba(53, 99, 233, 0.18);
+  --color-cobalt-map-fill: rgba(53, 99, 233, 0.22);
+  --color-cobalt-hover: #2851d4;
+  
+  /* Legacy derived surface tones */
+  --color-navy-surface: #12293f;
+  --color-navy-border: rgba(var(--color-cloud-mist-rgb), 0.12);
+  --color-teal-hover: #0c7274;
+  --color-mist-border: rgba(var(--color-spatial-navy-rgb), 0.1);
+  --color-geo-grid-line: rgba(var(--color-spatial-navy-rgb), 0.06);
+
+  /* Status colors (kept outside the core brand triad, used sparingly) */
+  --color-status-ok: #0f8b6c;
+  --color-status-warn: #b8791a;
+  --color-status-error: #b13636;
+  --color-status-unknown: #6b7785;
+
+  /* Shadows */
+  --shadow-card: 0 12px 32px rgba(21, 26, 35, 0.08);
+  --shadow-map: 0 18px 48px rgba(21, 26, 35, 0.16);
+  --shadow-button: 0 4px 12px rgba(53, 99, 233, 0.2);
+
+  /* Border radius */
+  --radius-small: 8px;
+  --radius-medium: 12px;
+  --radius-large: 18px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* Typography */
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}

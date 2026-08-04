@@ -1,0 +1,62 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        name: ruff (api)
+        files: ^services/api/
+        args: ["--fix"]
+      - id: ruff-format
+        name: ruff-format (api)
+        files: ^services/api/
+      - id: ruff
+        name: ruff (worker)
+        files: ^services/worker/
+        args: ["--fix"]
+      - id: ruff-format
+        name: ruff-format (worker)
+        files: ^services/worker/
+
+  - repo: local
+    hooks:
+      - id: mypy-api
+        name: mypy (api)
+        entry: bash -c 'cd services/api && mypy .'
+        language: system
+        files: ^services/api/.*\.py$
+        pass_filenames: false
+
+      - id: mypy-worker
+        name: mypy (worker)
+        entry: bash -c 'cd services/worker && mypy .'
+        language: system
+        files: ^services/worker/.*\.py$
+        pass_filenames: false
+
+      - id: frontend-lint
+        name: eslint (web)
+        entry: bash -c 'pnpm --filter @naksha/web lint'
+        language: system
+        files: ^apps/web/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: frontend-format-check
+        name: prettier --check (web)
+        entry: bash -c 'pnpm --filter @naksha/web format:check'
+        language: system
+        files: ^apps/web/.*\.(ts|tsx|css|json|md)$
+        pass_filenames: false

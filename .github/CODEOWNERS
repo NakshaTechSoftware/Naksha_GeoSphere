@@ -1,0 +1,29 @@
+# Naksha GeoSphere — code ownership.
+#
+# Placeholder — replace the owners below with real GitHub usernames/teams
+# once the repository has collaborators assigned. Until then, this file
+# documents intended ownership boundaries without granting/requiring
+# specific reviewers, since no team has been designated yet.
+
+# Default owner for anything not matched below.
+# * @REPLACE_WITH_DEFAULT_OWNER
+
+# Frontend
+# /apps/web/           @REPLACE_WITH_FRONTEND_OWNER
+# /packages/ui/          @REPLACE_WITH_FRONTEND_OWNER
+
+# Backend API
+# /services/api/        @REPLACE_WITH_BACKEND_OWNER
+
+# Worker / geospatial processing
+# /services/worker/      @REPLACE_WITH_GEOSPATIAL_OWNER
+
+# Infrastructure / CI
+# /infrastructure/      @REPLACE_WITH_DEVOPS_OWNER
+# /.github/workflows/    @REPLACE_WITH_DEVOPS_OWNER
+# /compose*.yaml          @REPLACE_WITH_DEVOPS_OWNER
+
+# Security-sensitive files always require a second reviewer once owners
+# are assigned.
+# /docs/SECURITY.md      @REPLACE_WITH_SECURITY_OWNER
+# /SECURITY.md            @REPLACE_WITH_SECURITY_OWNER

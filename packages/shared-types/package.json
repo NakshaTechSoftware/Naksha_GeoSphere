@@ -1,0 +1,8 @@
+{
+  "name": "@naksha/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript types shared between Naksha GeoSphere frontend and future service clients.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

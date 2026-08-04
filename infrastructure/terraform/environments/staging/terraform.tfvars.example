@@ -1,0 +1,14 @@
+# Environment: staging — example tfvars.
+#
+# Copy to terraform.tfvars (git-ignored) and fill in real, NON-SECRET
+# values. Never put a credential, access key, or account ID in this
+# file — those belong in the security module's secrets manager.
+
+environment              = "staging"
+network_cidr_block       = "10.10.0.0/16"
+database_instance_class  = "REPLACE_WITH_PROVIDER_INSTANCE_CLASS"
+queue_node_type          = "REPLACE_WITH_PROVIDER_NODE_TYPE"
+web_image                = "REPLACE_WITH_PINNED_IMAGE_REFERENCE"
+api_image                = "REPLACE_WITH_PINNED_IMAGE_REFERENCE"
+worker_image              = "REPLACE_WITH_PINNED_IMAGE_REFERENCE"
+monitoring_notification_channel = "REPLACE_WITH_ALERT_DESTINATION"

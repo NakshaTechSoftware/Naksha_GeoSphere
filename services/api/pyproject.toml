@@ -1,0 +1,76 @@
+[project]
+name = "naksha-geosphere-api"
+version = "0.1.0"
+description = "Naksha GeoSphere API — modular monolith backend (engineering foundation phase)"
+# Broad range for local tooling; Docker images pin exactly 3.12.8 (see Dockerfile).
+requires-python = ">=3.10,<3.15"
+license = { text = "UNLICENSED" }
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "pydantic==2.10.4",
+  "pydantic-settings==2.7.1",
+  "sqlalchemy==2.0.36",
+  "asyncpg==0.30.0",
+  "alembic==1.14.0",
+  "redis==5.2.1",
+  "boto3==1.35.90",
+  "argon2-cffi==23.1.0",
+  "celery[redis]==5.4.0",
+  "email-validator==2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff==0.8.4",
+  "mypy==1.14.1",
+  "pytest==8.3.4",
+  "pytest-asyncio==0.25.1",
+  "pytest-cov==6.0.0",
+  "httpx==0.28.1",
+  "boto3-stubs[s3]==1.35.90",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+# B008: FastAPI's Depends()-as-default-arg pattern is intentional.
+# UP017: datetime.UTC requires Python 3.11+; requires-python allows 3.10.
+ignore = ["B008", "UP017"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = []
+exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*", "celery.*", "kombu.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: requires live Postgres/Redis/MinIO (skipped unless RUN_INTEGRATION_TESTS=1)",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/main.py"]

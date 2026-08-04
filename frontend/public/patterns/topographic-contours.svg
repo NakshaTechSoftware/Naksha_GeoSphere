@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360" fill="none">
+  <g stroke="#3563E9" stroke-opacity="0.072" stroke-width="0.85" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Organic contour paths resembling elevation lines -->
+    
+    <!-- Large outer contour -->
+    <path d="M-20 80 Q60 75, 140 85 T300 78 Q380 82, 480 70" />
+    
+    <!-- Mid-left nested contour -->
+    <path d="M20 120 Q80 115, 150 122 T280 118 Q340 125, 420 115" />
+    
+    <!-- Inner irregular loop -->
+    <path d="M85 155 Q125 150, 165 158 Q205 152, 245 160 Q285 155, 315 165 Q295 185, 265 180 Q225 188, 185 182 Q145 186, 105 178 Q75 172, 85 155 Z" />
+    
+    <!-- Bottom flowing contour -->
+    <path d="M-30 220 Q50 215, 130 225 T290 218 Q370 228, 500 215" />
+    
+    <!-- Upper right curved lines -->
+    <path d="M320 35 Q360 38, 400 32 T480 40" />
+    <path d="M340 58 Q380 62, 420 56 T500 65" />
+    
+    <!-- Lower scattered contours -->
+    <path d="M40 280 Q100 275, 160 282 T280 278 Q340 285, 420 275" />
+    <path d="M-10 310 Q70 305, 150 315 T310 308 Q390 318, 490 305" />
+    
+    <!-- Small irregular enclosed area (top left) -->
+    <path d="M60 45 Q90 42, 120 48 Q140 52, 150 65 Q145 78, 130 82 Q100 85, 75 78 Q55 70, 60 45 Z" />
+    
+    <!-- Partial contours entering from edges -->
+    <path d="M-40 150 Q20 148, 80 155" />
+    <path d="M420 190 Q460 185, 510 195" />
+    
+    <!-- Mid-section curved element -->
+    <path d="M180 200 Q220 195, 260 203 Q300 198, 340 208" />
+    
+    <!-- Upper mid gentle curve -->
+    <path d="M120 25 Q180 22, 240 28 T360 24" />
+    
+    <!-- Lower right nested -->
+    <path d="M300 330 Q350 325, 400 335 Q440 330, 490 340" />
+    <path d="M320 350 Q370 345, 420 355 T500 358" />
+    
+    <!-- Scattered organic shapes -->
+    <path d="M200 140 Q230 138, 260 145 Q280 142, 300 150 Q285 165, 260 162 Q230 168, 210 160 Q195 152, 200 140 Z" />
+    
+    <!-- Bottom left detail -->
+    <path d="M10 260 Q50 257, 90 265 Q110 262, 130 270" />
+    
+    <!-- Top center irregular line -->
+    <path d="M220 50 Q260 48, 300 55 Q330 52, 360 58" />
+  </g>
+</svg>

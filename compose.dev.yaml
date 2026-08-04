@@ -1,0 +1,69 @@
+# Naksha GeoSphere — development overlay.
+# Hot reload, source bind-mounts, and host ports for every service.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build -d
+
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+
+  minio:
+    ports:
+      - "${MINIO_API_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+
+  mailpit:
+    image: axllent/mailpit:v1.21.5
+    restart: unless-stopped
+    networks:
+      - naksha-network
+    ports:
+      - "${MAILPIT_SMTP_HOST_PORT:-1025}:1025"
+      - "${MAILPIT_UI_HOST_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8025/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  api:
+    build:
+      target: dev
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./services/api/app:/app/app
+      - ./services/api/migrations:/app/migrations
+      - ./services/api/tests:/app/tests
+      - ./services/api/alembic.ini:/app/alembic.ini
+      - ./services/api/pyproject.toml:/app/pyproject.toml
+
+  worker:
+    build:
+      target: dev
+    volumes:
+      - ./services/worker/worker:/app/worker
+      - ./services/worker/tests:/app/tests
+      - ./services/worker/pyproject.toml:/app/pyproject.toml
+
+  web:
+    build:
+      target: dev
+    ports:
+      - "${WEB_HOST_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./apps/web/src:/workspace/apps/web/src
+      - ./apps/web/public:/workspace/apps/web/public
+      - ./apps/web/next.config.ts:/workspace/apps/web/next.config.ts
+      - ./apps/web/tailwind.config.ts:/workspace/apps/web/tailwind.config.ts
+      - ./apps/web/tsconfig.json:/workspace/apps/web/tsconfig.json

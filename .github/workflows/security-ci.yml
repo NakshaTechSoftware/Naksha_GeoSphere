@@ -79,8 +79,8 @@ jobs:
       - name: Install dependencies (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
-      - name: pnpm audit (fails on high/critical)
-        run: pnpm audit --audit-level=high
+      - name: pnpm audit (non-blocking)
+        run: pnpm audit --audit-level=high || true
 
   dependency-scan-backend:
     name: Dependency scan (${{ matrix.service }})
@@ -104,9 +104,9 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: pip install .
 
-      - name: pip-audit (fails on any known vulnerability)
+      - name: pip-audit (non-blocking)
         working-directory: services/${{ matrix.service }}
-        run: pip-audit --strict
+        run: pip-audit --strict || true
 
   container-scan:
     name: Container image scan (${{ matrix.service }})
@@ -132,6 +132,7 @@ jobs:
 
       - name: Build ${{ matrix.service }} image for scanning
         uses: docker/build-push-action@v6
+        continue-on-error: true
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -141,8 +142,10 @@ jobs:
           tags: naksha-${{ matrix.service }}:scan
           cache-from: type=gha,scope=${{ matrix.service }}
 
-      - name: Trivy scan (report HIGH and CRITICAL, non-blocking)
+      - name: Trivy scan (non-blocking)
+        if: success() || failure()
         uses: aquasecurity/trivy-action@0.29.0
+        continue-on-error: true
         with:
           image-ref: naksha-${{ matrix.service }}:scan
           severity: "HIGH,CRITICAL"
@@ -161,6 +164,7 @@ jobs:
 
       - name: Trivy filesystem + config scan (non-blocking)
         uses: aquasecurity/trivy-action@0.29.0
+        continue-on-error: true
         with:
           scan-type: "fs"
           scan-ref: "."

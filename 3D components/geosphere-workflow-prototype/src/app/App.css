@@ -1,0 +1,51 @@
+.reviewPage {
+  min-height: 100vh;
+  padding: 48px 24px 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+
+.reviewHeader {
+  max-width: 640px;
+  text-align: center;
+}
+
+.reviewEyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ngs-cobalt);
+}
+
+.reviewHeader h1 {
+  margin: 0 0 10px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.reviewSubtitle {
+  margin: 0;
+  color: var(--ngs-text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.reviewStats {
+  display: flex;
+  gap: 20px;
+  font-size: 12.5px;
+  color: var(--ngs-text-muted);
+}
+
+.reviewStats strong {
+  color: var(--ngs-obsidian);
+}
+
+.reviewStage {
+  width: 100%;
+  max-width: 1200px;
+}

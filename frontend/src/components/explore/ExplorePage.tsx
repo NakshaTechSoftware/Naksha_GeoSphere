@@ -1,127 +1,468 @@
 "use client";
 
-import { useState } from "react";
-import { DashboardHeader } from "@/components/home/DashboardHeader";
-import { IndiaMapViewer } from "./IndiaMapViewer";
-import { 
-  ChevronDown, 
-  ChevronUp, 
-  X, 
-  ShoppingCart,
-  Eye,
-  Download,
-  Calendar,
+import { useRef, useState, useEffect } from "react";
+import type { KeyboardEvent } from "react";
+import { IndiaMapViewer, type IndiaMapViewerHandle, type WardSelection } from "./IndiaMapViewer";
+import { UserProfile } from "./UserProfile";
+import {
+  ChevronDown,
+  ChevronUp,
   MapPin,
-  Cloud,
-  Layers
+  Search,
+  Menu,
+  X,
 } from "lucide-react";
 
-interface Dataset {
-  id: string;
-  name: string;
-  thumbnail: string;
-  format: string;
-  size: string;
-  date: string;
-  cloudCover: string;
-  price: number;
-  premium: boolean;
-  badge?: string;
+const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;
+
+// Place suggestions data - organized by categories for better UX
+const PLACE_SUGGESTIONS = {
+  regions: [
+    "Bengaluru",
+    "Bangalore", 
+    "Karnataka",
+    "Hyderabad",
+    "Chennai",
+    "Mumbai",
+    "Delhi",
+    "Ahmedabad",
+  ],
+  cities: [
+    "Bengaluru Urban",
+    "Bengaluru Rural", 
+    "Hubli",
+    "Mysore",
+    "Mangalore",
+    "Belagavi",
+    "Davangere",
+    "Shivamogga",
+  ],
+  taluks: [
+    "Central",
+    "East", 
+    "North",
+    "South",
+    "West",
+    "North-East",
+    "North-West",
+    "South-East",
+    "South-West",
+  ],
+  villages: [
+    "Banaswadi",
+    "Koramangala",
+    "Indiranagar",
+    "Koramangala 1st Block",
+    "Koramangala 2nd Block",
+    "Koramangala 3rd Block",
+    "Koramangala 4th Block",
+    "Koramangala 5th Block",
+    "Hebbal",
+    "Malleshwaram",
+    "Brindavan Nagar",
+    "Hombegowda Nagar",
+    "Vinayaka Nagar",
+    "Srinivasa Nagar",
+    "Chennamma Nagar",
+    "Muthanamakki",
+    "Kengeri",
+    "Attibele",
+    "Hosakote",
+    "Devanahalli",
+    "Yelahanka",
+    "Kenchapura",
+    "Varthur",
+    "Sarjapur",
+    "Electronic City",
+    "Bannerghatta",
+    "Jayanagar",
+    "JP Nagar",
+    "BTM Layout",
+    "Ulsoor",
+    "Shivaji Nagar",
+    "Panathur",
+    "Vijay Nagar",
+  ],
+  wards: [
+    "Banaswadi",
+    "Koramangala",
+    "Indiranagar",
+    "Malleshwaram",
+    "Hebbal",
+    "Yelahanka",
+    "Whitefield",
+    "Electronics City",
+    "Hosur Road",
+    "BTM Layout",
+    "Jayanagar",
+    "JP Nagar",
+    "BTM 2nd Stage",
+    "BTM 4th Stage",
+    "BTM 6th Stage",
+    "Malleswaram",
+    "R V Nagar",
+    "Kaduvalli",
+    "Goraguntepalya",
+    "Punjai Palaya",
+    "Dasarahalli",
+    "Tadpalya",
+    "Pai Layout",
+    "Veerabhadra Nagar",
+    "Hoskote",
+    "Sud Flatten",
+    "Varthur",
+    "Sarjapur",
+    "Kundalahalli",
+    "Kaikondrahalli",
+    "Hegde Nagar",
+    "Vasanth Nagar",
+    "Kempapura",
+    "Kadugodi",
+    "Leelavathi Nagar",
+    "Konena Agrahara",
+    "Maruthi Seve Nagar",
+    "Prarthana Circle",
+    "Gopala Nagar",
+    "Garudacharpalya",
+    "Hoodi",
+    "Harlur",
+    "Bellandur",
+    "Yelahanka",
+  ],
+};
+
+function filterSuggestions(query: string, category: string) {
+  const searchTerm = query.toLowerCase();
+  if (!searchTerm) return [];
+
+  const allItems = PLACE_SUGGESTIONS[category as keyof typeof PLACE_SUGGESTIONS] || [];
+  return allItems
+    .filter(item => item.toLowerCase().includes(searchTerm))
+    // Prefix matches ("Ban..." -> "Banaswadi") rank above mid-word matches ("...swadi").
+    .sort((a, b) => {
+      const aStarts = a.toLowerCase().startsWith(searchTerm);
+      const bStarts = b.toLowerCase().startsWith(searchTerm);
+      if (aStarts === bStarts) return a.localeCompare(b);
+      return aStarts ? -1 : 1;
+    })
+    .slice(0, 6); // Limit to top 6 suggestions per category
+}
+
+// Wraps the portion of `text` that matches `query` in <mark> for visual emphasis.
+function highlightMatch(text: string, query: string) {
+  if (!query) return text;
+  const index = text.toLowerCase().indexOf(query.toLowerCase());
+  if (index === -1) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="bg-transparent font-semibold text-atlas-cobalt">
+        {text.slice(index, index + query.length)}
+      </mark>
+      {text.slice(index + query.length)}
+    </>
+  );
 }
 
 export function ExplorePage() {
-  const [selectedArea, setSelectedArea] = useState("Downtown District, USA");
-  const [areaSize, setAreaSize] = useState("12.45 km²");
-  const [cartItems, setCartItems] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [selectedWard, setSelectedWard] = useState<WardSelection | null>(null);
+  const mapViewerRef = useRef<IndiaMapViewerHandle>(null);
   const [expandedFilters, setExpandedFilters] = useState({
     datasetType: true,
-    resolution: true,
-    format: true,
+    type: true,
   });
+  const [searchSuggestions, setSearchSuggestions] = useState<{category: string, items: string[]}[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const searchWrapperRef = useRef<HTMLDivElement>(null);
 
-  // Sample datasets (you'll replace with real API data)
-  const datasets: Dataset[] = [
-    {
-      id: "1",
-      name: "Orthophoto (True Color)",
-      thumbnail: "/api/placeholder/80/80",
-      format: "GeoTIFF",
-      size: "12.45 km²",
-      date: "May 15, 2024",
-      cloudCover: "2.1%",
-      price: 249.00,
-      premium: true,
-      badge: "NEW"
-    },
-    {
-      id: "2",
-      name: "Digital Surface Model (DSM)",
-      thumbnail: "/api/placeholder/80/80",
-      format: "GDS",
-      size: "12.45 km²",
-      date: "May 15, 2024",
-      cloudCover: "2.1%",
-      price: 189.00,
-      premium: true,
-    },
-    {
-      id: "3",
-      name: "LiDAR Point Cloud",
-      thumbnail: "/api/placeholder/80/80",
-      format: "LAS / LAZ",
-      size: "12.45 km²",
-      date: "May 30, 2024",
-      cloudCover: "3.4%",
-      price: 349.00,
-      premium: false,
-    },
-    {
-      id: "4",
-      name: "Vector Boundaries (Roads)",
-      thumbnail: "/api/placeholder/80/80",
-      format: "SHP / KML",
-      size: "12.45 km²",
-      date: "Apr 20, 2024",
-      cloudCover: "-",
-      price: 89.00,
-      premium: false,
-      badge: "SALE"
-    },
-  ];
+  // Close the suggestions dropdown when clicking anywhere outside the search bar.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchWrapperRef.current && !searchWrapperRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Generate search suggestions based on current query
+  useEffect(() => {
+    if (!searchQuery) {
+      setSearchSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const suggestions: {category: string, items: string[]}[] = [];
+    
+    // Search across all categories
+    Object.keys(PLACE_SUGGESTIONS).forEach(category => {
+      const filtered = filterSuggestions(searchQuery, category);
+      if (filtered.length > 0) {
+        suggestions.push({
+          category: category.charAt(0).toUpperCase() + category.slice(1),
+          items: filtered
+        });
+      }
+    });
+    
+    setSearchSuggestions(suggestions);
+    setShowSuggestions(suggestions.length > 0);
+    setSelectedSuggestionIndex(-1);
+  }, [searchQuery]);
+
+  // Handle keyboard navigation for suggestions
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions) return;
+    
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setSelectedSuggestionIndex(prev => 
+          Math.min(prev + 1, getTotalSuggestions() - 1)
+        );
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setSelectedSuggestionIndex(prev => Math.max(prev - 1, -1));
+        break;
+      case 'Enter':
+        e.preventDefault();
+        if (selectedSuggestionIndex >= 0) {
+          const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
+          if (suggestion) {
+            setSearchQuery(suggestion);
+            setShowSuggestions(false);
+            mapViewerRef.current?.search(suggestion);
+          }
+        }
+        break;
+      case 'Escape':
+        setShowSuggestions(false);
+        setSelectedSuggestionIndex(-1);
+        break;
+    }
+  };
+
+  const getTotalSuggestions = () => searchSuggestions.reduce((total, cat) => total + cat.items.length, 0);
+
+  const getSuggestionByIndex = (index: number) => {
+    let currentIndex = 0;
+    for (const category of searchSuggestions) {
+      if (index < currentIndex + category.items.length) {
+        return category.items[index - currentIndex];
+      }
+      currentIndex += category.items.length;
+    }
+    return null;
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    setSearchQuery(suggestion);
+    setShowSuggestions(false);
+    mapViewerRef.current?.search(suggestion);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setShowSuggestions(false);
+    mapViewerRef.current?.search("");
+  };
+
+  // "Type" filter: Bengaluru's region subfolders, each expandable to show/load its files
+  const [bengaluruFileTree, setBengaluruFileTree] = useState<Record<string, string[]> | null>(null);
+  const [expandedRegions, setExpandedRegions] = useState<Record<string, boolean>>({});
+  const [loadedExtraFiles, setLoadedExtraFiles] = useState<Record<string, boolean>>({});
 
   const toggleFilter = (filter: keyof typeof expandedFilters) => {
     setExpandedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
   };
 
-  const addToCart = (datasetId: string) => {
-    if (!cartItems.includes(datasetId)) {
-      setCartItems([...cartItems, datasetId]);
+  const toggleRegion = async (region: string) => {
+    const willExpand = !expandedRegions[region];
+    setExpandedRegions((prev) => ({ ...prev, [region]: willExpand }));
+
+    if (willExpand && !bengaluruFileTree) {
+      const tree = await mapViewerRef.current?.listBengaluruFiles();
+      if (tree) setBengaluruFileTree(tree);
     }
   };
 
-  const removeFromCart = (datasetId: string) => {
-    setCartItems(cartItems.filter(id => id !== datasetId));
+  const handleToggleExtraFile = async (key: string, checked: boolean) => {
+    setLoadedExtraFiles((prev) => ({ ...prev, [key]: checked }));
+    await mapViewerRef.current?.toggleBengaluruFile(key, checked);
   };
 
-  const cartTotal = datasets
-    .filter(d => cartItems.includes(d.id))
-    .reduce((sum, d) => sum + d.price, 0);
+  const filenameFromKey = (key: string) =>
+    key.split("/").pop()?.replace(/\.kmz$/i, "").replace(/_/g, " ") ?? key;
 
-  const totalSize = datasets
-    .filter(d => cartItems.includes(d.id))
-    .length;
+  const regionFromKey = (key: string) => key.match(/Bengaluru\/([^/]+)\//i)?.[1];
+
+  // Keeps the Type filter's checkboxes/expansion in sync when a search (e.g.
+  // "Bengaluru, Central, Ward Boundary") loads a file directly, bypassing the checkboxes.
+  const handleExtraFileToggledFromSearch = async (key: string, visible: boolean) => {
+    setLoadedExtraFiles((prev) => ({ ...prev, [key]: visible }));
+
+    const region = regionFromKey(key);
+    if (!region) return;
+
+    setExpandedRegions((prev) => ({ ...prev, [region]: true }));
+    if (!bengaluruFileTree) {
+      const tree = await mapViewerRef.current?.listBengaluruFiles();
+      if (tree) setBengaluruFileTree(tree);
+    }
+  };
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50">
-      <DashboardHeader />
+    <div className="flex h-screen flex-col bg-gray-100 overflow-hidden">
 
-      {/* Main Content - 3 Column Layout */}
-      <main className="flex-1 flex">
-        {/* LEFT SIDEBAR - Filters */}
-        <aside className="w-64 bg-white border-r border-gray-200 overflow-y-auto">
+      {/* Main Content - map fills the full page, everything else floats on top */}
+      <main className="flex-1 relative min-h-0 overflow-hidden">
+        <IndiaMapViewer
+          ref={mapViewerRef}
+          onWardSelected={setSelectedWard}
+          onBoundariesCleared={() => setLoadedExtraFiles({})}
+          onExtraFileToggled={handleExtraFileToggledFromSearch}
+        />
+
+        {/* Floating search bar */}
+        <div className="absolute top-4 left-4 right-4 z-20 flex items-center gap-3">
+          {/* Search Bar */}
+          <div ref={searchWrapperRef} className="relative flex-1 max-w-md">
+            <div className="flex items-center gap-1 bg-white rounded-full shadow-md pl-1 pr-2 py-1">
+              <button
+                onClick={() => setShowFilters((prev) => !prev)}
+                className={`flex-shrink-0 p-2 rounded-full transition-colors ${
+                  showFilters ? "bg-gray-100 text-obsidian-graphite" : "text-gray-500 hover:bg-gray-100"
+                }`}
+                aria-label="Toggle filters"
+                aria-pressed={showFilters}
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    if (selectedSuggestionIndex >= 0) {
+                      const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
+                      if (suggestion) {
+                        setSearchQuery(suggestion);
+                        setShowSuggestions(false);
+                        mapViewerRef.current?.search(suggestion);
+                      }
+                    } else {
+                      setShowSuggestions(false);
+                      mapViewerRef.current?.search(searchQuery);
+                    }
+                  } else {
+                    handleKeyDown(e);
+                  }
+                }}
+                onFocus={() => searchQuery && searchSuggestions.length > 0 && setShowSuggestions(true)}
+                placeholder="Search location, village, taluk, district..."
+                role="combobox"
+                aria-expanded={showSuggestions}
+                aria-autocomplete="list"
+                aria-controls="search-suggestions-listbox"
+                className="flex-1 min-w-0 py-1 text-sm bg-transparent focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  onClick={clearSearch}
+                  className="flex-shrink-0 p-2 rounded-full text-gray-500 hover:bg-gray-100"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setShowSuggestions(false);
+                  mapViewerRef.current?.search(searchQuery);
+                }}
+                className="flex-shrink-0 p-2 rounded-full text-gray-500 hover:bg-gray-100"
+                aria-label="Search"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Suggestions dropdown */}
+            {showSuggestions && searchSuggestions.length > 0 && (
+              <div
+                id="search-suggestions-listbox"
+                role="listbox"
+                className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-lg"
+              >
+                {searchSuggestions.map((cat, catIdx) => {
+                  const offset = searchSuggestions
+                    .slice(0, catIdx)
+                    .reduce((sum, c) => sum + c.items.length, 0);
+                  return (
+                    <div key={cat.category}>
+                      <div className="px-4 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                        {cat.category}
+                      </div>
+                      {cat.items.map((item, i) => {
+                        const idx = offset + i;
+                        const isActive = idx === selectedSuggestionIndex;
+                        return (
+                          <button
+                            type="button"
+                            key={`${cat.category}-${item}`}
+                            role="option"
+                            aria-selected={isActive}
+                            // Prevents the input's blur (and its click-outside-triggered
+                            // dropdown close) from firing before the click is registered.
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => handleSuggestionClick(item)}
+                            onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                            className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
+                              isActive ? "bg-gray-100 text-obsidian-graphite" : "text-gray-700 hover:bg-gray-50"
+                            }`}
+                          >
+                            <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                            <span className="truncate">{highlightMatch(item, searchQuery)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Spacer to push items to the right */}
+          <div className="flex-1" />
+
+          {/* Draw AOI Button */}
+          <button className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-full shadow-md hover:bg-gray-50 whitespace-nowrap">
+            <MapPin className="h-4 w-4" />
+            Draw AOI
+            <ChevronDown className="h-4 w-4" />
+          </button>
+
+          {/* User Profile Icon */}
+          <UserProfile
+            userName="John Doe"
+            userEmail="john.doe@example.com"
+          />
+        </div>
+
+        {/* FLOATING - Filters, toggled via the search bar's menu icon */}
+        {showFilters && (
+        <aside className="absolute top-20 left-4 z-10 w-64 max-h-[calc(100vh-200px)] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-lg overflow-y-auto scrollbar-hide">
           <div className="p-4">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-obsidian-graphite">Filters</h2>
+              <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
               <button className="text-sm text-atlas-cobalt hover:underline">
                 Reset all
               </button>
@@ -131,291 +472,97 @@ export function ExplorePage() {
             <div className="mb-4 border-b border-gray-200 pb-4">
               <button
                 onClick={() => toggleFilter("datasetType")}
-                className="flex items-center justify-between w-full mb-2 text-sm font-medium text-gray-700"
+                className="flex items-center justify-between w-full mb-2 text-sm font-semibold text-obsidian-graphite"
               >
                 Dataset Type
                 {expandedFilters.datasetType ? (
-                  <ChevronUp className="h-4 w-4" />
+                  <ChevronUp className="h-4 w-4 text-gray-400" />
                 ) : (
-                  <ChevronDown className="h-4 w-4" />
+                  <ChevronDown className="h-4 w-4 text-gray-400" />
                 )}
               </button>
               {expandedFilters.datasetType && (
-                <div className="space-y-2 ml-1">
+                <div className="space-y-2">
                   <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" defaultChecked />
-                    Orthophoto Imagery
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" defaultChecked />
-                    Satellite Imagery
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
+                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
                     DEM / DSM
                   </label>
                   <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    LiDAR LAS / LAZ
+                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" defaultChecked />
+                    Ortho Rectified Image
                   </label>
                   <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    Contours
+                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
+                    Point Cloud Data
                   </label>
                   <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
+                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
                     Vector Data
                   </label>
                 </div>
               )}
             </div>
 
-            {/* Resolution Filter */}
+            {/* Type Filter: Bengaluru region subfolders */}
             <div className="mb-4 border-b border-gray-200 pb-4">
               <button
-                onClick={() => toggleFilter("resolution")}
-                className="flex items-center justify-between w-full mb-2 text-sm font-medium text-gray-700"
+                onClick={() => toggleFilter("type")}
+                className="flex items-center justify-between w-full mb-2 text-sm font-semibold text-obsidian-graphite"
               >
-                Resolution (GSD)
-                {expandedFilters.resolution ? (
-                  <ChevronUp className="h-4 w-4" />
+                Type
+                {expandedFilters.type ? (
+                  <ChevronUp className="h-4 w-4 text-gray-400" />
                 ) : (
-                  <ChevronDown className="h-4 w-4" />
+                  <ChevronDown className="h-4 w-4 text-gray-400" />
                 )}
               </button>
-              {expandedFilters.resolution && (
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <button className="px-3 py-1 text-xs bg-atlas-cobalt text-white rounded-full">
-                      &lt; 10 cm
-                    </button>
-                    <button className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200">
-                      10 - 30 cm
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <button className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200">
-                      30 - 50 cm
-                    </button>
-                    <button className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200">
-                      1 m - 5 m
-                    </button>
-                  </div>
-                  <button className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200">
-                    &gt; 5 m
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Format Filter */}
-            <div className="mb-4 pb-4">
-              <button
-                onClick={() => toggleFilter("format")}
-                className="flex items-center justify-between w-full mb-2 text-sm font-medium text-gray-700"
-              >
-                Format
-                {expandedFilters.format ? (
-                  <ChevronUp className="h-4 w-4" />
-                ) : (
-                  <ChevronDown className="h-4 w-4" />
-                )}
-              </button>
-              {expandedFilters.format && (
-                <div className="space-y-2 ml-1">
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    GeoTIFF
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    Shapefile (SHP)
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    LAS / LAZ
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    KML / KMZ
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2" />
-                    PDF Maps
-                  </label>
-                </div>
-              )}
-            </div>
-          </div>
-        </aside>
-
-        {/* CENTER - Map Canvas */}
-        <div className="flex-1 flex flex-col">
-          {/* Map Container */}
-          <div className="flex-1 relative">
-            <IndiaMapViewer />
-          </div>
-
-          {/* Bottom Cart Bar */}
-          {cartItems.length > 0 && (
-            <div className="bg-white border-t border-gray-200 p-4">
-              <div className="max-w-6xl mx-auto flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="text-sm">
-                    <span className="font-semibold text-obsidian-graphite">
-                      {totalSize} item{totalSize !== 1 ? 's' : ''}
-                    </span>
-                    <span className="text-gray-600 ml-2">• 24.90 km²</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <div className="text-xs text-gray-500">Estimated Total</div>
-                    <div className="text-xl font-bold text-obsidian-graphite">
-                      ${cartTotal.toFixed(2)}
-                    </div>
-                  </div>
-                  <button className="flex items-center gap-2 px-6 py-3 bg-atlas-cobalt text-white rounded-lg hover:bg-[var(--color-cobalt-hover)] font-semibold transition-colors">
-                    Proceed to Download / Checkout
-                    <Download className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT SIDEBAR - Selected Area & Datasets */}
-        <aside className="w-80 bg-white border-l border-gray-200 overflow-y-auto">
-          <div className="p-4">
-            {/* Selected Area Info */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700">Selected Area</h3>
-                <button className="text-xs text-atlas-cobalt hover:underline">
-                  Clear AOI
-                </button>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                <div className="flex items-start gap-2">
-                  <MapPin className="h-4 w-4 text-gray-500 mt-0.5" />
-                  <div>
-                    <div className="text-sm font-medium text-obsidian-graphite">
-                      {selectedArea}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Premium Imagery
-                    </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200">
-                  <div>
-                    <div className="text-xs text-gray-500">Area</div>
-                    <div className="text-sm font-medium">{areaSize}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Resolution</div>
-                    <div className="text-sm font-medium">10-30 cm / m</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Date Captured</div>
-                    <div className="text-sm font-medium">May 15, 2024</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Cloud Cover</div>
-                    <div className="text-sm font-medium">2.1%</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Available Datasets */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700">
-                  Available Datasets ({datasets.length})
-                </h3>
-                <select className="text-xs border border-gray-200 rounded px-2 py-1">
-                  <option>Relevance</option>
-                  <option>Price: Low to High</option>
-                  <option>Price: High to Low</option>
-                  <option>Date: Newest</option>
-                </select>
-              </div>
-
-              <div className="space-y-3">
-                {datasets.map((dataset) => (
-                  <div
-                    key={dataset.id}
-                    className="border border-gray-200 rounded-lg p-3 hover:border-atlas-cobalt transition-colors"
-                  >
-                    <div className="flex gap-3">
-                      <div className="w-16 h-16 bg-gray-200 rounded flex-shrink-0">
-                        {/* Placeholder for thumbnail */}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <h4 className="text-sm font-medium text-obsidian-graphite line-clamp-2">
-                            {dataset.name}
-                          </h4>
-                          {dataset.badge && (
-                            <span className={`px-2 py-0.5 text-xs font-semibold rounded ${
-                              dataset.badge === 'NEW' 
-                                ? 'bg-green-100 text-green-700' 
-                                : 'bg-orange-100 text-orange-700'
-                            }`}>
-                              {dataset.badge}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-gray-500 space-y-0.5">
-                          <div>{dataset.format}</div>
-                          <div>{dataset.size} • {dataset.date}</div>
-                          {dataset.cloudCover !== '-' && (
-                            <div className="flex items-center gap-1">
-                              <Cloud className="h-3 w-3" />
-                              {dataset.cloudCover} Cloud
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-                      <div>
-                        <div className="text-lg font-bold text-obsidian-graphite">
-                          ${dataset.price.toFixed(2)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {dataset.size}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button className="p-2 border border-gray-200 rounded hover:bg-gray-50">
-                          <Eye className="h-4 w-4 text-gray-600" />
-                        </button>
-                        {cartItems.includes(dataset.id) ? (
-                          <button
-                            onClick={() => removeFromCart(dataset.id)}
-                            className="px-3 py-2 bg-green-100 text-green-700 rounded text-xs font-semibold hover:bg-green-200"
-                          >
-                            Added ✓
-                          </button>
+              {expandedFilters.type && (
+                <div className="space-y-1">
+                  {BENGALURU_REGIONS.map((region) => (
+                    <div key={region}>
+                      <button
+                        onClick={() => toggleRegion(region)}
+                        className="flex items-center justify-between w-full py-1 text-sm text-gray-700 hover:text-obsidian-graphite"
+                      >
+                        {region}
+                        {expandedRegions[region] ? (
+                          <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
                         ) : (
-                          <button
-                            onClick={() => addToCart(dataset.id)}
-                            className="px-3 py-2 bg-atlas-cobalt text-white rounded text-xs font-semibold hover:bg-[var(--color-cobalt-hover)]"
-                          >
-                            Add to Cart
-                          </button>
+                          <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
                         )}
-                      </div>
+                      </button>
+                      {expandedRegions[region] && (
+                        <div className="ml-3 space-y-1.5 pb-1">
+                          {bengaluruFileTree === null ? (
+                            <div className="text-xs text-gray-400">Loading files…</div>
+                          ) : (bengaluruFileTree[region] ?? []).length === 0 ? (
+                            <div className="text-xs text-gray-400">No files found</div>
+                          ) : (
+                            (bengaluruFileTree[region] ?? []).map((key) => (
+                              <label
+                                key={key}
+                                className="flex items-center text-xs text-gray-600"
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mr-2 accent-atlas-cobalt"
+                                  checked={!!loadedExtraFiles[key]}
+                                  onChange={(e) => handleToggleExtraFile(key, e.target.checked)}
+                                />
+                                {filenameFromKey(key)}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </aside>
+        )}
       </main>
     </div>
   );

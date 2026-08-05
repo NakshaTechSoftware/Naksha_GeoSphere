@@ -31,7 +31,7 @@ const features: Feature[] = [
 
 export function FeatureStrip() {
   return (
-    <section id="features" className="bg-polar-pearl py-20">
+    <section id="features" className="bg-polar-pearl pt-6 pb-20 lg:pt-8">
       <div className="mx-auto max-w-content px-6 lg:px-16">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature) => {

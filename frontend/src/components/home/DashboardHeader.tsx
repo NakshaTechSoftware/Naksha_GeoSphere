@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Menu, X, Globe, Search, ShoppingCart, Bell, ChevronDown } from "lucide-react";
+import Image from "next/image";
+import { Menu, X, Search, ShoppingCart, Bell, ChevronDown } from "lucide-react";
 
 interface NavigationItem {
   id: string;
@@ -48,7 +49,13 @@ export function DashboardHeader({
             className="flex h-10 w-10 items-center justify-center rounded-lg bg-atlas-cobalt"
             aria-hidden="true"
           >
-            <Globe className="h-6 w-6 text-white" strokeWidth={1.5} />
+            <Image
+              src="/brand/naksha-mark-white.png"
+              alt=""
+              width={24}
+              height={24}
+              className="h-6 w-6 object-contain"
+            />
           </div>
           <div className="flex flex-col">
             <span className="text-base font-semibold leading-tight tracking-tight text-white">

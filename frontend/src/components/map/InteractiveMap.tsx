@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { LayersControl, type MapLayer } from "./LayersControl";
 
 interface InteractiveMapProps {
   showDatasets?: boolean;
@@ -23,6 +24,7 @@ export function InteractiveMap({
   const mapRef = useRef<MapLibreMap | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [currentLayer, setCurrentLayer] = useState<MapLayer>("default");
 
   useEffect(() => {
     let cancelled = false;
@@ -35,10 +37,67 @@ export function InteractiveMap({
 
         if (cancelled || !containerRef.current) return;
 
+        // Get appropriate style based on current layer
+        const getMapStyle = () => {
+          switch (currentLayer) {
+            case "satellite":
+              // Use Google Satellite tiles as fallback since static image overlay is complex
+              return {
+                version: 8,
+                sources: {
+                  "satellite-base": {
+                    type: "raster",
+                    tiles: [
+                      "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
+                      "https://mt1.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
+                    ],
+                    tileSize: 256,
+                    attribution: "© Google",
+                    minzoom: 0,
+                    maxzoom: 20,
+                  },
+                },
+                layers: [
+                  {
+                    id: "satellite-base-layer",
+                    type: "raster",
+                    source: "satellite-base",
+                    minzoom: 0,
+                    maxzoom: 20,
+                  },
+                ],
+                glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+              };
+            case "terrain":
+              return {
+                version: 8,
+                sources: {
+                  "terrain-tiles": {
+                    type: "raster",
+                    tiles: [
+                      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",
+                    ],
+                    tileSize: 256,
+                    attribution: "Esri, USGS, NOAA",
+                  },
+                },
+                layers: [
+                  {
+                    id: "terrain-layer",
+                    type: "raster",
+                    source: "terrain-tiles",
+                  },
+                ],
+              };
+            default:
+              return "https://demotiles.maplibre.org/style.json";
+          }
+        };
+
         // Create map instance centered on India
         const map = new maplibregl.Map({
           container: containerRef.current,
-          style: "https://demotiles.maplibre.org/style.json",
+          style: getMapStyle() as any,
           center: [78.9629, 22.5937], // Center of India
           zoom: 4.2,
           pitch: 0,
@@ -86,6 +145,50 @@ export function InteractiveMap({
                 "line-opacity": 0.8,
               },
             });
+
+            // Load India state boundaries
+            try {
+              const statesResponse = await fetch("/data/india_states.geojson");
+              const statesData = await statesResponse.json();
+
+              // Add state boundaries source
+              map.addSource("india-states", {
+                type: "geojson",
+                data: statesData,
+              });
+
+              // Add state boundary lines
+              map.addLayer({
+                id: "states-borders",
+                type: "line",
+                source: "india-states",
+                paint: {
+                  "line-color": "#94a3b8",
+                  "line-width": 1.5,
+                  "line-opacity": 0.6,
+                },
+              });
+
+              // Add state labels
+              map.addLayer({
+                id: "states-labels",
+                type: "symbol",
+                source: "india-states",
+                layout: {
+                  "text-field": ["get", "st_nm"],
+                  "text-font": ["Open Sans Regular"],
+                  "text-size": 12,
+                  "text-anchor": "center",
+                },
+                paint: {
+                  "text-color": "#475569",
+                  "text-halo-color": "#ffffff",
+                  "text-halo-width": 2,
+                },
+              });
+            } catch (error) {
+              console.error("Failed to load India state boundaries:", error);
+            }
 
             // Load and display datasets if enabled
             if (showDatasets) {
@@ -235,7 +338,36 @@ export function InteractiveMap({
         mapRef.current = null;
       }
     };
-  }, [showDatasets, interactive]);
+  }, [showDatasets, interactive, currentLayer]); // Added currentLayer to dependencies
+
+  // Handle layer changes
+  const handleLayerChange = async (layer: MapLayer) => {
+    setCurrentLayer(layer);
+    
+    // If map is already loaded, we need to recreate it with the new style
+    // MapLibre doesn't support dynamic style switching easily
+    if (mapRef.current) {
+      const currentCenter = mapRef.current.getCenter();
+      const currentZoom = mapRef.current.getZoom();
+      
+      // Store current state before removing
+      const center = { lng: currentCenter.lng, lat: currentCenter.lat };
+      const zoom = currentZoom;
+      
+      // Remove old map
+      mapRef.current.remove();
+      mapRef.current = null;
+      setIsLoaded(false);
+      
+      // Map will be recreated by the effect hook due to currentLayer change
+      // We'll restore the position in the next render
+      setTimeout(() => {
+        if (mapRef.current) {
+          mapRef.current.jumpTo({ center: [center.lng, center.lat], zoom });
+        }
+      }, 500);
+    }
+  };
 
   return (
     <div
@@ -298,6 +430,14 @@ export function InteractiveMap({
         <div className="absolute top-4 right-4 rounded-lg bg-spatial-navy/90 px-3 py-2 text-xs text-cloud-mist/70 backdrop-blur-sm border border-cloud-mist/20">
           Click points to explore
         </div>
+      )}
+
+      {/* Layers Control */}
+      {isLoaded && !loadError && (
+        <LayersControl
+          currentLayer={currentLayer}
+          onLayerChange={handleLayerChange}
+        />
       )}
     </div>
   );

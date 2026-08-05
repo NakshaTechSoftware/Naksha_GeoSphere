@@ -1,0 +1,41 @@
+@import "./tokens.css";
+
+/*
+ * These classes exist purely as GSAP animation targets/utilities.
+ * GSAP itself drives transform/opacity/filter — no keyframe @keyframes
+ * are relied upon for the master timeline so that everything stays on a
+ * single deterministic clock. The rules below are lightweight statics
+ * (initial states, blur helpers) that GSAP tweens away from.
+ */
+
+.ngs-blurred {
+  filter: blur(12px);
+}
+
+.ngs-sharp {
+  filter: blur(0px);
+}
+
+.ngs-gpu {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+@keyframes ngs-pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(53, 99, 233, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(53, 99, 233, 0);
+  }
+}
+
+.ngs-pulse-once {
+  animation: ngs-pulse-ring 0.6s var(--ngs-ease-premium);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ngs-pulse-once {
+    animation: none;
+  }
+}

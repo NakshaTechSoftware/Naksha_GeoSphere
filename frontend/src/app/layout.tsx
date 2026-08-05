@@ -13,6 +13,9 @@ export const metadata: Metadata = {
   title: "Naksha GeoSphere | The Geospatial Data Marketplace",
   description:
     "Explore, preview, purchase, and securely download premium geospatial data for any selected area of interest.",
+  icons: {
+    icon: "/favicon.svg",
+  },
   openGraph: {
     title: "Naksha GeoSphere | The Geospatial Data Marketplace",
     description:

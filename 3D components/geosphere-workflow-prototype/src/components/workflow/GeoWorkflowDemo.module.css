@@ -1,0 +1,695 @@
+.root {
+  --panel-bg: var(--ngs-panel-bg);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--ngs-font-family);
+  color: var(--ngs-text-primary);
+}
+
+.frame {
+  width: 100%;
+  min-height: 430px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--ngs-radius-lg);
+  overflow: hidden;
+  position: relative;
+  background: var(--ngs-polar-pearl);
+}
+
+/* ---------------------------------------------------------------- Map */
+
+.mapStage {
+  position: absolute;
+  inset: 0;
+  background: var(--ngs-map-placeholder);
+}
+
+.mapCanvas {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  filter: blur(12px);
+  transform: scale(1.03);
+  transition:
+    opacity 1.1s var(--ngs-ease-premium),
+    filter 1.1s var(--ngs-ease-premium),
+    transform 1.4s var(--ngs-ease-premium);
+}
+
+.mapCanvasBuilt {
+  opacity: 1;
+  filter: blur(0px);
+  transform: scale(1);
+}
+
+.mapFallback {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.mapFallbackGrid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.aoiFallbackSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------- Panels */
+
+.panelsLayer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.7s var(--ngs-ease-premium) 0.5s,
+    transform 0.7s var(--ngs-ease-premium) 0.5s;
+  pointer-events: none;
+}
+
+.panelsRevealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.panelBase {
+  background: var(--panel-bg);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--ngs-border);
+  border-radius: var(--ngs-radius-md);
+  box-shadow: var(--ngs-shadow);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .panelBase {
+    background: var(--ngs-surface);
+  }
+}
+
+.panelHeading {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ngs-text-muted);
+  text-transform: uppercase;
+}
+
+.panelSlotLeft {
+  composes: panelBase;
+  position: absolute;
+  left: 3%;
+  top: 12%;
+  bottom: 22%;
+  width: 19%;
+  min-width: 148px;
+  padding: 16px 14px;
+  overflow: hidden auto;
+}
+
+.panelSlotTop {
+  position: absolute;
+  left: 24%;
+  right: 24%;
+  top: 5%;
+  display: flex;
+  justify-content: center;
+}
+
+.panelSlotRight {
+  composes: panelBase;
+  position: absolute;
+  right: 3%;
+  top: 12%;
+  width: 21%;
+  min-width: 168px;
+  padding: 16px 16px 18px;
+}
+
+.panelSlotBottom {
+  position: absolute;
+  left: 24%;
+  right: 24%;
+  bottom: 4%;
+  display: flex;
+  justify-content: center;
+}
+
+/* Layer panel */
+
+.layerList {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.layerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ngs-text-primary);
+}
+
+.checkbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1.5px solid rgba(21, 26, 35, 0.22);
+  background: #fff;
+  flex-shrink: 0;
+  transition:
+    background-color 0.25s var(--ngs-ease-premium),
+    border-color 0.25s var(--ngs-ease-premium);
+}
+
+.checkboxChecked {
+  background: var(--ngs-cobalt);
+  border-color: var(--ngs-cobalt);
+}
+
+.addLayerButton {
+  width: 100%;
+  border: 1px dashed rgba(21, 26, 35, 0.18);
+  background: transparent;
+  border-radius: var(--ngs-radius-sm);
+  padding: 7px 8px;
+  font-size: 11.5px;
+  color: var(--ngs-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: default;
+}
+
+/* Search panel */
+
+.searchPanel {
+  composes: panelBase;
+  width: min(340px, 90%);
+  padding: 10px 16px;
+  border-radius: var(--ngs-radius-pill);
+}
+
+.searchInputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ngs-text-muted);
+  font-size: 13.5px;
+}
+
+.searchInputText {
+  color: var(--ngs-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.searchCaret {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  margin-left: 2px;
+  background: var(--ngs-cobalt);
+  vertical-align: -2px;
+  animation: ngs-caret-blink 0.9s steps(1) infinite;
+}
+
+@keyframes ngs-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.searchSuggestion {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ngs-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ngs-cobalt);
+}
+
+/* Selected data panel */
+
+.selectedDataHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.cartBadgeWrap {
+  position: relative;
+  color: var(--ngs-text-muted);
+}
+
+.cartBadge {
+  position: absolute;
+  top: -7px;
+  right: -9px;
+  background: var(--ngs-cobalt);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: var(--ngs-radius-pill);
+  padding: 3px 5px;
+}
+
+.selectedField {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.selectedFieldLabel {
+  font-size: 10.5px;
+  color: var(--ngs-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.selectedFieldValue {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.selectedFieldValuePrice {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ngs-obsidian);
+}
+
+.tagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  background: var(--ngs-cobalt);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--ngs-radius-pill);
+}
+
+.tagEmpty {
+  color: var(--ngs-text-faint);
+  font-size: 12px;
+}
+
+.addToCartButton {
+  width: 100%;
+  border: none;
+  border-radius: var(--ngs-radius-sm);
+  padding: 10px;
+  background: var(--ngs-cobalt);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+  transition: background-color 0.2s var(--ngs-ease-premium);
+}
+
+/* Dataset switcher */
+
+.datasetSwitcher {
+  display: flex;
+  gap: 8px;
+  background: var(--panel-bg);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--ngs-border);
+  border-radius: var(--ngs-radius-md);
+  box-shadow: var(--ngs-shadow);
+  padding: 8px;
+}
+
+.datasetCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 74px;
+  height: 54px;
+  border-radius: var(--ngs-radius-sm);
+  border: 1.5px solid transparent;
+  background: rgba(21, 26, 35, 0.03);
+  font-size: 10.5px;
+  color: var(--ngs-text-muted);
+  transition:
+    border-color 0.25s var(--ngs-ease-premium),
+    color 0.25s var(--ngs-ease-premium);
+}
+
+.datasetCardSelected {
+  border-color: var(--ngs-cobalt);
+  color: var(--ngs-cobalt);
+  background: var(--ngs-soft-cobalt-surface);
+}
+
+.datasetCardCheck {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: var(--ngs-cobalt);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px;
+}
+
+/* ------------------------------------------------------------- Cursor */
+
+.workflowCursor {
+  position: absolute;
+  z-index: 20;
+  transform: translate(-4px, -2px);
+  pointer-events: none;
+  transition: none;
+}
+
+.workflowCursorClicking svg {
+  transform: scale(0.85);
+  transition: transform 0.12s var(--ngs-ease-premium);
+}
+
+.workflowCursorRing {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--ngs-cobalt);
+  animation: ngs-pulse-ring 0.5s var(--ngs-ease-premium);
+}
+
+/* ------------------------------------------------------------ Overlays */
+
+.overlayBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(21, 26, 35, 0.12);
+  animation: ngs-fade-in 0.4s var(--ngs-ease-premium);
+}
+
+@keyframes ngs-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.overlayCard {
+  width: min(300px, 82%);
+  background: var(--ngs-surface);
+  border-radius: var(--ngs-radius-lg);
+  box-shadow: var(--ngs-shadow);
+  border: 1px solid var(--ngs-border);
+  padding: 22px 22px 20px;
+  text-align: center;
+}
+
+.overlayShield {
+  color: var(--ngs-cobalt);
+  margin-bottom: 8px;
+}
+
+.overlayTitle {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.overlaySubtitle {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--ngs-text-muted);
+}
+
+.progressTrack {
+  height: 4px;
+  border-radius: var(--ngs-radius-pill);
+  background: rgba(21, 26, 35, 0.08);
+  overflow: hidden;
+  margin: 4px 0 14px;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--ngs-cobalt);
+  transition: width 0.4s var(--ngs-ease-premium);
+}
+
+.stageList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.stageListItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ngs-text-faint);
+}
+
+.stageDot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(21, 26, 35, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+  transition:
+    background-color 0.25s var(--ngs-ease-premium),
+    border-color 0.25s var(--ngs-ease-premium);
+}
+
+.stageDotActive {
+  border-color: var(--ngs-cobalt);
+}
+
+.stageDotDone {
+  background: var(--ngs-cobalt);
+  border-color: var(--ngs-cobalt);
+}
+
+.overlayDetails {
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.overlayDetails div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.overlayDetails dt {
+  color: var(--ngs-text-faint);
+}
+
+.overlayDetails dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.secureDeliveryChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ngs-soft-cobalt-surface);
+  color: var(--ngs-cobalt);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: var(--ngs-radius-pill);
+}
+
+.packageCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(21, 26, 35, 0.03);
+  border-radius: var(--ngs-radius-sm);
+  padding: 10px 12px;
+  margin: 4px 0 14px;
+  text-align: left;
+}
+
+.packageCardText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.packageCardName {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.packageCardMeta {
+  font-size: 11px;
+  color: var(--ngs-text-faint);
+}
+
+.downloadButton {
+  width: 100%;
+  margin-top: 14px;
+  border: none;
+  border-radius: var(--ngs-radius-sm);
+  padding: 10px;
+  background: var(--ngs-cobalt);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.downloadConfirmation {
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ngs-cobalt);
+}
+
+/* ------------------------------------------------------------ Progress */
+
+.progressLabel {
+  position: absolute;
+  left: 3%;
+  bottom: 3%;
+  z-index: 5;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(21, 26, 35, 0.32);
+}
+
+/* ------------------------------------------------------------ Tablet */
+
+@media (max-width: 1024px) {
+  .panelSlotLeft {
+    width: 24%;
+    padding: 12px 10px;
+  }
+  .panelSlotRight {
+    width: 26%;
+  }
+  .datasetCard {
+    width: 62px;
+    height: 48px;
+  }
+}
+
+/* ------------------------------------------------------------ Mobile */
+
+@media (max-width: 640px) {
+  .root {
+    aspect-ratio: 9 / 16;
+    min-height: 560px;
+  }
+
+  .panelSlotLeft {
+    left: 4%;
+    right: 4%;
+    top: 5%;
+    bottom: auto;
+    width: auto;
+    flex-direction: row;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 8px 12px;
+  }
+
+  .layerList {
+    flex-direction: row;
+    margin: 0;
+  }
+
+  .layerRow span:last-child {
+    display: none;
+  }
+
+  .addLayerButton {
+    display: none;
+  }
+
+  .panelSlotTop {
+    left: 6%;
+    right: 6%;
+    top: 15%;
+  }
+
+  .panelSlotRight {
+    left: 4%;
+    right: 4%;
+    top: auto;
+    bottom: 16%;
+    width: auto;
+  }
+
+  .panelSlotBottom {
+    left: 4%;
+    right: 4%;
+    bottom: 3%;
+  }
+
+  .datasetSwitcher {
+    overflow-x: auto;
+  }
+
+  .overlayCard {
+    width: min(280px, 88%);
+  }
+}

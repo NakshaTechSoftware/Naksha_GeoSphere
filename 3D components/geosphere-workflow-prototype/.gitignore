@@ -1,0 +1,22 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# env
+.env
+.env.local
+
+# logs
+npm-debug.log*
+pnpm-debug.log*
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# testing
+coverage
+playwright-report
+test-results

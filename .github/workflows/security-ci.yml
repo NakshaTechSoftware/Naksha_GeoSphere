@@ -144,7 +144,7 @@ jobs:
 
       - name: Trivy scan (non-blocking)
         if: success() || failure()
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           image-ref: naksha-${{ matrix.service }}:scan
@@ -163,7 +163,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Trivy filesystem + config scan (non-blocking)
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           scan-type: "fs"

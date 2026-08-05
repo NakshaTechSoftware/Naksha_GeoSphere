@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     // Normalize state and district names for path matching
     const normalizedState = state.trim().toLowerCase();
-    const normalizedDistrict = district.trim();
+    const normalizedDistrict = district.trim().toLowerCase().replace(/\s+/g, '_');
 
     // List all files in the state's directory to find the district folder
     const statePrefix = `india/${normalizedState}/`;
@@ -46,11 +46,16 @@ export async function GET(request: NextRequest) {
 
     const listResponse = await s3Client.send(listCommand);
     
-    // Find the district folder (it may have a prefix like "17-Chikkamagaluru")
+    // Find the district folder (it may have a prefix like "17-Chikkamagaluru" or "17_Chikkamagaluru")
+    // Match by checking if the folder name contains the district name (case-insensitive)
     const districtFolder = listResponse.CommonPrefixes?.find((prefix) => {
       const folderName = prefix.Prefix?.split('/').slice(-2)[0] || '';
-      // Match folder name that contains the district name (case-insensitive)
-      return folderName.toLowerCase().includes(normalizedDistrict.toLowerCase());
+      // Remove numbers and separators, then compare
+      const cleanFolderName = folderName.replace(/^\d+[-_]/, '').toLowerCase().replace(/[-_]/g, ' ');
+      const cleanDistrictName = district.toLowerCase().replace(/[-_]/g, ' ');
+      return cleanFolderName === cleanDistrictName || 
+             cleanFolderName.includes(cleanDistrictName) ||
+             cleanDistrictName.includes(cleanFolderName);
     });
 
     if (!districtFolder) {
@@ -69,10 +74,10 @@ export async function GET(request: NextRequest) {
 
     const districtFilesResponse = await s3Client.send(districtFilesCommand);
     
-    // Find the file containing "subdistrict_boundaries" in its name
+    // Find the file containing "subdistrict_boundary" or "subdistrict_boundaries" in its name
     const talukFile = districtFilesResponse.Contents?.find((file) => {
       const fileName = file.Key || '';
-      return fileName.includes('subdistrict_boundaries') && fileName.endsWith('.geojson');
+      return (fileName.includes('subdistrict_boundary') || fileName.includes('subdistrict_boundaries')) && fileName.endsWith('.geojson');
     });
 
     if (!talukFile || !talukFile.Key) {

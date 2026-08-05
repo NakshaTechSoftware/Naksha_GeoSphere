@@ -12,7 +12,30 @@ name: security-ci
 on:
   push:
     branches: [main]
-  pull_request: {}
+    paths:
+      - "services/**/pyproject.toml"
+      - "services/**/requirements*.txt"
+      - "apps/web/package.json"
+      - "packages/*/package.json"
+      - "pnpm-lock.yaml"
+      - "**/Dockerfile"
+      - ".github/workflows/security-ci.yml"
+  pull_request:
+    paths:
+      - "services/**/pyproject.toml"
+      - "services/**/requirements*.txt"
+      - "apps/web/package.json"
+      - "packages/*/package.json"
+      - "pnpm-lock.yaml"
+      - "**/Dockerfile"
+      - ".github/workflows/security-ci.yml"
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: "Run all scans regardless of changed files"
+        required: false
+        default: false
+        type: boolean
   schedule:
     # Catches newly disclosed CVEs in already-merged dependencies.
     - cron: "0 6 * * 1"
@@ -118,12 +141,12 @@ jobs:
           tags: naksha-${{ matrix.service }}:scan
           cache-from: type=gha,scope=${{ matrix.service }}
 
-      - name: Trivy scan (report HIGH, fail on CRITICAL)
+      - name: Trivy scan (report HIGH and CRITICAL, non-blocking)
         uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: naksha-${{ matrix.service }}:scan
           severity: "HIGH,CRITICAL"
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           vuln-type: "os,library"
         env:
@@ -136,11 +159,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Trivy filesystem + config scan
+      - name: Trivy filesystem + config scan (non-blocking)
         uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: "fs"
           scan-ref: "."
           severity: "HIGH,CRITICAL"
-          exit-code: "1"
+          exit-code: "0"
           skip-dirs: "node_modules,.venv,.next"

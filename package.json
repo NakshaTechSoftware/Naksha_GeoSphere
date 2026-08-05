@@ -41,5 +41,12 @@
     "worker:test": "docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec worker pytest",
 
     "health:check": "bash ./scripts/check-health.sh"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": ">=6.4.3",
+      "postcss": ">=8.5.18",
+      "sharp": ">=0.35.0"
+    }
   }
 }

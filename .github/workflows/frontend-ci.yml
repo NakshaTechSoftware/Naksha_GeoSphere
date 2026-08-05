@@ -18,6 +18,7 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/frontend-ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

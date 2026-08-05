@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { LayersControl, type MapLayer } from "./LayersControl";
+import * as turf from "@turf/turf";
 
 interface InteractiveMapProps {
   showDatasets?: boolean;
@@ -39,59 +40,30 @@ export function InteractiveMap({
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {
-          switch (currentLayer) {
-            case "satellite":
-              // Use Google Satellite tiles as fallback since static image overlay is complex
-              return {
-                version: 8,
-                sources: {
-                  "satellite-base": {
-                    type: "raster",
-                    tiles: [
-                      "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
-                      "https://mt1.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
-                    ],
-                    tileSize: 256,
-                    attribution: "© Google",
-                    minzoom: 0,
-                    maxzoom: 20,
-                  },
-                },
-                layers: [
-                  {
-                    id: "satellite-base-layer",
-                    type: "raster",
-                    source: "satellite-base",
-                    minzoom: 0,
-                    maxzoom: 20,
-                  },
+          // Start with a minimal style that we'll build upon
+          return {
+            version: 8,
+            sources: {
+              "osm-tiles": {
+                type: "raster",
+                tiles: [
+                  "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                  "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                  "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
                 ],
-                glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-              };
-            case "terrain":
-              return {
-                version: 8,
-                sources: {
-                  "terrain-tiles": {
-                    type: "raster",
-                    tiles: [
-                      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",
-                    ],
-                    tileSize: 256,
-                    attribution: "Esri, USGS, NOAA",
-                  },
-                },
-                layers: [
-                  {
-                    id: "terrain-layer",
-                    type: "raster",
-                    source: "terrain-tiles",
-                  },
-                ],
-              };
-            default:
-              return "https://demotiles.maplibre.org/style.json";
-          }
+                tileSize: 256,
+                attribution: "© OpenStreetMap contributors",
+              },
+            },
+            layers: [
+              {
+                id: "osm-layer",
+                type: "raster",
+                source: "osm-tiles",
+              },
+            ],
+            glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+          };
         };
 
         // Create map instance centered on India
@@ -338,35 +310,142 @@ export function InteractiveMap({
         mapRef.current = null;
       }
     };
-  }, [showDatasets, interactive, currentLayer]); // Added currentLayer to dependencies
+  }, [showDatasets, interactive]); // Removed currentLayer from dependencies
 
   // Handle layer changes
   const handleLayerChange = async (layer: MapLayer) => {
-    setCurrentLayer(layer);
+    if (!mapRef.current) return;
     
-    // If map is already loaded, we need to recreate it with the new style
-    // MapLibre doesn't support dynamic style switching easily
-    if (mapRef.current) {
-      const currentCenter = mapRef.current.getCenter();
-      const currentZoom = mapRef.current.getZoom();
-      
-      // Store current state before removing
-      const center = { lng: currentCenter.lng, lat: currentCenter.lat };
-      const zoom = currentZoom;
-      
-      // Remove old map
-      mapRef.current.remove();
-      mapRef.current = null;
-      setIsLoaded(false);
-      
-      // Map will be recreated by the effect hook due to currentLayer change
-      // We'll restore the position in the next render
-      setTimeout(() => {
-        if (mapRef.current) {
-          mapRef.current.jumpTo({ center: [center.lng, center.lat], zoom });
-        }
-      }, 500);
+    const map = mapRef.current;
+    
+    // Get the current style layers to preserve custom layers
+    const currentLayers = map.getStyle().layers;
+    const customLayers = currentLayers.filter(
+      (l) =>
+        l.id.startsWith("india-") ||
+        l.id.startsWith("states-") ||
+        l.id.startsWith("districts-") ||
+        l.id.startsWith("dataset-")
+    );
+    
+    // Get all custom sources
+    const style = map.getStyle();
+    const customSources: Record<string, any> = {};
+    Object.keys(style.sources).forEach((sourceId) => {
+      if (
+        sourceId === "india-boundary" ||
+        sourceId === "india-states" ||
+        sourceId === "india-districts" ||
+        sourceId === "datasets"
+      ) {
+        customSources[sourceId] = style.sources[sourceId];
+      }
+    });
+
+    // Remove existing base layers (not our custom ones)
+    const baseLayerIds = currentLayers
+      .filter(
+        (l) =>
+          !l.id.startsWith("india-") &&
+          !l.id.startsWith("states-") &&
+          !l.id.startsWith("districts-") &&
+          !l.id.startsWith("dataset-")
+      )
+      .map((l) => l.id);
+
+    baseLayerIds.forEach((id) => {
+      if (map.getLayer(id)) {
+        map.removeLayer(id);
+      }
+    });
+
+    // Remove base sources
+    const baseSources = Object.keys(style.sources).filter(
+      (sourceId) =>
+        sourceId !== "india-boundary" &&
+        sourceId !== "india-states" &&
+        sourceId !== "india-districts" &&
+        sourceId !== "datasets"
+    );
+
+    baseSources.forEach((sourceId) => {
+      if (map.getSource(sourceId)) {
+        map.removeSource(sourceId);
+      }
+    });
+
+    // Add new base layer based on selection
+    switch (layer) {
+      case "satellite":
+        map.addSource("satellite-base", {
+          type: "raster",
+          tiles: [
+            "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
+            "https://mt1.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}",
+          ],
+          tileSize: 256,
+          attribution: "© Google",
+          minzoom: 0,
+          maxzoom: 20,
+        });
+
+        map.addLayer(
+          {
+            id: "satellite-base-layer",
+            type: "raster",
+            source: "satellite-base",
+            minzoom: 0,
+            maxzoom: 20,
+          },
+          customLayers.length > 0 && customLayers[0]?.id ? customLayers[0].id : undefined
+        );
+        break;
+
+      case "terrain":
+        map.addSource("terrain-tiles", {
+          type: "raster",
+          tiles: [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",
+          ],
+          tileSize: 256,
+          attribution: "Esri, USGS, NOAA",
+        });
+
+        map.addLayer(
+          {
+            id: "terrain-layer",
+            type: "raster",
+            source: "terrain-tiles",
+          },
+          customLayers.length > 0 && customLayers[0]?.id ? customLayers[0].id : undefined
+        );
+        break;
+
+      case "default":
+        // Add default OSM-style tiles
+        map.addSource("osm-tiles", {
+          type: "raster",
+          tiles: [
+            "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          ],
+          tileSize: 256,
+          attribution: "© OpenStreetMap contributors",
+        });
+
+        map.addLayer(
+          {
+            id: "osm-layer",
+            type: "raster",
+            source: "osm-tiles",
+          },
+          customLayers.length > 0 && customLayers[0]?.id ? customLayers[0].id : undefined
+        );
+        break;
     }
+
+    setCurrentLayer(layer);
   };
 
   return (

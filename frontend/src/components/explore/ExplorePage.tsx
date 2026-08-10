@@ -11,6 +11,7 @@ import {
   type AOIResult,
   type AttributeInfo,
 } from "./IndiaMapViewer";
+import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
 import {
@@ -248,6 +249,47 @@ export function ExplorePage() {
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+
+  // Owner names for the selected cadastral parcel. They aren't in the cadastral GeoJSON, so
+  // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
+  // slow, multi-step lookup against the state portal, hence the explicit loading state.
+  const [owners, setOwners] = useState<
+    { status: "loading" } | { status: "error"; message: string } | { status: "ok"; rows: RtcOwner[] }
+  >({ status: "loading" });
+
+  const parcel = attributeInfo?.parcel;
+  useEffect(() => {
+    if (!parcel) return;
+    const controller = new AbortController();
+    setOwners({ status: "loading" });
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
+          { signal: controller.signal }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        setOwners({ status: "ok", rows: data.owners ?? [] });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setOwners({
+          status: "error",
+          message: error instanceof Error ? error.message : "Lookup failed",
+        });
+      }
+    })();
+    return () => controller.abort();
+    // A parcel object is rebuilt on every right-click, so key the effect on its values.
+  }, [
+    parcel?.district,
+    parcel?.taluk,
+    parcel?.hobli,
+    parcel?.village,
+    parcel?.survey,
+    parcel?.surnoc,
+    parcel?.hissa,
+  ]);
 
   // Real state/district/taluk names, fetched once on mount, that back the dynamic
   // suggestion categories below (as opposed to the hardcoded Bengaluru ward/zone lists).
@@ -743,6 +785,55 @@ export function ExplorePage() {
             </div>
             <table className="w-full border-collapse text-xs">
               <tbody>
+                {/* Owner names (Bhoomi RTC) sit above the parcel's own attributes - they're
+                    what the parcel is usually looked up for. */}
+                {attributeInfo.parcel && (
+                  <>
+                    {owners.status === "loading" && (
+                      <tr className="border-b border-slate-100">
+                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                          Owner
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-400">Loading land records…</td>
+                      </tr>
+                    )}
+                    {owners.status === "error" && (
+                      <tr className="border-b border-slate-100">
+                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                          Owner
+                        </td>
+                        <td className="break-words px-3 py-1.5 text-amber-600">
+                          Land records unavailable ({owners.message})
+                        </td>
+                      </tr>
+                    )}
+                    {owners.status === "ok" && owners.rows.length === 0 && (
+                      <tr className="border-b border-slate-100">
+                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                          Owner
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-400">No records found</td>
+                      </tr>
+                    )}
+                    {owners.status === "ok" &&
+                      owners.rows.map((owner, i) => (
+                        <tr key={`owner-${i}`} className="border-b border-slate-100">
+                          <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                            {i === 0 ? (owners.rows.length > 1 ? "Owners" : "Owner") : ""}
+                          </td>
+                          <td className="break-words px-3 py-1.5 font-semibold text-slate-900">
+                            {owner.name}
+                            {owner.extent && (
+                              <span className="ml-1 font-normal text-slate-500">
+                                ({owner.extent}
+                                {owner.category ? `, ${owner.category}` : ""})
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </>
+                )}
                 {attributeInfo.rows.map((row, i) => (
                   <tr key={`${row.label}-${i}`} className="border-b border-slate-100 last:border-b-0">
                     <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">

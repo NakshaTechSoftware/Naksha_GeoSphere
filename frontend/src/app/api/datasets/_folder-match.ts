@@ -38,6 +38,13 @@ export function cleanFolderName(name: string): string {
     .trim();
 }
 
+// 0..1 closeness of two already-normalized names, for callers that need to rank candidates
+// rather than take a yes/no verdict (see namesMatch).
+export function similarity(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen === 0 ? 0 : 1 - levenshtein(a, b) / maxLen;
+}
+
 // True if `folderName` (already run through cleanFolderName) and `displayName` (a raw
 // district/taluk name) plausibly refer to the same place: exact match, one contains the
 // other, or - as a last resort - they're within a small edit-distance tolerance to absorb
@@ -54,7 +61,5 @@ export function namesMatch(cleanFolder: string, displayName: string): boolean {
     return true;
   }
 
-  const maxLen = Math.max(cleanFolder.length, cleanDisplay.length);
-  const similarity = 1 - levenshtein(cleanFolder, cleanDisplay) / maxLen;
-  return similarity >= 0.9;
+  return similarity(cleanFolder, cleanDisplay) >= 0.9;
 }

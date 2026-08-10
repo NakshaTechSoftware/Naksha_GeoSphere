@@ -43,6 +43,13 @@ services:
       - ./services/api/tests:/app/tests
       - ./services/api/alembic.ini:/app/alembic.ini
       - ./services/api/pyproject.toml:/app/pyproject.toml
+      # Host-worker-produced catalog manifests and COG files
+      - ./runtime:/workspace/runtime
+      - //nast/NAKSHA/DAILY ACTIVITY REPORT/Sanket/geosphere_data:/workspace/data
+    environment:
+      RUNTIME_ROOT: /workspace/runtime
+      DATA_ROOT: /workspace/data
+      ECW_SOURCE_ROOT: ${ECW_SOURCE_ROOT}
 
   worker:
     build:
@@ -55,15 +62,17 @@ services:
   web:
     build:
       target: dev
+    command: npm run dev
     ports:
       - "${WEB_HOST_PORT:-3000}:3000"
     environment:
+      NODE_ENV: development
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
-      WATCHPACK_POLLING: "true"
     volumes:
-      - ./apps/web/src:/workspace/apps/web/src
-      - ./apps/web/public:/workspace/apps/web/public
-      - ./apps/web/next.config.ts:/workspace/apps/web/next.config.ts
-      - ./apps/web/tailwind.config.ts:/workspace/apps/web/tailwind.config.ts
-      - ./apps/web/tsconfig.json:/workspace/apps/web/tsconfig.json
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/next.config.ts:/app/next.config.ts
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/postcss.config.mjs:/app/postcss.config.mjs

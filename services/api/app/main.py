@@ -32,6 +32,18 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s API (env=%s)", settings.app_name, settings.app_env)
+    settings.ensure_directories()
+    # Initial catalog sync
+    try:
+        from app.database.session import get_session_factory
+        from app.services.catalog import sync_catalog
+
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await sync_catalog(session)
+            logger.info("Catalog synchronized: %s", result)
+    except Exception as exc:
+        logger.warning("Initial catalog sync failed (non-fatal): %s", exc)
     yield
     logger.info("Shutting down %s API", settings.app_name)
     await dispose_engine()

@@ -6,6 +6,16 @@ import type {
   RegisteredUser,
 } from "@/types/auth";
 import type { AggregatedHealthResponse } from "@/types/health";
+import type {
+  DatasetDetail,
+  DatasetListResponse,
+  ExportCreateInput,
+  ExportJob,
+  MosaicMetadata,
+  ScanResponse,
+  ScanStatus,
+  TileJson,
+} from "@/types/catalog";
 
 export class ApiUnavailableError extends Error {
   constructor(cause?: unknown) {
@@ -237,4 +247,155 @@ export async function resendVerificationEmail(
   }
 
   return (await response.json()) as { message: string };
+}
+
+/* ------------------------------------------------------------------ */
+/* Catalog / datasets / maps / exports                                */
+/* ------------------------------------------------------------------ */
+
+async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${config.apiUrl}${path}`, {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
+  } catch (error) {
+    throw new ApiUnavailableError(error);
+  }
+  if (!response.ok) {
+    throw await toApiRequestError(response);
+  }
+  return (await response.json()) as T;
+}
+
+async function apiPost<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${config.apiUrl}${path}`, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (error) {
+    throw new ApiUnavailableError(error);
+  }
+  if (!response.ok) {
+    throw await toApiRequestError(response);
+  }
+  return (await response.json()) as T;
+}
+
+/**
+ * Lists ready ECW datasets from the catalog.
+ */
+export async function fetchDatasets(
+  params?: { search?: string; limit?: number; offset?: number },
+  signal?: AbortSignal,
+): Promise<DatasetListResponse> {
+  const search = new URLSearchParams();
+  if (params?.search) search.set("search", params.search);
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  return apiGet<DatasetListResponse>(`/api/v1/datasets${qs ? `?${qs}` : ""}`, signal);
+}
+
+/**
+ * Fetches a single dataset with its raster manifest.
+ */
+export async function fetchDatasetDetail(
+  datasetId: string,
+  signal?: AbortSignal,
+): Promise<DatasetDetail> {
+  return apiGet<DatasetDetail>(`/api/v1/datasets/${datasetId}`, signal);
+}
+
+/**
+ * Queues a recursive ECW folder scan + COG conversion on the Windows worker.
+ * Pass `scanPattern` to restrict the scan to a specific date or subdirectory
+ * (e.g. "28-11-2023"), avoiding a full re-scan of multi-hundred-GB datasets.
+ */
+export async function scanCatalog(
+  params?: { scanPattern?: string },
+  signal?: AbortSignal,
+): Promise<ScanResponse> {
+  const search = new URLSearchParams();
+  if (params?.scanPattern) search.set("scan_pattern", params.scanPattern);
+  const qs = search.toString();
+  return apiPost<ScanResponse>(
+    `/api/v1/admin/catalog/scan${qs ? `?${qs}` : ""}`,
+    undefined,
+    signal,
+  );
+}
+
+/**
+ * Polls the status of a catalog scan job.
+ */
+export async function fetchScanStatus(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<ScanStatus> {
+  return apiGet<ScanStatus>(`/api/v1/admin/catalog/scan/${jobId}`, signal);
+}
+
+/**
+ * Fetches mosaic bounds, center, zoom range, and tile template URL.
+ */
+export async function fetchMosaicMetadata(signal?: AbortSignal): Promise<MosaicMetadata> {
+  return apiGet<MosaicMetadata>("/api/v1/maps/mosaic", signal);
+}
+
+/**
+ * Fetches the TileJSON document for the mosaic.
+ */
+export async function fetchTileJson(signal?: AbortSignal): Promise<TileJson> {
+  return apiGet<TileJson>("/api/v1/maps/mosaic/tilejson.json", signal);
+}
+
+/**
+ * Kicks off background pre-rendering of common zoom-level tiles so the map
+ * opens instantly instead of rendering on first view. Safe to call whenever
+ * — the backend no-ops if a pass is already running.
+ */
+export async function prewarmMosaic(signal?: AbortSignal): Promise<void> {
+  await apiPost("/api/v1/maps/mosaic/prewarm", undefined, signal);
+}
+
+/**
+ * Creates an export job for the given polygon AOI. The backend selects
+ * every intersecting ECW automatically when `dataset_ids` is omitted.
+ */
+export async function createExport(
+  input: ExportCreateInput,
+  signal?: AbortSignal,
+): Promise<ExportJob> {
+  return apiPost<ExportJob>("/api/v1/exports", input, signal);
+}
+
+/**
+ * Polls the status of an export job.
+ */
+export async function fetchExportStatus(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<ExportJob> {
+  return apiGet<ExportJob>(`/api/v1/exports/${jobId}`, signal);
+}
+
+/**
+ * Builds the absolute download URL for a completed export.
+ */
+export function exportDownloadUrl(jobId: string): string {
+  return `${config.apiUrl}/api/v1/exports/${jobId}/download`;
+}
+
+/**
+ * Builds the absolute mosaic tile URL for MapLibre raster sources.
+ */
+export function mosaicTileUrl(): string {
+  return `${config.apiUrl}/api/v1/maps/mosaic/tiles/{z}/{x}/{y}.png`;
 }

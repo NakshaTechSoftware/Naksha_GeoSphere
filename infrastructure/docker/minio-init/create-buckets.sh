@@ -1,7 +1,7 @@
 #!/bin/sh
 # Idempotently creates the private MinIO buckets Naksha GeoSphere needs.
 # Runs once as the `minio-init` container against a healthy `minio`
-# service, then exits. Safe to re-run — `mc mb --ignore-existing` and
+# service, then exits. Safe to re-run â€” `mc mb --ignore-existing` and
 # `mc anonymous set none` are no-ops if already applied.
 set -eu
 
@@ -15,7 +15,7 @@ for bucket in \
     "$S3_BUCKET_TEMPORARY_DATA"; do
   echo "Ensuring bucket '$bucket' exists and is private..."
   mc mb --ignore-existing "local/$bucket"
-  # Explicitly private — no anonymous/public read or write access, and no
+  # Explicitly private â€” no anonymous/public read or write access, and no
   # public bucket policy of any kind.
   mc anonymous set none "local/$bucket"
 done

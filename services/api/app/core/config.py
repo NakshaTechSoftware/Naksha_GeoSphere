@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
     api_docs_enabled: bool = True
+    api_prefix: str = "/api/v1"
 
     # --- URLs / networking --------------------------------------------
     frontend_url: str = "http://localhost:3000"
@@ -92,6 +93,54 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value  # already a list (e.g. default value, not from env)
+
+    # --- Geospatial / ECW pipeline -----------------------------------
+    runtime_root: str = "/workspace/runtime"
+    data_root: str = "/workspace/data"
+    default_source_crs: str = "EPSG:32643"
+    auto_scan_on_startup: bool = True
+    catalog_sync_seconds: int = 5
+    tile_cache_seconds: int = 86400
+    max_export_datasets: int = 250
+    max_export_area_sq_km: float = 5000.0
+
+    @property
+    def catalog_dir(self) -> str:
+        from pathlib import Path
+        return str(Path(self.runtime_root) / "catalog")
+
+    @property
+    def bridge_inbox(self) -> str:
+        from pathlib import Path
+        return str(Path(self.runtime_root) / "bridge" / "inbox")
+
+    @property
+    def bridge_status(self) -> str:
+        from pathlib import Path
+        return str(Path(self.runtime_root) / "bridge" / "status")
+
+    @property
+    def cog_dir(self) -> str:
+        from pathlib import Path
+        return str(Path(self.data_root) / "cogs")
+
+    @property
+    def export_dir(self) -> str:
+        from pathlib import Path
+        return str(Path(self.data_root) / "exports")
+
+    @property
+    def tile_cache_dir(self) -> str:
+        from pathlib import Path
+        return str(Path(self.data_root) / "tile_cache")
+
+    def ensure_directories(self) -> None:
+        from pathlib import Path
+        for path_str in (
+            self.catalog_dir, self.bridge_inbox, self.bridge_status,
+            self.cog_dir, self.export_dir, self.tile_cache_dir,
+        ):
+            Path(path_str).mkdir(parents=True, exist_ok=True)
 
     @property
     def docs_enabled(self) -> bool:

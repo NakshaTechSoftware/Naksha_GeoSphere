@@ -1,91 +1,32 @@
-# === Environment & Secrets ===
 .env
-.env.local
-.env.*.local
-.env.remote-storage
-.env.storage
-infrastructure/storage-server/.env.storage
-*.pem
-*.key
-secrets/
-**/secrets/
-
-# === Node / Frontend ===
-node_modules/
-.pnpm-store/
-.next/
-out/
-dist/
-build/
-coverage/
-.turbo/
-*.tsbuildinfo
-.eslintcache
-
-# === Playwright / Vitest ===
-apps/web/playwright-report/
-apps/web/test-results/
-apps/web/coverage/
-
-# === Python / Backend & Worker ===
+.venv-host/
 __pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-.coverage.*
-*.egg-info/
-.tox/
+*.pyc
+postgres_data/
+data/cogs/*
+!data/cogs/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+data/tile_cache/*
+!data/tile_cache/.gitkeep
+runtime/bridge/inbox/*
+runtime/bridge/status/*
+runtime/bridge/work/*
+runtime/catalog/*
+runtime/mailbox/*
 
-# === Logs ===
-*.log
-logs/
-npm-debug.log*
-pnpm-debug.log*
+# local-only, excluded from backup branch
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+services/api/.venv-native/
+*.zip
+*.whl
 
-# === IDE / Editor ===
-.vscode/*
-!.vscode/extensions.json
-.idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# === Docker / local data volumes ===
-infrastructure/docker/data/
-**/pgdata/
-**/minio-data/
-**/redis-data/
-
-# === Terraform ===
-**/.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-!*.tfvars.example
-.terraform.lock.hcl
-
-# === Geospatial working data (never commit datasets) ===
-**/uploads/
-**/downloads/
-**/tmp-processing/
-**/*.tif
-**/*.tiff
-!**/fixtures/**/*.tif
-**/*.las
-**/*.laz
-**/*.gdb/
-*.gpkg
-
-# === Alembic autogenerate scratch ===
-services/api/migrations/.autogenerate/
-
-# === Misc ===
-*.bak
-*.orig
+# local-only, excluded from backup
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+services/api/.venv-native/
+*.zip
+*.whl

@@ -7,6 +7,17 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# Development stage (compose.dev.yaml -> web build.target: dev).
+# Reuses the `deps` stage so /app/node_modules (incl. `next`) is present.
+# Source is bind-mounted by the dev overlay; DO NOT bind-mount ./frontend/node_modules
+# here or it would hide this stage's installed dependencies (root cause of "next: not found").
+FROM deps AS dev
+ENV NODE_ENV=development
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+
 # Build the application
 FROM base AS builder
 WORKDIR /app

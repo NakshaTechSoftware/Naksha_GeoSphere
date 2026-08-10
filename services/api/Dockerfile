@@ -19,6 +19,10 @@ FROM python:${PYTHON_VERSION} AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    libgdal-dev \
+    gdal-bin \
+    libexpat1-dev \
+    libproj-dev \
     && rm -rf /var/lib/apt/lists/*
 # NOTE: apt package versions are intentionally not pinned to exact patch
 # releases — Debian bookworm's security-updated point releases rotate
@@ -39,6 +43,13 @@ RUN pip install --upgrade pip==24.3.1 && pip install .
 # dev — includes dev/test dependencies + reload server
 # ---------------------------------------------------------------------------
 FROM builder AS dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal32 \
+    libexpat1 \
+    libproj25 \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+ENV GDAL_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libgdal.so
 RUN pip install .[dev]
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1

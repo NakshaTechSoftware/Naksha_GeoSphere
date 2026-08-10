@@ -512,10 +512,24 @@ export interface AttributeRow {
   bold?: boolean;
 }
 
+// Identifies a cadastral parcel in Bhoomi's land-records system. Set only for cadastral
+// features - it's what /api/land-records/rtc needs to look the parcel's owners up, since
+// owner names are not part of the cadastral GeoJSON itself.
+export interface ParcelLandRecordKey {
+  district: string;
+  taluk: string;
+  hobli: string;
+  village: string;
+  survey: string;
+  surnoc: string;
+  hissa: string;
+}
+
 export interface AttributeInfo {
   typeLabel: string;
   title: string;
   rows: AttributeRow[];
+  parcel?: ParcelLandRecordKey;
 }
 
 // Live state of an in-progress drawing. `points` holds [lng, lat] positions: the freehand
@@ -2937,8 +2951,28 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             props.st_nm.trim().toLowerCase() === "karnataka";
           if (isKarnatakaState) rows.push(...KARNATAKA_HIERARCHY);
 
+          // Cadastral parcels carry no owner names - those come from Bhoomi, keyed by the
+          // parcel's administrative chain plus survey/surnoc/hissa. Hand that key to the
+          // caller so its panel can fetch and append the owner rows.
+          const survey = String(props.Surveynumber_Old ?? props.surveynumberi ?? "").trim();
+          const parcel: ParcelLandRecordKey | undefined =
+            layerId === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
+            layerId === VILLAGE_CADASTRALS_LINE_LAYER_ID
+              ? survey
+                ? {
+                    district: String(props._parent_district ?? ""),
+                    taluk: String(props._parent_subdistrict ?? ""),
+                    hobli: String(props._parent_hobli ?? ""),
+                    village: String(props._parent_village_name ?? ""),
+                    survey,
+                    surnoc: String(props.Surnoc ?? "*").trim() || "*",
+                    hissa: String(props.HissaNo ?? "*").trim() || "*",
+                  }
+                : undefined
+              : undefined;
+
           attributeInfoOpenRef.current = true;
-          onAttributeInfoRef.current?.({ typeLabel, title, rows });
+          onAttributeInfoRef.current?.({ typeLabel, title, rows, parcel });
         });
 
         // Distance scale bar

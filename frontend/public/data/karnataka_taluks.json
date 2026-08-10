@@ -1,0 +1,954 @@
+[
+  {
+    "district": "Belagavi",
+    "taluk": "Chikkodi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Athani"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Raibag"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Gokak"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Hukkeri"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Belagavi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Khanapur"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Savadatti"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Bailhongal"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Ramadurg"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Kitthuru"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Nippani"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Kagwad"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Mudalgi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Yaragatti"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Jamakhandi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bilagi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Mudhol"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Badami"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bagalkote"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Hungund"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Guledgudda"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Ilkal"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Rabakavi-Banahatti"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Terdal"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Vijayapura"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Indi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Sindagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Basavanabagewadi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Muddebihala"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Nidagundi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Babaleshwar"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Chadchan"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Talikoti"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Tikota"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Kolhar"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Devara Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Almel"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Aland"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Afzalpur"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Kalaburgi"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Chincholi"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Sedam"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Chittapur"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Jewargi"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Kalagi"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Kamalapur"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Yadrami"
+  },
+  {
+    "district": "Kalaburagi",
+    "taluk": "Shahabad"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Aurad"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Humnabad"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Chitguppa"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Kamalnagar"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Hulsoor"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Lingasuguru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Manvi"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sirwar"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Devdurga"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Arakera"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Yelburga"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kushtagi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Gangavathi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Koppal"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Karatagi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kukanoor"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kanakagiri"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Naragund"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Gadag"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Shirahatti"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Mundargi"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Gajendragad"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Laxmeshwar"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Ron"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Dharwad"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Navalagund"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kalgatgi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kundgol"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi Urban"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Alnavar"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Annigeri"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Karwar"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Joida"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Haliyal"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Yellapur"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Mundgod"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Sirsi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Ankola"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Kumta"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Siddapur"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Honnavar"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Bhatkal"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Dandeli"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Shiggaon"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Savanur"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hangal"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Haveri"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Byadagi"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Ranebennur"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Rattihalli"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hirekerur"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Siruguppa"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Ballari"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Sonduru"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Kurugodu"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Kampli"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Molakalmuru"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Challakere"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Chitradurga"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Holalkere"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hosadurga"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hiriyur"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Harihar"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Jagaluru"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Davanagere"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Honnali"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Channagiri"
+  },
+  {
+    "district": "Davangere",
+    "taluk": "Nyamati"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Hosanagar"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Kundapura"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Udupi"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Karkala"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Bainduru"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Brahmavara"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Kapu"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Hebri"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Sringeri"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Koppa"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Narasimharajapura"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Tarikere"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Mudigere"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Ajjampura"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kalasa"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Pavagada"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Koratagere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tiptur"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Turuvekere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Srinivaspura"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Kolar"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Malur"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Mulabagilu"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Kolar Gold Field"
+  },
+  {
+    "district": "Kolar",
+    "taluk": "Bangarpet"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Devanahalli"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bengaluru East"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bengaluru North"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bengaluru South"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Hospet"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Harapanahalli"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Hoovina Hadagali"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Hagaribommanahalli"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Kottur"
+  },
+  {
+    "district": "Vijayanagar",
+    "taluk": "Kudligi"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Pandavpura"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Channapatna"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Kanakapura"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Alur"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Holenarasipura"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mangaluru"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Bantwal"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Belthangady"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Puttur"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Sullia"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Moodubidire"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Kadaba"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mulki"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Ullala"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Madikeri"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Somavarapete"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Virajpet"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Ponnampet"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Kushalnagar"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Piriyapatna"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Hunsur"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Mysuru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Heggadadevanakote"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.Narasipura"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saraguru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saligrama"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "K.R.Nagar"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Gundlupet"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Yalandur"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Kollegal"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Hanur"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chikkaballapura"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gudibande"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Bagepalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Shidlagatta"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Manchenahalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chelur"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Yadgir"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shahpur"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shorapur"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Gurmitakal"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Wadagera"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Hunasagi"
+  }
+]

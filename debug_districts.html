@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Karnataka Districts Debug</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .district { padding: 5px; border-bottom: 1px solid #ccc; }
+        .error { background: #ffcccc; }
+        .warning { background: #ffffcc; }
+    </style>
+</head>
+<body>
+    <h1>Karnataka Districts Geometry Validator</h1>
+    <div id="status">Loading...</div>
+    <div id="results"></div>
+
+    <script>
+        async function validateDistricts() {
+            const statusEl = document.getElementById('status');
+            const resultsEl = document.getElementById('results');
+            
+            try {
+                statusEl.textContent = 'Fetching data from API...';
+                
+                const response = await fetch('/api/datasets/state-districts?state=karnataka');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const geojson = await response.json();
+                statusEl.textContent = `Loaded ${geojson.features.length} features. Analyzing...`;
+                
+                const issues = [];
+                const districts = [];
+                
+                geojson.features.forEach((feature, index) => {
+                    const dtname = feature.properties?.dtname || `Feature ${index}`;
+                    districts.push(dtname);
+                    
+                    let hasIssue = false;
+                    let issueType = '';
+                    let details = '';
+                    
+                    // Check if geometry exists
+                    if (!feature.geometry) {
+                        hasIssue = true;
+                        issueType = 'error';
+                        details = 'Missing geometry';
+                    }
+                    // Check if geometry type is valid
+                    else if (!['Polygon', 'MultiPolygon'].includes(feature.geometry.type)) {
+                        hasIssue = true;
+                        issueType = 'error';
+                        details = `Invalid geometry type: ${feature.geometry.type}`;
+                    }
+                    // Check if coordinates exist
+                    else if (!feature.geometry.coordinates || feature.geometry.coordinates.length === 0) {
+                        hasIssue = true;
+                        issueType = 'error';
+                        details = 'Empty coordinates';
+                    }
+                    // Check for coordinate validity
+                    else {
+                        try {
+                            const coords = feature.geometry.type === 'Polygon' 
+                                ? feature.geometry.coordinates[0]
+                                : feature.geometry.coordinates[0][0];
+                            
+                            if (!coords || coords.length < 3) {
+                                hasIssue = true;
+                                issueType = 'error';
+                                details = `Too few coordinates: ${coords?.length || 0}`;
+                            } else {
+                                // Check for invalid coordinate values
+                                const invalidCoords = coords.filter(c => 
+                                    !Array.isArray(c) || 
+                                    c.length !== 2 || 
+                                    typeof c[0] !== 'number' || 
+                                    typeof c[1] !== 'number' ||
+                                    isNaN(c[0]) || 
+                                    isNaN(c[1])
+                                );
+                                
+                                if (invalidCoords.length > 0) {
+                                    hasIssue = true;
+                                    issueType = 'error';
+                                    details = `${invalidCoords.length} invalid coordinate(s)`;
+                                }
+                            }
+                        } catch (e) {
+                            hasIssue = true;
+                            issueType = 'error';
+                            details = `Coordinate parse error: ${e.message}`;
+                        }
+                    }
+                    
+                    const div = document.createElement('div');
+                    div.className = hasIssue ? 'district ' + issueType : 'district';
+                    div.innerHTML = `<strong>${index + 1}. ${dtname}</strong>` +
+                        (hasIssue ? ` - <span style="color: red;">${details}</span>` : ' ✓');
+                    resultsEl.appendChild(div);
+                    
+                    if (hasIssue) {
+                        issues.push({ district: dtname, issue: details });
+                    }
+                });
+                
+                // Summary
+                const summary = document.createElement('div');
+                summary.style.cssText = 'margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 5px;';
+                summary.innerHTML = `
+                    <h3>Summary</h3>
+                    <p>Total features: ${geojson.features.length}</p>
+                    <p>Issues found: ${issues.length}</p>
+                    <h4>All Districts:</h4>
+                    <p>${districts.sort().join(', ')}</p>
+                `;
+                resultsEl.appendChild(summary);
+                
+                if (issues.length === 0) {
+                    statusEl.textContent = '✓ All geometries valid!';
+                    statusEl.style.color = 'green';
+                } else {
+                    statusEl.textContent = `⚠ Found ${issues.length} issue(s)`;
+                    statusEl.style.color = 'red';
+                    console.table(issues);
+                }
+                
+            } catch (error) {
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.style.color = 'red';
+                console.error(error);
+            }
+        }
+        
+        validateDistricts();
+    </script>
+</body>
+</html>

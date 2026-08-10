@@ -19,7 +19,7 @@ export async function GET() {
     
     // Find the Karnataka boundary dataset
     const boundaryDataset = datasets.find(
-      (ds: any) => ds.s3_key === 'india/karnataka/state-boundary/State.kmz'
+      (ds: any) => ds.s3_key === 'Administrative Boundaries/india/karnataka/state-boundary/State.kmz'
     );
     
     if (!boundaryDataset) {

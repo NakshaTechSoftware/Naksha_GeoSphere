@@ -1,0 +1,60 @@
+// Shared fuzzy matching used to resolve a district/taluk display name (as it appears in
+// our GeoJSON properties, e.g. "Kalaburagi") to its MinIO folder name (e.g.
+// "04_Kalaburgi") when the two don't share an exact substring relationship - KGIS data and
+// the older district boundary layer sometimes use slightly different transliterations of
+// the same name.
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  const dp: number[] = new Array(n + 1).fill(0);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    let prevDiag = dp[0]!;
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j]!;
+      dp[j] = a[i - 1] === b[j - 1]
+        ? prevDiag
+        : 1 + Math.min(prevDiag, dp[j]!, dp[j - 1]!);
+      prevDiag = temp;
+    }
+  }
+  return dp[n]!;
+}
+
+// Strips a leading numeric code + separator (e.g. "17_Chikkamagaluru" -> "chikkamagaluru")
+// and normalizes separators/case so folder names can be compared against display names.
+export function cleanFolderName(name: string): string {
+  return name
+    .replace(/^\d+[-_]/, '')
+    .toLowerCase()
+    .replace(/[-_]/g, ' ')
+    .replace(/[()]/g, '')
+    .trim();
+}
+
+// True if `folderName` (already run through cleanFolderName) and `displayName` (a raw
+// district/taluk name) plausibly refer to the same place: exact match, one contains the
+// other, or - as a last resort - they're within a small edit-distance tolerance to absorb
+// minor transliteration differences like "Kalaburagi" vs "Kalaburgi".
+export function namesMatch(cleanFolder: string, displayName: string): boolean {
+  const cleanDisplay = displayName.toLowerCase().replace(/[-_]/g, ' ').trim();
+  if (!cleanFolder || !cleanDisplay) return false;
+
+  if (
+    cleanFolder === cleanDisplay ||
+    cleanFolder.includes(cleanDisplay) ||
+    cleanDisplay.includes(cleanFolder)
+  ) {
+    return true;
+  }
+
+  const maxLen = Math.max(cleanFolder.length, cleanDisplay.length);
+  const similarity = 1 - levenshtein(cleanFolder, cleanDisplay) / maxLen;
+  return similarity >= 0.9;
+}

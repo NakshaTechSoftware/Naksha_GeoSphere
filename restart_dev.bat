@@ -1,0 +1,13 @@
+@echo off
+echo Stopping any running Next.js processes...
+taskkill /F /IM node.exe /T 2>nul
+
+echo.
+echo Starting Next.js development server...
+cd frontend
+start cmd /k "npm run dev"
+
+echo.
+echo Development server is starting...
+echo Press any key to exit this window...
+pause >nul

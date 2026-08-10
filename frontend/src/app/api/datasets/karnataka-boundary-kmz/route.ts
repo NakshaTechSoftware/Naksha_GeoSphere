@@ -8,7 +8,7 @@ const MINIO_ACCESS_KEY = 'geosphere_storage';
 const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
 const S3_REGION = 'geosphere';
 const S3_BUCKET = 'geosphere-source-data';
-const S3_KEY = 'india/karnataka/state-boundary/State.kmz';
+const S3_KEY = 'Administrative Boundaries/india/karnataka/state-boundary/State.kmz';
 
 export async function GET() {
   try {

@@ -109,7 +109,9 @@ export function UserProfile({
               <button
                 onClick={() => {
                   setIsOpen(false);
-                  // Handle logout action
+                  // Full-page navigation clears any in-memory session state and
+                  // sends the user back to the public welcome page.
+                  window.location.href = "/welcome-page";
                 }}
                 className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition-colors"
               >

@@ -1,0 +1,149 @@
+.panel {
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 14px 16px;
+  font-size: 12px;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 260px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--atlas-cobalt);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stageBadge {
+  background: var(--map-light-blue);
+  color: var(--cobalt-active);
+  font-weight: 600;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  letter-spacing: 0.03em;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.buttons button {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-primary);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.buttons button:hover {
+  background: var(--map-light-blue);
+}
+
+.buttons .primary {
+  background: var(--atlas-cobalt);
+  color: #fff;
+  border-color: var(--atlas-cobalt);
+}
+
+.buttons .active {
+  background: var(--atlas-cobalt);
+  color: #fff;
+  border-color: var(--atlas-cobalt);
+}
+
+.rateRow,
+.locationRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  min-width: 52px;
+}
+
+.rateRow button {
+  padding: 3px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 11px;
+}
+
+.rateRow .active,
+.locationRow select {
+  background: var(--atlas-cobalt);
+  color: #fff;
+  border-color: var(--atlas-cobalt);
+}
+
+.locationRow select {
+  border-radius: 7px;
+  padding: 3px 6px;
+  font-size: 11px;
+  flex: 1;
+}
+
+.stageList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.stageList button {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.stageList .stageActive {
+  background: var(--atlas-cobalt);
+  color: #fff;
+  border-color: var(--atlas-cobalt);
+}
+
+.reducedRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.reducedRow input {
+  accent-color: var(--atlas-cobalt);
+}

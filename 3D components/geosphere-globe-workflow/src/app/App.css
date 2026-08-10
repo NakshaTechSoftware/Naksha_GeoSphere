@@ -1,0 +1,86 @@
+@import "../styles/global.css";
+
+.page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #f6f8fb 0%, #eef3fa 100%);
+  padding: 18px 22px 12px;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pageTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--obsidian-graphite);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pageLogo {
+  color: var(--atlas-cobalt);
+  font-size: 16px;
+}
+
+.pageStageLog {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 14px;
+}
+
+.pageMain {
+  flex: 1;
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+/* The hero slot where the component would live on the welcome page. */
+.heroSlot {
+  flex: 1 1 auto;
+  max-width: 860px;
+  height: min(560px, 100%);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  background: var(--map-light-blue);
+  overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+.reviewRail {
+  flex: 0 0 260px;
+}
+
+.pageFooter {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .pageMain {
+    flex-direction: column;
+  }
+  .heroSlot {
+    width: 100%;
+    height: 56vh;
+  }
+  .reviewRail {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+}

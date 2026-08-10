@@ -1,0 +1,26 @@
+/* Shared keyframes used across the workflow component. */
+
+@keyframes gs-caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes gs-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes gs-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@keyframes gs-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gs-anim {
+    animation: none !important;
+  }
+}

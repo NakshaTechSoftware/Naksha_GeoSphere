@@ -1,9 +1,18 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 import type { KeyboardEvent } from "react";
-import { IndiaMapViewer, type IndiaMapViewerHandle, type WardSelection } from "./IndiaMapViewer";
+import {
+  IndiaMapViewer,
+  type IndiaMapViewerHandle,
+  type WardSelection,
+  type BoundaryLayerMode,
+  type AOITool,
+  type AOIResult,
+  type AttributeInfo,
+} from "./IndiaMapViewer";
 import { UserProfile } from "./UserProfile";
+import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
 import {
   ChevronDown,
   ChevronUp,
@@ -13,41 +22,33 @@ import {
   X,
 } from "lucide-react";
 
+const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
+  { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
+  { id: "polygon", label: "Polygon", Icon: PolygonIcon },
+  { id: "rectangle", label: "Rectangle", Icon: RectangleIcon },
+];
+
+// The Boundary Layers group is single-select: exactly one option is active at a time
+// (radio-like behavior, rendered as checkboxes). "administrative" shows every loaded
+// administrative boundary layer; "assembly" and "parliamentary" show the neon-blue
+// india_states geojson plus their loaded constituency boundaries; the gram panchayat
+// option isn't wired to map data yet.
+
+const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
+  { id: "administrative", label: "Administrative Boundaries" },
+  { id: "assembly", label: "Assembly Constituency Boundaries" },
+  { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
+  { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
+];
+
 const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;
 
-// Place suggestions data - organized by categories for better UX
+// Static Bengaluru-specific suggestions (ward/zone drill-down search, e.g.
+// "Bengaluru, Central, Ward Boundary"). State/district/taluk suggestions are built
+// dynamically below from real data instead of being hardcoded here.
 const PLACE_SUGGESTIONS = {
-  regions: [
-    "Bengaluru",
-    "Bangalore", 
-    "Karnataka",
-    "Hyderabad",
-    "Chennai",
-    "Mumbai",
-    "Delhi",
-    "Ahmedabad",
-  ],
-  cities: [
-    "Bengaluru Urban",
-    "Bengaluru Rural", 
-    "Hubli",
-    "Mysore",
-    "Mangalore",
-    "Belagavi",
-    "Davangere",
-    "Shivamogga",
-  ],
-  taluks: [
-    "Central",
-    "East", 
-    "North",
-    "South",
-    "West",
-    "North-East",
-    "North-West",
-    "South-East",
-    "South-West",
-  ],
+  regions: ["Bengaluru", "Bangalore"],
+  bengaluruZones: [...BENGALURU_REGIONS],
   villages: [
     "Banaswadi",
     "Koramangala",
@@ -164,6 +165,61 @@ function highlightMatch(text: string, query: string) {
   );
 }
 
+// Display name for each PLACE_SUGGESTIONS key, since some (like "bengaluruZones") don't
+// read well through a naive capitalize-first-letter.
+const CATEGORY_LABELS: Record<string, string> = {
+  regions: "Regions",
+  bengaluruZones: "Bengaluru Zones",
+  villages: "Villages",
+  wards: "Wards",
+};
+
+// A selectable state/district/taluk, built from real data (see the fetch effect below).
+// `label` is both what's shown in the dropdown and the exact string passed to
+// mapViewerRef.current.search() on selection (e.g. "Karnataka, Hassan"); `leaf` is just the
+// place's own name (e.g. "Hassan"), used to rank prefix matches on the specific place typed
+// above matches that only happen to occur earlier in the full label.
+interface LocationEntry {
+  label: string;
+  leaf: string;
+}
+
+// Filters/ranks LocationEntry[] by a typed query, matching either the full label
+// ("Karnataka, Hassan") or just the leaf name ("Hassan"), and returns plain label strings
+// ready to drop straight into the existing {category, items: string[]} suggestion shape.
+function filterLocationEntries(entries: LocationEntry[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  return entries
+    .filter((e) => e.label.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const aLeafStarts = a.leaf.toLowerCase().startsWith(q);
+      const bLeafStarts = b.leaf.toLowerCase().startsWith(q);
+      if (aLeafStarts !== bLeafStarts) return aLeafStarts ? -1 : 1;
+
+      const aLabelStarts = a.label.toLowerCase().startsWith(q);
+      const bLabelStarts = b.label.toLowerCase().startsWith(q);
+      if (aLabelStarts !== bLabelStarts) return aLabelStarts ? -1 : 1;
+
+      return a.label.localeCompare(b.label);
+    })
+    .slice(0, 6)
+    .map((e) => e.label);
+}
+
+// Formats a geodesic area in km² for the AOI chip: km² (up to 2 decimals), switching to m²
+// for shapes smaller than 0.01 km² (e.g. a drawn building footprint).
+function formatAreaSqKm(areaSqKm: number): string {
+  if (areaSqKm < 0.01) {
+    return `${Math.max(Math.round(areaSqKm * 1_000_000), 1).toLocaleString("en-IN")} m²`;
+  }
+  if (areaSqKm >= 100) {
+    return `${Math.round(areaSqKm).toLocaleString("en-IN")} km²`;
+  }
+  return `${areaSqKm.toLocaleString("en-IN", { maximumFractionDigits: 2 })} km²`;
+}
+
 export function ExplorePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -173,16 +229,116 @@ export function ExplorePage() {
     datasetType: true,
     type: true,
   });
+  // The single active Boundary Layers option ("administrative" by default, so the
+  // india states / districts / taluks / hoblies / villages layers show initially).
+  const [selectedBoundaryLayer, setSelectedBoundaryLayer] = useState<BoundaryLayerMode>("administrative");
   const [searchSuggestions, setSearchSuggestions] = useState<{category: string, items: string[]}[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
+
+  // "Draw AOI" tool dropdown
+  const [showAOIMenu, setShowAOIMenu] = useState(false);
+  const [activeAOITool, setActiveAOITool] = useState<AOITool | null>(null);
+  // The last completed drawn AOI (area + geometry), reported by the map viewer; null until
+  // the user finishes drawing a shape.
+  const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
+  const aoiMenuRef = useRef<HTMLDivElement>(null);
+
+  // Right-click attribute info for the side panel (boundary type + title + rows), reported
+  // by the map viewer; null when no feature is shown.
+  const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+
+  // Real state/district/taluk names, fetched once on mount, that back the dynamic
+  // suggestion categories below (as opposed to the hardcoded Bengaluru ward/zone lists).
+  const [statesList, setStatesList] = useState<string[]>([]);
+  const [districtsList, setDistrictsList] = useState<string[]>([]); // Karnataka only, for now
+  const [taluksList, setTaluksList] = useState<{ district: string; taluk: string }[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/data/india_states.geojson");
+        if (res.ok) {
+          const geo = await res.json();
+          const names = Array.from(
+            new Set(
+              (geo.features as Array<{ properties?: { st_nm?: string } }>)
+                .map((f) => f.properties?.st_nm)
+                .filter((n): n is string => Boolean(n))
+            )
+          ).sort();
+          setStatesList(names);
+        }
+      } catch (error) {
+        console.error("Failed to load state names for search suggestions:", error);
+      }
+    })();
+
+    (async () => {
+      try {
+        const res = await fetch("/api/datasets/state-districts?state=Karnataka");
+        if (res.ok) {
+          const geo = await res.json();
+          const names = Array.from(
+            new Set(
+              (geo.features as Array<{ properties?: { dtname?: string } }>)
+                .map((f) => f.properties?.dtname)
+                .filter((n): n is string => Boolean(n))
+            )
+          ).sort();
+          setDistrictsList(names);
+        }
+      } catch (error) {
+        console.error("Failed to load Karnataka district names for search suggestions:", error);
+      }
+    })();
+
+    (async () => {
+      try {
+        const res = await fetch("/data/karnataka_taluks.json");
+        if (res.ok) {
+          setTaluksList(await res.json());
+        }
+      } catch (error) {
+        console.error("Failed to load Karnataka taluk names for search suggestions:", error);
+      }
+    })();
+  }, []);
+
+  const stateEntries = useMemo<LocationEntry[]>(
+    () => statesList.map((name) => ({ label: name, leaf: name })),
+    [statesList]
+  );
+  const districtEntries = useMemo<LocationEntry[]>(
+    () => districtsList.map((name) => ({ label: `Karnataka, ${name}`, leaf: name })),
+    [districtsList]
+  );
+  const talukEntries = useMemo<LocationEntry[]>(
+    () =>
+      taluksList.map(({ district, taluk }) => ({
+        label: `Karnataka, ${district}, ${taluk}`,
+        leaf: taluk,
+      })),
+    [taluksList]
+  );
 
   // Close the suggestions dropdown when clicking anywhere outside the search bar.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchWrapperRef.current && !searchWrapperRef.current.contains(e.target as Node)) {
         setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Close the "Draw AOI" tool dropdown when clicking anywhere outside it.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (aoiMenuRef.current && !aoiMenuRef.current.contains(e.target as Node)) {
+        setShowAOIMenu(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -198,22 +354,32 @@ export function ExplorePage() {
     }
 
     const suggestions: {category: string, items: string[]}[] = [];
-    
-    // Search across all categories
+
+    // Real state/district/taluk matches take priority over the static Bengaluru lists.
+    const stateMatches = filterLocationEntries(stateEntries, searchQuery);
+    if (stateMatches.length > 0) suggestions.push({ category: "States", items: stateMatches });
+
+    const districtMatches = filterLocationEntries(districtEntries, searchQuery);
+    if (districtMatches.length > 0) suggestions.push({ category: "Districts", items: districtMatches });
+
+    const talukMatches = filterLocationEntries(talukEntries, searchQuery);
+    if (talukMatches.length > 0) suggestions.push({ category: "Taluks", items: talukMatches });
+
+    // Search across the remaining (static, Bengaluru-specific) categories
     Object.keys(PLACE_SUGGESTIONS).forEach(category => {
       const filtered = filterSuggestions(searchQuery, category);
       if (filtered.length > 0) {
         suggestions.push({
-          category: category.charAt(0).toUpperCase() + category.slice(1),
+          category: CATEGORY_LABELS[category] ?? category,
           items: filtered
         });
       }
     });
-    
+
     setSearchSuggestions(suggestions);
     setShowSuggestions(suggestions.length > 0);
     setSelectedSuggestionIndex(-1);
-  }, [searchQuery]);
+  }, [searchQuery, stateEntries, districtEntries, talukEntries]);
 
   // Handle keyboard navigation for suggestions
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -327,6 +493,9 @@ export function ExplorePage() {
           onWardSelected={setSelectedWard}
           onBoundariesCleared={() => setLoadedExtraFiles({})}
           onExtraFileToggled={handleExtraFileToggledFromSearch}
+          onAOIChange={setAoiInfo}
+          onDrawingToolChange={setActiveAOITool}
+          onAttributeInfo={setAttributeInfo}
         />
 
         {/* Floating search bar */}
@@ -444,11 +613,100 @@ export function ExplorePage() {
           <div className="flex-1" />
 
           {/* Draw AOI Button */}
-          <button className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-full shadow-md hover:bg-gray-50 whitespace-nowrap">
-            <MapPin className="h-4 w-4" />
-            Draw AOI
-            <ChevronDown className="h-4 w-4" />
-          </button>
+          <div ref={aoiMenuRef} className="relative">
+            {/* Pill container: a "open menu" button plus, while a tool is active, a separate
+                close button to deselect it - kept as siblings so no button nests inside a
+                button (valid HTML, and clicking the X never toggles the menu). */}
+            <div
+              className={`flex items-center overflow-hidden rounded-full shadow-md border transition-colors ${
+                activeAOITool
+                  ? "bg-atlas-cobalt border-atlas-cobalt"
+                  : "bg-white border-gray-200"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setShowAOIMenu((prev) => !prev)}
+                aria-haspopup="menu"
+                aria-expanded={showAOIMenu}
+                className={`flex items-center gap-2 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
+                  activeAOITool
+                    ? "pl-4 pr-2 text-white hover:bg-atlas-cobalt/90"
+                    : "px-4 text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {activeAOITool ? (
+                  (() => {
+                    const ActiveIcon = AOI_TOOLS.find((t) => t.id === activeAOITool)!.Icon;
+                    return <ActiveIcon className="h-4 w-4" />;
+                  })()
+                ) : (
+                  <DrawAOIIcon className="h-5 w-5" />
+                )}
+                {activeAOITool
+                  ? AOI_TOOLS.find((t) => t.id === activeAOITool)!.label
+                  : "Draw AOI"}
+                {/* Chevron spins 180° clockwise when the menu opens, and smoothly back on close.
+                    Hidden while a tool is active - the close button replaces it. */}
+                {!activeAOITool && (
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
+                      showAOIMenu ? "rotate-180" : ""
+                    }`}
+                  />
+                )}
+              </button>
+
+              {/* Close button: shown instead of the chevron while a tool is selected, so the
+                  tool can be deselected (button reverts to "Draw AOI") without opening the menu. */}
+              {activeAOITool && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveAOITool(null);
+                    setShowAOIMenu(false);
+                    mapViewerRef.current?.setDrawingTool(null);
+                  }}
+                  aria-label={`Deselect ${
+                    AOI_TOOLS.find((t) => t.id === activeAOITool)!.label
+                  }`}
+                  className="flex items-center self-stretch px-2 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            {showAOIMenu && (
+              <div
+                role="menu"
+                // Stretched left-0/right-0 (instead of w-full) so the dropdown, borders
+                // included, is exactly as wide as the button it hangs from
+                className="aoi-menu-in absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
+              >
+                {AOI_TOOLS.map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setActiveAOITool(id);
+                      setShowAOIMenu(false);
+                      mapViewerRef.current?.setDrawingTool(id);
+                    }}
+                    className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
+                      activeAOITool === id
+                        ? "bg-gray-100 text-obsidian-graphite"
+                        : "text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* User Profile Icon */}
           <UserProfile
@@ -456,6 +714,53 @@ export function ExplorePage() {
             userEmail="john.doe@example.com"
           />
         </div>
+
+        {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
+            right side, when the user right-clicks a boundary feature on the map. No height
+            limit: all attribute rows are shown in full. */}
+        {attributeInfo && (
+          <aside className="attr-panel-in absolute top-20 right-4 z-20 w-80 max-h-[calc(100vh-120px)] overflow-y-auto scrollbar-hide rounded-2xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-600">
+                  {attributeInfo.typeLabel}
+                </span>
+                <h3 className="truncate text-sm font-semibold text-slate-900">
+                  {attributeInfo.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAttributeInfo(null);
+                  mapViewerRef.current?.clearAttributeInfo();
+                }}
+                aria-label="Close attribute panel"
+                className="flex-shrink-0 rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <table className="w-full border-collapse text-xs">
+              <tbody>
+                {attributeInfo.rows.map((row, i) => (
+                  <tr key={`${row.label}-${i}`} className="border-b border-slate-100 last:border-b-0">
+                    <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                      {row.label}
+                    </td>
+                    <td
+                      className={`break-words px-3 py-1.5 ${
+                        row.bold ? "font-semibold" : "font-medium"
+                      } text-slate-900`}
+                    >
+                      {row.value}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </aside>
+        )}
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}
         {showFilters && (
@@ -503,13 +808,13 @@ export function ExplorePage() {
               )}
             </div>
 
-            {/* Type Filter: Bengaluru region subfolders */}
+            {/* Boundary Layers Filter */}
             <div className="mb-4 border-b border-gray-200 pb-4">
               <button
                 onClick={() => toggleFilter("type")}
                 className="flex items-center justify-between w-full mb-2 text-sm font-semibold text-obsidian-graphite"
               >
-                Type
+                Boundary Layers
                 {expandedFilters.type ? (
                   <ChevronUp className="h-4 w-4 text-gray-400" />
                 ) : (
@@ -517,51 +822,67 @@ export function ExplorePage() {
                 )}
               </button>
               {expandedFilters.type && (
-                <div className="space-y-1">
-                  {BENGALURU_REGIONS.map((region) => (
-                    <div key={region}>
-                      <button
-                        onClick={() => toggleRegion(region)}
-                        className="flex items-center justify-between w-full py-1 text-sm text-gray-700 hover:text-obsidian-graphite"
-                      >
-                        {region}
-                        {expandedRegions[region] ? (
-                          <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
-                        ) : (
-                          <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
-                        )}
-                      </button>
-                      {expandedRegions[region] && (
-                        <div className="ml-3 space-y-1.5 pb-1">
-                          {bengaluruFileTree === null ? (
-                            <div className="text-xs text-gray-400">Loading files…</div>
-                          ) : (bengaluruFileTree[region] ?? []).length === 0 ? (
-                            <div className="text-xs text-gray-400">No files found</div>
-                          ) : (
-                            (bengaluruFileTree[region] ?? []).map((key) => (
-                              <label
-                                key={key}
-                                className="flex items-center text-xs text-gray-600"
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="mr-2 accent-atlas-cobalt"
-                                  checked={!!loadedExtraFiles[key]}
-                                  onChange={(e) => handleToggleExtraFile(key, e.target.checked)}
-                                />
-                                {filenameFromKey(key)}
-                              </label>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </div>
+                <div className="space-y-2">
+                  {/* Single-select: picking a new option deselects the previous one.
+                      "administrative" shows every loaded boundary layer; "assembly" and
+                      "parliamentary" show the neon-blue india_states geojson plus their
+                      loaded constituency boundaries; "gram panchayat" isn't wired to data
+                      yet (no extra layers). */}
+                  {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
+                    <label key={id} className="flex items-center text-sm text-gray-600">
+                      <input
+                        type="checkbox"
+                        className="mr-2 accent-atlas-cobalt"
+                        checked={selectedBoundaryLayer === id}
+                        onChange={() => {
+                          setSelectedBoundaryLayer(id);
+                          mapViewerRef.current?.setBoundaryLayerMode(id);
+                        }}
+                      />
+                      {label}
+                    </label>
                   ))}
                 </div>
               )}
             </div>
           </div>
         </aside>
+        )}
+
+        {/* Floating chip: shows the completed AOI's area (with a clear button), or - while a
+            drawing tool is armed - a hint for how to use it. */}
+        {(activeAOITool || aoiInfo) && (
+          <div className="absolute bottom-6 left-1/2 z-20 -translate-x-1/2">
+            <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur">
+              {aoiInfo ? (
+                <>
+                  <span className="flex items-center gap-2 text-sm font-medium text-obsidian-graphite">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />
+                    AOI area: {formatAreaSqKm(aoiInfo.areaSqKm)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      mapViewerRef.current?.clearAOI();
+                      setAoiInfo(null);
+                    }}
+                    className="rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                    aria-label="Clear drawn area of interest"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </>
+              ) : (
+                <span className="text-sm text-gray-600">
+                  {activeAOITool === "polygon"
+                    ? "Click to add points · double-click or Enter to finish"
+                    : activeAOITool === "freehand"
+                      ? "Drag on the map to free-draw your area"
+                      : "Drag on the map to draw a rectangle"}
+                </span>
+              )}
+            </div>
+          </div>
         )}
       </main>
     </div>

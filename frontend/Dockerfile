@@ -5,7 +5,18 @@ FROM node:20-alpine AS base
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+COPY scripts/ ./scripts/
+# next@15.5.22 declares peerOptional @playwright/test@^1.51.1 but the lockfile
+# pins 1.49.1 (used only for e2e tests), so strict resolution fails in the
+# clean container build. legacy-peer-deps matches how the local install works.
+RUN npm ci --legacy-peer-deps
+
+# Development target (hot reload; source is bind-mounted by compose.dev.yaml)
+FROM deps AS dev
+WORKDIR /app
+ENV NODE_ENV=development
+EXPOSE 3000
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
 
 # Build the application
 FROM base AS builder
@@ -15,6 +26,11 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_APP_NAME
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_APP_NAME=${NEXT_PUBLIC_APP_NAME}
 
 RUN npm run build
 

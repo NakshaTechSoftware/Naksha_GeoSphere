@@ -53,10 +53,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # gitleaks/gitleaks-action@v2 requires a paid license for
+      # organizations (GITLEAKS_LICENSE secret). Run the official gitleaks
+      # image directly instead — same detection, no license needed.
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+        uses: docker://zricethezav/gitleaks:v8.30.1
+        with:
+          args: detect --source . --no-banner --redact
 
   dependency-scan-frontend:
     name: Dependency scan (frontend)

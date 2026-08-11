@@ -62,8 +62,9 @@ services:
       NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
       WATCHPACK_POLLING: "true"
     volumes:
-      - ./apps/web/src:/workspace/apps/web/src
-      - ./apps/web/public:/workspace/apps/web/public
-      - ./apps/web/next.config.ts:/workspace/apps/web/next.config.ts
-      - ./apps/web/tailwind.config.ts:/workspace/apps/web/tailwind.config.ts
-      - ./apps/web/tsconfig.json:/workspace/apps/web/tsconfig.json
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/next.config.ts:/app/next.config.ts
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/postcss.config.mjs:/app/postcss.config.mjs
+      - ./frontend/tsconfig.json:/app/tsconfig.json

@@ -16,8 +16,13 @@ import { buildAOIPolygon, seedForCity } from "../map/aoiGeometry";
  * and firing onStart/onComplete correctly.
  */
 function driveTimeline(tl: gsap.core.Timeline): void {
-  // Seek to the end: fires all stage onStart callbacks in order and onComplete.
-  tl.progress(1);
+  // Step through in small increments so every sub-timeline's onStart fires in order,
+  // then land exactly on the end to fire onComplete.
+  const step = 0.05;
+  for (let t = step; t < TOTAL_LOOP_DURATION; t += step) {
+    tl.totalTime(t);
+  }
+  tl.totalTime(TOTAL_LOOP_DURATION);
 }
 
 /**

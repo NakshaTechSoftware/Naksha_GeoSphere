@@ -18,11 +18,14 @@ No `setInterval`-driven choreography, no dozens of scattered `setTimeout`s.
 
 ## Stack
 
-React 18 · TypeScript · Vite · **MapLibre GL JS 4.7.1** (single renderer — native globe
+React 18 · TypeScript · Vite · **MapLibre GL JS 6.2.0** (single renderer — native globe
 projection + automatic globe→Mercator transition) · GSAP 3.12 · Turf.js · Lucide React ·
 Vitest · Playwright
 
 ## Run it
+
+> **New to this prototype? Start with [`REQUIREMENTS.md`](./REQUIREMENTS.md)** — it
+> lists the Node version, the exact install/run commands, and troubleshooting.
 
 ```bash
 cd "3D components/geosphere-globe-workflow"
@@ -30,18 +33,19 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**
+Open **http://localhost:5199**
 
 Optional: copy `.env.example` to `.env` and set `VITE_MAP_STYLE_URL` /
-`VITE_MAP_ACCESS_TOKEN` to use a real basemap for the local-map stage. Without them the
-prototype falls back to a local pale-blue grid + simplified real geography (see
-`GEODATA_SOURCES.md`).
+`VITE_MAP_ACCESS_TOKEN` to use a custom basemap. By default the local city stage
+fades in **ESRI World Imagery satellite tiles** (no key required) with a pale-blue
+wash that matches the light theme; if the tile host is unreachable it falls back to
+the pale-blue canvas + simplified real geography (see `GEODATA_SOURCES.md`).
 
 ## Scripts
 
 | Script | Purpose |
 | --- | --- |
-| `npm run dev` | Vite dev server (port 5173) |
+| `npm run dev` | Vite dev server (port 5199) |
 | `npm run build` | Typecheck + production build |
 | `npm run preview` | Serve the production build |
 | `npm run test` | Vitest unit + logic + 30-loop stability |

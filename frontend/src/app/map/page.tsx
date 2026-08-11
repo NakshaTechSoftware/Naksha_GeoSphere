@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import { Map as MapLibreMap, NavigationControl, FullscreenControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { configureMaplibreWorker } from '@/lib/maplibreWorker';
 
 export default function MapPage() {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
+  const map = useRef<MapLibreMap | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
+    configureMaplibreWorker();
     // Initialize map
-    map.current = new maplibregl.Map({
+    map.current = new MapLibreMap({
       container: mapContainer.current,
       style: {
         version: 8,
@@ -38,8 +40,8 @@ export default function MapPage() {
       zoom: 6,
     });
 
-    map.current.addControl(new maplibregl.NavigationControl(), 'top-right');
-    map.current.addControl(new maplibregl.FullscreenControl(), 'top-right');
+    map.current.addControl(new NavigationControl(), 'top-right');
+    map.current.addControl(new FullscreenControl(), 'top-right');
 
     map.current.on('load', async () => {
       setLoading(false);

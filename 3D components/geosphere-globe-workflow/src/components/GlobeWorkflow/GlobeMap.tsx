@@ -1,13 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import maplibregl from "maplibre-gl";
+import { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   GLOBE_STYLE,
+  GLOBE_SKY,
   MAP_PROJECTION,
   envMapStyleUrl,
 } from "../../map/mapConfig";
 import {
   addGlobeSources,
+  addGlobeLayers,
+  addSatelliteLayers,
   SOURCE_IDS,
 } from "../../map/mapSources";
 import {
@@ -20,7 +23,7 @@ import { bindFallbackHandler } from "../../map/fallbackRenderer";
 import type { FeatureCollection, Polygon } from "geojson";
 
 export interface GlobeMapHandle {
-  map: maplibregl.Map | null;
+  map: MapLibreMap | null;
   flyTo: (target: { center: [number, number]; zoom: number; pitch: number; bearing: number }, durationMs?: number) => void;
   easeTo: (target: { center: [number, number]; zoom: number; pitch: number; bearing: number }, durationMs?: number) => void;
   setProjection: (proj: "globe" | "mercator") => void;
@@ -32,11 +35,15 @@ export interface GlobeMapHandle {
   setAOIPartial: (vertices: [number, number][]) => void;
   setAoiFillOpacity: (opacity: number) => void;
   setAoiVisible: (visible: boolean) => void;
+  /** Fits the camera so the given [w,s,e,n] bounds sit comfortably inside the box. */
+  fitAOI: (bounds: [number, number, number, number]) => void;
+  /** Projects a [lng, lat] pair to container-relative pixels (for the drawing cursor). */
+  projectPoint: (lngLat: [number, number]) => { x: number; y: number };
   clearAOI: () => void;
 }
 
 interface Props {
-  onMapReady?: (map: maplibregl.Map) => void;
+  onMapReady?: (map: MapLibreMap) => void;
   className?: string;
 }
 
@@ -51,8 +58,9 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
   const geoDataRef = useRef<{
+    worldLand: FeatureCollection;
     indiaStates: FeatureCollection;
     indiaBoundary: FeatureCollection;
     karnataka: FeatureCollection;
@@ -62,8 +70,7 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
     if (!containerRef.current || mapRef.current) return;
 
     const styleUrl = envMapStyleUrl();
-    const MapClass = maplibregl.Map as unknown as new (opts: Record<string, unknown>) => maplibregl.Map;
-    const map = new MapClass({
+    const map = new MapLibreMap({
       container: containerRef.current,
       style: styleUrl || GLOBE_STYLE,
       center: [72, 20],
@@ -73,13 +80,15 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
       attributionControl: false,
       maxPitch: 60,
     });
-    // Set projection after construction for runtime support (v4 typings omit it).
+    // maplibre v6 renders the globe projection natively (the style also declares it).
     try {
-      (map as unknown as { setProjection: (p: string) => void }).setProjection(MAP_PROJECTION);
-    } catch { /* older version */ }
+      map.setProjection({ type: MAP_PROJECTION });
+    } catch { /* older API path */ }
 
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+    // Dev inspection hook (isolated prototype): lets the review page / tests read the
+    // live camera + style state from window.__globeMap.
+    (window as unknown as { __globeMap?: MapLibreMap }).__globeMap = map;
     bindFallbackHandler(map);
 
     let cancelled = false;
@@ -87,36 +96,40 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
     const bootstrap = async () => {
       // Load the local real geodata (never depends on a remote API during playback).
       try {
-        const [states, boundary, karnataka] = await Promise.all([
+        const [worldLand, states, boundary, karnataka] = await Promise.all([
+          fetch("/geodata/world-land.geojson").then((r) => r.json()),
           fetch("/geodata/india-states.geojson").then((r) => r.json()),
           fetch("/geodata/india-boundary.geojson").then((r) => r.json()),
           fetch("/geodata/karnataka-boundary.geojson").then((r) => r.json()),
         ]);
         if (cancelled) return;
-        geoDataRef.current = { indiaStates: states, indiaBoundary: boundary, karnataka };
+        geoDataRef.current = { worldLand, indiaStates: states, indiaBoundary: boundary, karnataka };
       } catch (e) {
         console.warn("[globe] geodata load failed", e);
         return;
       }
 
       if (!map.getSource(SOURCE_IDS.indiaStates)) {
+        map.addSource(SOURCE_IDS.worldLand, { type: "geojson", data: geoDataRef.current.worldLand });
         map.addSource(SOURCE_IDS.indiaStates, { type: "geojson", data: geoDataRef.current.indiaStates });
         map.addSource(SOURCE_IDS.indiaBoundary, { type: "geojson", data: geoDataRef.current.indiaBoundary });
         map.addSource(SOURCE_IDS.karnataka, { type: "geojson", data: geoDataRef.current.karnataka });
         map.addSource(SOURCE_IDS.aoi, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         addGlobeSources(map);
+        addGlobeLayers(map);
         addGeographyLayers(map);
+        // Satellite basemap for the local city stage (fades in by zoom, above the globe
+        // ocean but below the AOI overlays).
+        addSatelliteLayers(map);
+        // Pale-blue atmosphere glow behind the sphere (v6 setSky API).
+        try {
+          map.setSky({ ...GLOBE_SKY } as never);
+        } catch { /* older version */ }
       }
       onMapReady?.(map);
     };
 
     map.on("load", bootstrap);
-    // If the optional style is missing tiles, keep the local fallback style.
-    map.on("error", () => {
-      if (map.isStyleLoaded() && map.getStyle()?.sources) {
-        // tiles may fail; nothing to swap for the local style
-      }
-    });
 
     return () => {
       cancelled = true;
@@ -157,9 +170,9 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
       const m = mapRef.current;
       if (!m) return;
       try {
-        (m as unknown as { setProjection: (p: string) => void }).setProjection(proj);
+        m.setProjection({ type: proj });
       } catch {
-        // older / typeless API path
+        // older API path
       }
     },
     showIndia: () => {
@@ -244,6 +257,37 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
       setLayerVisibility(m, GEO_LAYER_IDS.aoiFill, false);
       setLayerVisibility(m, GEO_LAYER_IDS.aoiLine, false);
       setLayerVisibility(m, GEO_LAYER_IDS.aoiVertices, false);
+    },
+    fitAOI: (bounds) => {
+      const m = mapRef.current;
+      const box = containerRef.current?.getBoundingClientRect();
+      if (!m) return;
+      const h = box?.height ?? 500;
+      const w = box?.width ?? 700;
+      // Top padding keeps the drawn AOI below the floating "Drawing AOI" toolbar;
+      // scaled to the container so the polygon always fits inside the rounded box.
+      m.fitBounds(
+        [
+          [bounds[0], bounds[1]],
+          [bounds[2], bounds[3]],
+        ],
+        {
+          padding: {
+            top: Math.round(h * 0.34),
+            right: Math.round(w * 0.12),
+            bottom: Math.round(h * 0.14),
+            left: Math.round(w * 0.12),
+          },
+          maxZoom: 15.5,
+          duration: 900,
+          essential: true,
+        }
+      );
+    },
+    projectPoint: (lngLat) => {
+      const m = mapRef.current;
+      const p = m ? m.project(lngLat) : { x: 0, y: 0 };
+      return { x: p.x, y: p.y };
     },
   }));
 

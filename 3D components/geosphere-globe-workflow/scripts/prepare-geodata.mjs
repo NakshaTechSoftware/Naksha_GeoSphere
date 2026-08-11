@@ -4,6 +4,7 @@
 // Run: node scripts/prepare-geodata.mjs
 import fs from "fs";
 import { feature, featureCollection, multiPolygon, union } from "@turf/turf";
+import { feature as topoFeature } from "topojson-client";
 
 // Script lives at <prototype>/scripts/. Source is the real project data (../.. from
 // prototype root -> repo root -> frontend/public/data).
@@ -53,3 +54,23 @@ fs.writeFileSync(
   JSON.stringify(featureCollection([india]))
 );
 console.log("india-boundary written:", india.geometry.type);
+
+// 4) World land (all continents) from Natural Earth 110m, packaged by the public-domain
+//    world-atlas npm package as TopoJSON. Converted to GeoJSON so the globe shows real
+//    continents from the first frame (no external API at runtime).
+const worldTopo = JSON.parse(
+  fs.readFileSync(
+    new URL("../node_modules/world-atlas/countries-110m.json", import.meta.url),
+    "utf8"
+  )
+);
+const worldLand = topoFeature(worldTopo, worldTopo.objects.countries);
+fs.writeFileSync(
+  new URL("world-land.geojson", OUT),
+  JSON.stringify(worldLand)
+);
+console.log(
+  "world-land written:",
+  worldLand.features.length,
+  "country polygons (Natural Earth 110m)"
+);

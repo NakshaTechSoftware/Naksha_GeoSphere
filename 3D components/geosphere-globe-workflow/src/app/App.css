@@ -48,14 +48,14 @@
   min-height: 0;
 }
 
-/* The hero slot where the component would live on the welcome page. */
+/* The hero slot where the component would live on the welcome page.
+   Transparent box with rounded corners - the globe + texts float on the page,
+   clipped softly to the rounded shape. */
 .heroSlot {
   flex: 1 1 auto;
   max-width: 860px;
   height: min(560px, 100%);
-  border-radius: 20px;
-  box-shadow: var(--shadow);
-  background: var(--map-light-blue);
+  border-radius: 24px;
   overflow: hidden;
   position: relative;
   isolation: isolate;

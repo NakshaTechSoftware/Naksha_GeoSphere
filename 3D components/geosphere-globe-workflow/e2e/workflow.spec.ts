@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-const BASE_URL = "http://localhost:5173";
+const BASE_URL = "http://localhost:5199";
 
 test.describe("geosphere-globe-workflow e2e", () => {
   let page: Page;
@@ -35,19 +35,23 @@ test.describe("geosphere-globe-workflow e2e", () => {
   test("travels through the full workflow to delivery and resets for a second loop", async () => {
     const stage = page.locator('[data-testid="globe-workflow"]');
     const seen: string[] = [];
+    // The recorder runs inside EVERY poll so the stage log stays current.
+    const record = (s: string | null): void => {
+      if (s && seen[seen.length - 1] !== s) seen.push(s);
+    };
 
+    // Record through the first full loop until RESET is observed (one loop is ~32s).
     await expect
       .poll(
         async () => {
-          const s = await stage.getAttribute("data-workflow-stage");
-          if (s && seen[seen.length - 1] !== s) seen.push(s);
-          return s;
+          record(await stage.getAttribute("data-workflow-stage"));
+          return seen.includes("RESET");
         },
-        { timeout: 45_000, intervals: [500] }
+        { timeout: 60_000, intervals: [250] }
       )
-      .toMatch(/RESET|BOOT/);
+      .toBe(true);
 
-    // Give the whole loop time to advance through the major milestones.
+    // Every major milestone must have appeared before the first RESET.
     const milestones = [
       "GLOBE_INTRO",
       "ROTATE_TO_INDIA",
@@ -60,19 +64,17 @@ test.describe("geosphere-globe-workflow e2e", () => {
       "RESET",
     ];
     for (const m of milestones) {
-      await expect
-        .poll(
-          () => seen.includes(m),
-          { timeout: 45_000, intervals: [250] }
-        )
-        .toBe(true);
+      expect(seen).toContain(m);
     }
 
     // Second loop begins (BOOT reached again after the first RESET).
     await expect
       .poll(
-        () => seen.filter((s) => s === "BOOT").length >= 2,
-        { timeout: 45_000, intervals: [250] }
+        async () => {
+          record(await stage.getAttribute("data-workflow-stage"));
+          return seen.filter((s) => s === "BOOT").length >= 2;
+        },
+        { timeout: 60_000, intervals: [250] }
       )
       .toBe(true);
   });

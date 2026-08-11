@@ -1,5 +1,22 @@
 import "@testing-library/jest-dom";
 
+// jsdom does not implement matchMedia; the components use it for prefers-reduced-motion.
+if (typeof window !== "undefined" && !window.matchMedia) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 // GSAP in jsdom: drive the ticker manually so tests can flush timelines deterministically.
 import { gsap } from "gsap";
 

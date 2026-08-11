@@ -108,7 +108,7 @@
     color: var(--color-obsidian-graphite);
     letter-spacing: -0.045em;
     line-height: 0.98;
-    font-size: clamp(3rem, 4.2vw, 4.5rem);
+    font-size: clamp(2.8125rem, calc(4.2vw - 3px), 4.3125rem);
   }
 
   .hero-title-line {
@@ -123,7 +123,7 @@
   /* Responsive sizing for mobile */
   @media (max-width: 768px) {
     .hero-title {
-      font-size: clamp(2.35rem, 11vw, 3.25rem);
+      font-size: clamp(2.1625rem, calc(11vw - 3px), 3.0625rem);
     }
   }
 

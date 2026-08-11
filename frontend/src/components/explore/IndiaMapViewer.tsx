@@ -546,11 +546,36 @@ export interface ParcelLandRecordKey {
   hissa: string;
 }
 
+// The five admin-hierarchy levels the Explore page's bulk export can walk. Assembly/
+// Parliamentary constituencies and cadastral parcels are separate hierarchies (or leaves) -
+// they only ever get the single-feature export, never the hierarchy checklist.
+export type AdminLevel = "state" | "district" | "taluk" | "hobli" | "village";
+
+// The clicked feature's place in the admin hierarchy, reported alongside AttributeInfo so
+// the Export dialog knows which levels it can offer (the clicked level plus everything
+// below it) and has the ancestor names it needs to fetch them. Ancestor names come from
+// whatever the user last drilled into (see selectedStateNameRef & co.) - reliable because
+// each drill-down layer only ever holds the children of one single parent at a time.
+export interface AttributeHierarchy {
+  level: AdminLevel;
+  state?: string;
+  district?: string;
+  taluk?: string;
+  hobli?: string;
+}
+
 export interface AttributeInfo {
   typeLabel: string;
   title: string;
   rows: AttributeRow[];
   parcel?: ParcelLandRecordKey;
+  /** The clicked feature's raw geometry + properties, kept alongside the display-formatted
+   * `rows` so the caller's Export action can send full-fidelity GeoJSON to the export API
+   * instead of the humanized/stringified row values. Undefined only if the feature had no
+   * geometry (shouldn't happen for boundary/cadastral layers, but keep the panel usable). */
+  geometry?: GeoJSON.Geometry;
+  properties?: Record<string, unknown>;
+  hierarchy?: AttributeHierarchy;
 }
 
 // Live state of an in-progress drawing. `points` holds [lng, lat] positions: the freehand
@@ -799,6 +824,17 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   GP_DISTRICTS_FILL_LAYER_ID,
   "states-fill-default",
 ];
+
+// Maps a right-clickable layer id to its place in the admin hierarchy - only the five
+// drill-down levels are listed (constituency/cadastral layers have no entry, so the export
+// dialog's hierarchy checklist never shows for them).
+const ATTRIBUTE_POPUP_ADMIN_LEVEL: Record<string, AdminLevel> = {
+  "states-fill-default": "state",
+  [STATE_DISTRICTS_FILL_LAYER_ID]: "district",
+  [DISTRICT_TALUKS_FILL_LAYER_ID]: "taluk",
+  [TALUK_HOBLIES_FILL_LAYER_ID]: "hobli",
+  [HOBLI_VILLAGES_FILL_LAYER_ID]: "village",
+};
 
 // Friendly boundary-type names for the popup's badge, keyed by layer id.
 const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
@@ -3484,8 +3520,37 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 : undefined
               : undefined;
 
+          // Ancestor names for the bulk-export hierarchy walk. Each drill-down layer only
+          // ever holds the children of one currently-selected parent, so whichever ancestor
+          // refs are set are reliably this feature's own ancestors - except at the feature's
+          // own level, where its own name (`title`) is used instead of the (possibly stale,
+          // possibly unset) selection ref for that same level.
+          const adminLevel = ATTRIBUTE_POPUP_ADMIN_LEVEL[layerId];
+          const hierarchy: AttributeInfo["hierarchy"] = adminLevel
+            ? {
+                level: adminLevel,
+                state: adminLevel === "state" ? title : (selectedStateNameRef.current ?? undefined),
+                district:
+                  adminLevel === "district"
+                    ? title
+                    : (selectedDistrictNameRef.current ?? undefined),
+                taluk:
+                  adminLevel === "taluk" ? title : (selectedTalukNameRef.current ?? undefined),
+                hobli:
+                  adminLevel === "hobli" ? title : (selectedHobliNameRef.current ?? undefined),
+              }
+            : undefined;
+
           attributeInfoOpenRef.current = true;
-          onAttributeInfoRef.current?.({ typeLabel, title, rows, parcel });
+          onAttributeInfoRef.current?.({
+            typeLabel,
+            title,
+            rows,
+            parcel,
+            geometry: feature.geometry,
+            properties: props,
+            hierarchy,
+          });
         });
 
         // Distance scale bar

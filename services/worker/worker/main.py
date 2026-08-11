@@ -19,7 +19,12 @@ app = Celery(
     "naksha_geosphere_worker",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["worker.tasks.system", "worker.tasks.geospatial", "worker.tasks.notifications"],
+    include=[
+        "worker.tasks.system",
+        "worker.tasks.geospatial",
+        "worker.tasks.notifications",
+        "worker.tasks.export",
+    ],
 )
 
 # --- Queues -----------------------------------------------------------
@@ -39,6 +44,7 @@ app.conf.task_routes = {
     "system.*": {"queue": "default"},
     "geospatial.*": {"queue": "default"},
     "notifications.*": {"queue": "notifications"},
+    "export.*": {"queue": "vector"},
 }
 
 # --- Reliability --------------------------------------------------------

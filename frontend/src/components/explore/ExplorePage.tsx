@@ -15,14 +15,7 @@ import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import {
-  ChevronDown,
-  ChevronUp,
-  MapPin,
-  Search,
-  Menu,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -41,6 +34,7 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "assembly", label: "Assembly Constituency Boundaries" },
   { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
   { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
+  { id: "police_station", label: "Police Station Boundaries" },
   { id: "civic_amenities", label: "Civic Amenities" },
 ];
 
@@ -140,16 +134,18 @@ function filterSuggestions(query: string, category: string) {
   if (!searchTerm) return [];
 
   const allItems = PLACE_SUGGESTIONS[category as keyof typeof PLACE_SUGGESTIONS] || [];
-  return allItems
-    .filter(item => item.toLowerCase().includes(searchTerm))
-    // Prefix matches ("Ban..." -> "Banaswadi") rank above mid-word matches ("...swadi").
-    .sort((a, b) => {
-      const aStarts = a.toLowerCase().startsWith(searchTerm);
-      const bStarts = b.toLowerCase().startsWith(searchTerm);
-      if (aStarts === bStarts) return a.localeCompare(b);
-      return aStarts ? -1 : 1;
-    })
-    .slice(0, 6); // Limit to top 6 suggestions per category
+  return (
+    allItems
+      .filter((item) => item.toLowerCase().includes(searchTerm))
+      // Prefix matches ("Ban..." -> "Banaswadi") rank above mid-word matches ("...swadi").
+      .sort((a, b) => {
+        const aStarts = a.toLowerCase().startsWith(searchTerm);
+        const bStarts = b.toLowerCase().startsWith(searchTerm);
+        if (aStarts === bStarts) return a.localeCompare(b);
+        return aStarts ? -1 : 1;
+      })
+      .slice(0, 6)
+  ); // Limit to top 6 suggestions per category
 }
 
 // Wraps the portion of `text` that matches `query` in <mark> for visual emphasis.
@@ -234,8 +230,11 @@ export function ExplorePage() {
   });
   // The single active Boundary Layers option ("administrative" by default, so the
   // india states / districts / taluks / hoblies / villages layers show initially).
-  const [selectedBoundaryLayer, setSelectedBoundaryLayer] = useState<BoundaryLayerMode>("administrative");
-  const [searchSuggestions, setSearchSuggestions] = useState<{category: string, items: string[]}[]>([]);
+  const [selectedBoundaryLayer, setSelectedBoundaryLayer] =
+    useState<BoundaryLayerMode>("administrative");
+  const [searchSuggestions, setSearchSuggestions] = useState<
+    { category: string; items: string[] }[]
+  >([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
@@ -261,7 +260,9 @@ export function ExplorePage() {
   // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
   // slow, multi-step lookup against the state portal, hence the explicit loading state.
   const [owners, setOwners] = useState<
-    { status: "loading" } | { status: "error"; message: string } | { status: "ok"; rows: RtcOwner[] }
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] }
   >({ status: "loading" });
 
   const parcel = attributeInfo?.parcel;
@@ -273,7 +274,7 @@ export function ExplorePage() {
       try {
         const res = await fetch(
           `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
-          { signal: controller.signal }
+          { signal: controller.signal },
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
@@ -314,8 +315,8 @@ export function ExplorePage() {
             new Set(
               (geo.features as Array<{ properties?: { st_nm?: string } }>)
                 .map((f) => f.properties?.st_nm)
-                .filter((n): n is string => Boolean(n))
-            )
+                .filter((n): n is string => Boolean(n)),
+            ),
           ).sort();
           setStatesList(names);
         }
@@ -333,8 +334,8 @@ export function ExplorePage() {
             new Set(
               (geo.features as Array<{ properties?: { dtname?: string } }>)
                 .map((f) => f.properties?.dtname)
-                .filter((n): n is string => Boolean(n))
-            )
+                .filter((n): n is string => Boolean(n)),
+            ),
           ).sort();
           setDistrictsList(names);
         }
@@ -357,11 +358,11 @@ export function ExplorePage() {
 
   const stateEntries = useMemo<LocationEntry[]>(
     () => statesList.map((name) => ({ label: name, leaf: name })),
-    [statesList]
+    [statesList],
   );
   const districtEntries = useMemo<LocationEntry[]>(
     () => districtsList.map((name) => ({ label: `Karnataka, ${name}`, leaf: name })),
-    [districtsList]
+    [districtsList],
   );
   const talukEntries = useMemo<LocationEntry[]>(
     () =>
@@ -369,7 +370,7 @@ export function ExplorePage() {
         label: `Karnataka, ${district}, ${taluk}`,
         leaf: taluk,
       })),
-    [taluksList]
+    [taluksList],
   );
 
   // Close the suggestions dropdown when clicking anywhere outside the search bar.
@@ -402,25 +403,26 @@ export function ExplorePage() {
       return;
     }
 
-    const suggestions: {category: string, items: string[]}[] = [];
+    const suggestions: { category: string; items: string[] }[] = [];
 
     // Real state/district/taluk matches take priority over the static Bengaluru lists.
     const stateMatches = filterLocationEntries(stateEntries, searchQuery);
     if (stateMatches.length > 0) suggestions.push({ category: "States", items: stateMatches });
 
     const districtMatches = filterLocationEntries(districtEntries, searchQuery);
-    if (districtMatches.length > 0) suggestions.push({ category: "Districts", items: districtMatches });
+    if (districtMatches.length > 0)
+      suggestions.push({ category: "Districts", items: districtMatches });
 
     const talukMatches = filterLocationEntries(talukEntries, searchQuery);
     if (talukMatches.length > 0) suggestions.push({ category: "Taluks", items: talukMatches });
 
     // Search across the remaining (static, Bengaluru-specific) categories
-    Object.keys(PLACE_SUGGESTIONS).forEach(category => {
+    Object.keys(PLACE_SUGGESTIONS).forEach((category) => {
       const filtered = filterSuggestions(searchQuery, category);
       if (filtered.length > 0) {
         suggestions.push({
           category: CATEGORY_LABELS[category] ?? category,
-          items: filtered
+          items: filtered,
         });
       }
     });
@@ -433,19 +435,17 @@ export function ExplorePage() {
   // Handle keyboard navigation for suggestions
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!showSuggestions) return;
-    
+
     switch (e.key) {
-      case 'ArrowDown':
+      case "ArrowDown":
         e.preventDefault();
-        setSelectedSuggestionIndex(prev => 
-          Math.min(prev + 1, getTotalSuggestions() - 1)
-        );
+        setSelectedSuggestionIndex((prev) => Math.min(prev + 1, getTotalSuggestions() - 1));
         break;
-      case 'ArrowUp':
+      case "ArrowUp":
         e.preventDefault();
-        setSelectedSuggestionIndex(prev => Math.max(prev - 1, -1));
+        setSelectedSuggestionIndex((prev) => Math.max(prev - 1, -1));
         break;
-      case 'Enter':
+      case "Enter":
         e.preventDefault();
         if (selectedSuggestionIndex >= 0) {
           const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
@@ -456,14 +456,15 @@ export function ExplorePage() {
           }
         }
         break;
-      case 'Escape':
+      case "Escape":
         setShowSuggestions(false);
         setSelectedSuggestionIndex(-1);
         break;
     }
   };
 
-  const getTotalSuggestions = () => searchSuggestions.reduce((total, cat) => total + cat.items.length, 0);
+  const getTotalSuggestions = () =>
+    searchSuggestions.reduce((total, cat) => total + cat.items.length, 0);
 
   const getSuggestionByIndex = (index: number) => {
     let currentIndex = 0;
@@ -494,7 +495,7 @@ export function ExplorePage() {
   const [loadedExtraFiles, setLoadedExtraFiles] = useState<Record<string, boolean>>({});
 
   const toggleFilter = (filter: keyof typeof expandedFilters) => {
-    setExpandedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
+    setExpandedFilters((prev) => ({ ...prev, [filter]: !prev[filter] }));
   };
 
   const toggleRegion = async (region: string) => {
@@ -513,7 +514,11 @@ export function ExplorePage() {
   };
 
   const filenameFromKey = (key: string) =>
-    key.split("/").pop()?.replace(/\.kmz$/i, "").replace(/_/g, " ") ?? key;
+    key
+      .split("/")
+      .pop()
+      ?.replace(/\.kmz$/i, "")
+      .replace(/_/g, " ") ?? key;
 
   const regionFromKey = (key: string) => key.match(/Bengaluru\/([^/]+)\//i)?.[1];
 
@@ -533,10 +538,9 @@ export function ExplorePage() {
   };
 
   return (
-    <div className="flex h-screen flex-col bg-gray-100 overflow-hidden">
-
+    <div className="flex h-screen flex-col overflow-hidden bg-gray-100">
       {/* Main Content - map fills the full page, everything else floats on top */}
-      <main className="flex-1 relative min-h-0 overflow-hidden">
+      <main className="relative min-h-0 flex-1 overflow-hidden">
         <IndiaMapViewer
           ref={mapViewerRef}
           onWardSelected={setSelectedWard}
@@ -548,14 +552,16 @@ export function ExplorePage() {
         />
 
         {/* Floating search bar */}
-        <div className="absolute top-4 left-4 right-4 z-20 flex items-center gap-3">
+        <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
           {/* Search Bar */}
-          <div ref={searchWrapperRef} className="relative flex-1 max-w-md">
-            <div className="flex items-center gap-1 bg-white rounded-full shadow-md pl-1 pr-2 py-1">
+          <div ref={searchWrapperRef} className="relative max-w-md flex-1">
+            <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 shadow-md">
               <button
                 onClick={() => setShowFilters((prev) => !prev)}
-                className={`flex-shrink-0 p-2 rounded-full transition-colors ${
-                  showFilters ? "bg-gray-100 text-obsidian-graphite" : "text-gray-500 hover:bg-gray-100"
+                className={`flex-shrink-0 rounded-full p-2 transition-colors ${
+                  showFilters
+                    ? "bg-gray-100 text-obsidian-graphite"
+                    : "text-gray-500 hover:bg-gray-100"
                 }`}
                 aria-label="Toggle filters"
                 aria-pressed={showFilters}
@@ -583,18 +589,20 @@ export function ExplorePage() {
                     handleKeyDown(e);
                   }
                 }}
-                onFocus={() => searchQuery && searchSuggestions.length > 0 && setShowSuggestions(true)}
+                onFocus={() =>
+                  searchQuery && searchSuggestions.length > 0 && setShowSuggestions(true)
+                }
                 placeholder="Search location, village, taluk, district..."
                 role="combobox"
                 aria-expanded={showSuggestions}
                 aria-autocomplete="list"
                 aria-controls="search-suggestions-listbox"
-                className="flex-1 min-w-0 py-1 text-sm bg-transparent focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent py-1 text-sm focus:outline-none"
               />
               {searchQuery && (
                 <button
                   onClick={clearSearch}
-                  className="flex-shrink-0 p-2 rounded-full text-gray-500 hover:bg-gray-100"
+                  className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
                   aria-label="Clear search"
                 >
                   <X className="h-4 w-4" />
@@ -605,7 +613,7 @@ export function ExplorePage() {
                   setShowSuggestions(false);
                   mapViewerRef.current?.search(searchQuery);
                 }}
-                className="flex-shrink-0 p-2 rounded-full text-gray-500 hover:bg-gray-100"
+                className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
                 aria-label="Search"
               >
                 <Search className="h-4 w-4" />
@@ -625,7 +633,7 @@ export function ExplorePage() {
                     .reduce((sum, c) => sum + c.items.length, 0);
                   return (
                     <div key={cat.category}>
-                      <div className="px-4 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                      <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
                         {cat.category}
                       </div>
                       {cat.items.map((item, i) => {
@@ -634,7 +642,7 @@ export function ExplorePage() {
                         return (
                           <button
                             type="button"
-                            key={`${cat.category}-${item}`}
+                            key={`${cat.category}-${item}-${i}`}
                             role="option"
                             aria-selected={isActive}
                             // Prevents the input's blur (and its click-outside-triggered
@@ -643,7 +651,9 @@ export function ExplorePage() {
                             onClick={() => handleSuggestionClick(item)}
                             onMouseEnter={() => setSelectedSuggestionIndex(idx)}
                             className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
-                              isActive ? "bg-gray-100 text-obsidian-graphite" : "text-gray-700 hover:bg-gray-50"
+                              isActive
+                                ? "bg-gray-100 text-obsidian-graphite"
+                                : "text-gray-700 hover:bg-gray-50"
                             }`}
                           >
                             <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
@@ -667,10 +677,8 @@ export function ExplorePage() {
                 close button to deselect it - kept as siblings so no button nests inside a
                 button (valid HTML, and clicking the X never toggles the menu). */}
             <div
-              className={`flex items-center overflow-hidden rounded-full shadow-md border transition-colors ${
-                activeAOITool
-                  ? "bg-atlas-cobalt border-atlas-cobalt"
-                  : "bg-white border-gray-200"
+              className={`flex items-center overflow-hidden rounded-full border shadow-md transition-colors ${
+                activeAOITool ? "border-atlas-cobalt bg-atlas-cobalt" : "border-gray-200 bg-white"
               }`}
             >
               <button
@@ -678,9 +686,9 @@ export function ExplorePage() {
                 onClick={() => setShowAOIMenu((prev) => !prev)}
                 aria-haspopup="menu"
                 aria-expanded={showAOIMenu}
-                className={`flex items-center gap-2 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
+                className={`flex items-center gap-2 whitespace-nowrap py-2.5 text-sm font-medium transition-colors ${
                   activeAOITool
-                    ? "pl-4 pr-2 text-white hover:bg-atlas-cobalt/90"
+                    ? "hover:bg-atlas-cobalt/90 pl-4 pr-2 text-white"
                     : "px-4 text-gray-700 hover:bg-gray-50"
                 }`}
               >
@@ -692,9 +700,7 @@ export function ExplorePage() {
                 ) : (
                   <DrawAOIIcon className="h-5 w-5" />
                 )}
-                {activeAOITool
-                  ? AOI_TOOLS.find((t) => t.id === activeAOITool)!.label
-                  : "Draw AOI"}
+                {activeAOITool ? AOI_TOOLS.find((t) => t.id === activeAOITool)!.label : "Draw AOI"}
                 {/* Chevron spins 180° clockwise when the menu opens, and smoothly back on close.
                     Hidden while a tool is active - the close button replaces it. */}
                 {!activeAOITool && (
@@ -716,9 +722,7 @@ export function ExplorePage() {
                     setShowAOIMenu(false);
                     mapViewerRef.current?.setDrawingTool(null);
                   }}
-                  aria-label={`Deselect ${
-                    AOI_TOOLS.find((t) => t.id === activeAOITool)!.label
-                  }`}
+                  aria-label={`Deselect ${AOI_TOOLS.find((t) => t.id === activeAOITool)!.label}`}
                   className="flex items-center self-stretch px-2 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   <X className="h-4 w-4" />
@@ -758,23 +762,16 @@ export function ExplorePage() {
           </div>
 
           {/* User Profile Icon */}
-          <UserProfile
-            userName="John Doe"
-            userEmail="john.doe@example.com"
-            // Opening the profile menu replaces the attribute info panel, so close it.
-            onMenuToggle={(open) => {
-              if (open) setAttributeInfo(null);
-            }}
-          />
+          <UserProfile userName="John Doe" userEmail="john.doe@example.com" />
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
             right side, when the user right-clicks a boundary feature on the map. No height
             limit: all attribute rows are shown in full. */}
         {attributeInfo && (
-          <aside className="attr-panel-in absolute top-20 right-4 z-20 w-80 max-h-[calc(100vh-120px)] overflow-y-auto scrollbar-hide rounded-2xl border border-gray-200 bg-white shadow-xl">
+          <aside className="attr-panel-in scrollbar-hide absolute right-4 top-20 z-20 max-h-[calc(100vh-120px)] w-80 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl">
             <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
                 <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-600">
                   {attributeInfo.typeLabel}
                 </span>
@@ -835,6 +832,11 @@ export function ExplorePage() {
                           </td>
                           <td className="break-words px-3 py-1.5 font-semibold text-slate-900">
                             {owner.name}
+                            {owner.hissa && (
+                              <span className="ml-1 font-normal text-slate-500">
+                                [Hissa {owner.hissa}]
+                              </span>
+                            )}
                             {owner.extent && (
                               <span className="ml-1 font-normal text-slate-500">
                                 ({owner.extent}
@@ -847,7 +849,10 @@ export function ExplorePage() {
                   </>
                 )}
                 {attributeInfo.rows.map((row, i) => (
-                  <tr key={`${row.label}-${i}`} className="border-b border-slate-100 last:border-b-0">
+                  <tr
+                    key={`${row.label}-${i}`}
+                    className="border-b border-slate-100 last:border-b-0"
+                  >
                     <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
                       {row.label}
                     </td>
@@ -886,89 +891,87 @@ export function ExplorePage() {
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}
         {showFilters && (
-        <aside className="absolute top-20 left-4 z-10 w-64 max-h-[calc(100vh-200px)] flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-lg overflow-y-auto scrollbar-hide">
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
-              <button className="text-sm text-atlas-cobalt hover:underline">
-                Reset all
-              </button>
-            </div>
+          <aside className="scrollbar-hide absolute left-4 top-20 z-10 max-h-[calc(100vh-200px)] w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+            <div className="p-4">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
+                <button className="text-sm text-atlas-cobalt hover:underline">Reset all</button>
+              </div>
 
-            {/* Dataset Type Filter */}
-            <div className="mb-4 border-b border-gray-200 pb-4">
-              <button
-                onClick={() => toggleFilter("datasetType")}
-                className="flex items-center justify-between w-full mb-2 text-sm font-semibold text-obsidian-graphite"
-              >
-                Dataset Type
-                {expandedFilters.datasetType ? (
-                  <ChevronUp className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-gray-400" />
+              {/* Dataset Type Filter */}
+              <div className="mb-4 border-b border-gray-200 pb-4">
+                <button
+                  onClick={() => toggleFilter("datasetType")}
+                  className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-obsidian-graphite"
+                >
+                  Dataset Type
+                  {expandedFilters.datasetType ? (
+                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                  )}
+                </button>
+                {expandedFilters.datasetType && (
+                  <div className="space-y-2">
+                    <label className="flex items-center text-sm text-gray-600">
+                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
+                      DEM / DSM
+                    </label>
+                    <label className="flex items-center text-sm text-gray-600">
+                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" defaultChecked />
+                      Ortho Rectified Image
+                    </label>
+                    <label className="flex items-center text-sm text-gray-600">
+                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
+                      Point Cloud Data
+                    </label>
+                    <label className="flex items-center text-sm text-gray-600">
+                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
+                      Vector Data
+                    </label>
+                  </div>
                 )}
-              </button>
-              {expandedFilters.datasetType && (
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                    DEM / DSM
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" defaultChecked />
-                    Ortho Rectified Image
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                    Point Cloud Data
-                  </label>
-                  <label className="flex items-center text-sm text-gray-600">
-                    <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                    Vector Data
-                  </label>
-                </div>
-              )}
-            </div>
+              </div>
 
-            {/* Boundary Layers Filter */}
-            <div className="mb-4 border-b border-gray-200 pb-4">
-              <button
-                onClick={() => toggleFilter("type")}
-                className="flex items-center justify-between w-full mb-2 text-sm font-semibold text-obsidian-graphite"
-              >
-                Boundary Layers
-                {expandedFilters.type ? (
-                  <ChevronUp className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-gray-400" />
-                )}
-              </button>
-              {expandedFilters.type && (
-                <div className="space-y-2">
-                  {/* Single-select: picking a new option deselects the previous one.
+              {/* Boundary Layers Filter */}
+              <div className="mb-4 border-b border-gray-200 pb-4">
+                <button
+                  onClick={() => toggleFilter("type")}
+                  className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-obsidian-graphite"
+                >
+                  Boundary Layers
+                  {expandedFilters.type ? (
+                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                  )}
+                </button>
+                {expandedFilters.type && (
+                  <div className="space-y-2">
+                    {/* Single-select: picking a new option deselects the previous one.
                       "administrative" shows every loaded boundary layer; "assembly" and
                       "parliamentary" show the neon-blue india_states geojson plus their
-                      loaded constituency boundaries; "gram panchayat" shows the states
-                      too (panchayat boundaries not wired to data yet). */}
-                  {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
-                    <label key={id} className="flex items-center text-sm text-gray-600">
-                      <input
-                        type="checkbox"
-                        className="mr-2 accent-atlas-cobalt"
-                        checked={selectedBoundaryLayer === id}
-                        onChange={() => {
-                          setSelectedBoundaryLayer(id);
-                          mapViewerRef.current?.setBoundaryLayerMode(id);
-                        }}
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              )}
+                      loaded constituency boundaries; "gram panchayat" isn't wired to data
+                      yet (no extra layers). */}
+                    {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
+                      <label key={id} className="flex items-center text-sm text-gray-600">
+                        <input
+                          type="checkbox"
+                          className="mr-2 accent-atlas-cobalt"
+                          checked={selectedBoundaryLayer === id}
+                          onChange={() => {
+                            setSelectedBoundaryLayer(id);
+                            mapViewerRef.current?.setBoundaryLayerMode(id);
+                          }}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </aside>
+          </aside>
         )}
 
         {/* Floating chip: shows the completed AOI's area (with a clear button), or - while a

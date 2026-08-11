@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Layers } from "lucide-react";
+import { TerrainLegend } from "./TerrainLegend";
 
 export type MapLayer = "default" | "satellite" | "terrain";
 
@@ -47,7 +48,8 @@ export function LayersControl({
 
   return (
     <div className={`absolute bottom-6 left-6 z-10 ${className}`}>
-      {isExpanded ? (
+      <div className="flex items-end gap-3 max-sm:flex-col-reverse max-sm:items-start">
+        {isExpanded ? (
         // Expanded view - horizontal row of small square cards (Google Maps style)
         <div className="flex flex-row gap-2">
           {layers.map((layer) => {
@@ -119,7 +121,7 @@ export function LayersControl({
             );
           })}
         </div>
-      ) : (
+        ) : (
         // Collapsed view - Small square button showing current layer preview
         <button
           onClick={() => setIsExpanded(true)}
@@ -154,7 +156,9 @@ export function LayersControl({
             </p>
           </div>
         </button>
-      )}
+        )}
+        {currentLayer === "terrain" && <TerrainLegend />}
+      </div>
     </div>
   );
 }

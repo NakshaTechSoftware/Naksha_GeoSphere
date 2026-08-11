@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
 import { LayersControl, type MapLayer } from "./LayersControl";
 import * as turf from "@turf/turf";
 
@@ -317,6 +318,9 @@ export function InteractiveMap({
     if (!mapRef.current) return;
     
     const map = mapRef.current;
+
+    // Detach terrain before its source/layers are removed during a basemap switch.
+    removeIndiaTerrain(map);
     
     // Get the current style layers to preserve custom layers
     const currentLayers = map.getStyle().layers;
@@ -402,22 +406,9 @@ export function InteractiveMap({
         break;
 
       case "terrain":
-        map.addSource("terrain-tiles", {
-          type: "raster",
-          tiles: [
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",
-          ],
-          tileSize: 256,
-          attribution: "Esri, USGS, NOAA",
-        });
-
-        map.addLayer(
-          {
-            id: "terrain-layer",
-            type: "raster",
-            source: "terrain-tiles",
-          },
-          customLayers.length > 0 && customLayers[0]?.id ? customLayers[0].id : undefined
+        addIndiaTerrain(
+          map,
+          customLayers.length > 0 && customLayers[0]?.id ? customLayers[0].id : undefined,
         );
         break;
 

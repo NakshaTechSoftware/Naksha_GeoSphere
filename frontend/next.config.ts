@@ -13,6 +13,13 @@ const nextConfig: NextConfig = {
   // would otherwise infer the workspace root as E:\Naksha_GeoSphere and warn about it.
   // This app is standalone - pin the trace root to the frontend directory.
   outputFileTracingRoot: path.join(__dirname),
+  outputFileTracingIncludes: {
+    "/api/terrain/*": [
+      "../DEM_Terrain/India_DEM.tif",
+      "../DEM_Terrain/India_DEM_overview.tif",
+    ],
+  },
+  serverExternalPackages: ["geotiff", "sharp"],
 };
 
 export default nextConfig;

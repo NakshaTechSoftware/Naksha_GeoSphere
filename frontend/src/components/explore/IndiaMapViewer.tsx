@@ -10,6 +10,7 @@ import type {
 import "maplibre-gl/dist/maplibre-gl.css";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
+import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
 
 // Matches a place label (e.g. "Karnataka", "Bengaluru") rendered by the basemap's place layer
@@ -582,7 +583,8 @@ export type BoundaryLayerMode =
   | "administrative"
   | "assembly"
   | "parliamentary"
-  | "gram_panchayat";
+  | "gram_panchayat"
+  | "police_station";
 
 export interface IndiaMapViewerHandle {
   /** Sets the active Boundary Layers filter option (single-select). "administrative" shows
@@ -649,6 +651,20 @@ const STATE_PARLIAMENT_SOURCE_ID = "state-parliament-data";
 const STATE_PARLIAMENT_FILL_LAYER_ID = "state-parliament-fill";
 const STATE_PARLIAMENT_LINE_LAYER_ID = "state-parliament-line";
 
+// Statewide police-station jurisdiction boundaries loaded from MinIO.
+const STATE_POLICE_SOURCE_ID = "state-police-data";
+const STATE_POLICE_FILL_LAYER_ID = "state-police-fill";
+const STATE_POLICE_LINE_LAYER_ID = "state-police-line";
+const STATE_POLICE_LABEL_LAYER_ID = "state-police-labels";
+const POLICE_HOBLIES_SOURCE_ID = "police-hoblies-data";
+const POLICE_HOBLIES_FILL_LAYER_ID = "police-hoblies-fill";
+const POLICE_HOBLIES_LINE_LAYER_ID = "police-hoblies-line";
+const POLICE_HOBLIES_LABEL_LAYER_ID = "police-hoblies-labels";
+const POLICE_VILLAGES_SOURCE_ID = "police-villages-data";
+const POLICE_VILLAGES_FILL_LAYER_ID = "police-villages-fill";
+const POLICE_VILLAGES_LINE_LAYER_ID = "police-villages-line";
+const POLICE_VILLAGES_LABEL_LAYER_ID = "police-villages-labels";
+
 // Source/layer ids for a selected district's taluk/subdistrict boundaries
 const DISTRICT_TALUKS_SOURCE_ID = "district-taluks-data";
 const DISTRICT_TALUKS_FILL_LAYER_ID = "district-taluks-fill";
@@ -713,10 +729,13 @@ function applyCadastralColors(map: MapLibreMap, satellite: boolean) {
 const ATTRIBUTE_POPUP_LAYER_IDS = [
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
+  POLICE_VILLAGES_FILL_LAYER_ID,
+  POLICE_HOBLIES_FILL_LAYER_ID,
   HOBLI_VILLAGES_FILL_LAYER_ID,
   TALUK_HOBLIES_FILL_LAYER_ID,
   DISTRICT_TALUKS_FILL_LAYER_ID,
   STATE_PARLIAMENT_FILL_LAYER_ID,
+  STATE_POLICE_FILL_LAYER_ID,
   STATE_ASSEMBLY_FILL_LAYER_ID,
   STATE_DISTRICTS_FILL_LAYER_ID,
   "states-fill-default",
@@ -728,6 +747,9 @@ const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
   [STATE_DISTRICTS_FILL_LAYER_ID]: "District",
   [STATE_ASSEMBLY_FILL_LAYER_ID]: "Assembly Constituency",
   [STATE_PARLIAMENT_FILL_LAYER_ID]: "Parliamentary Constituency",
+  [STATE_POLICE_FILL_LAYER_ID]: "Police Station",
+  [POLICE_HOBLIES_FILL_LAYER_ID]: "Police-area Hobli",
+  [POLICE_VILLAGES_FILL_LAYER_ID]: "Police-area Village",
   [DISTRICT_TALUKS_FILL_LAYER_ID]: "Taluk",
   [TALUK_HOBLIES_FILL_LAYER_ID]: "Hobli",
   [HOBLI_VILLAGES_FILL_LAYER_ID]: "Village",
@@ -748,6 +770,10 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   hobli_name: "Hobli Name",
   village_name: "Village Name",
   vill_nm: "Village Name",
+  PS_BOUNDName: "Police Station",
+  PS_BOUNDCode: "Police Station Code",
+  KGISPS_BOUNDID: "Police Boundary ID",
+  KGISPS_SUB_DIVID: "Police Subdivision ID",
 };
 
 // "st_nm" -> "St Nm" is wrong for display; keys without a known label get a sensible split:
@@ -806,6 +832,15 @@ const BOUNDARY_LAYER_IDS = [
   STATE_ASSEMBLY_LINE_LAYER_ID,
   STATE_PARLIAMENT_FILL_LAYER_ID,
   STATE_PARLIAMENT_LINE_LAYER_ID,
+  STATE_POLICE_FILL_LAYER_ID,
+  STATE_POLICE_LINE_LAYER_ID,
+  STATE_POLICE_LABEL_LAYER_ID,
+  POLICE_HOBLIES_FILL_LAYER_ID,
+  POLICE_HOBLIES_LINE_LAYER_ID,
+  POLICE_HOBLIES_LABEL_LAYER_ID,
+  POLICE_VILLAGES_FILL_LAYER_ID,
+  POLICE_VILLAGES_LINE_LAYER_ID,
+  POLICE_VILLAGES_LABEL_LAYER_ID,
   DISTRICT_TALUKS_FILL_LAYER_ID,
   DISTRICT_TALUKS_LINE_LAYER_ID,
   DISTRICT_TALUKS_LABELS_LAYER_ID,
@@ -826,6 +861,9 @@ const BOUNDARY_SOURCE_IDS = [
   STATE_DISTRICTS_LABELS_SOURCE_ID,
   STATE_ASSEMBLY_SOURCE_ID,
   STATE_PARLIAMENT_SOURCE_ID,
+  STATE_POLICE_SOURCE_ID,
+  POLICE_HOBLIES_SOURCE_ID,
+  POLICE_VILLAGES_SOURCE_ID,
   DISTRICT_TALUKS_SOURCE_ID,
   DISTRICT_TALUKS_LABELS_SOURCE_ID,
   TALUK_HOBLIES_SOURCE_ID,
@@ -1126,10 +1164,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         layerId === STATE_ASSEMBLY_FILL_LAYER_ID || layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
       const isParliamentLayer =
         layerId === STATE_PARLIAMENT_FILL_LAYER_ID || layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+      const isPoliceLayer =
+        layerId === STATE_POLICE_FILL_LAYER_ID ||
+        layerId === STATE_POLICE_LINE_LAYER_ID ||
+        layerId === STATE_POLICE_LABEL_LAYER_ID ||
+        layerId.startsWith("police-");
       const visible =
         showAll ||
         (mode === "assembly" && (isStatesLayer || isAssemblyLayer)) ||
-        (mode === "parliamentary" && (isStatesLayer || isParliamentLayer));
+        (mode === "parliamentary" && (isStatesLayer || isParliamentLayer)) ||
+        (mode === "police_station" && (isStatesLayer || isPoliceLayer));
       map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
     });
 
@@ -1422,6 +1466,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const loadedParliamentStateRef = useRef<string | null>(null);
   // Currently-selected parliamentary constituency feature id.
   const selectedParliamentIdRef = useRef<string | number | null>(null);
+
+  // Name of the state whose police-station jurisdictions are currently loaded, if any.
+  const loadedPoliceStateRef = useRef<string | null>(null);
+  const selectedPoliceIdRef = useRef<string | number | null>(null);
   
   // Name of the district whose taluks are currently loaded, if any.
   const loadedTaluksDistrictRef = useRef<string | null>(null);
@@ -1501,6 +1549,32 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     selectedParliamentIdRef.current = null;
   };
 
+  const clearPoliceCoverage = (map: MapLibreMap) => {
+    [
+      POLICE_VILLAGES_LABEL_LAYER_ID,
+      POLICE_VILLAGES_LINE_LAYER_ID,
+      POLICE_VILLAGES_FILL_LAYER_ID,
+      POLICE_HOBLIES_LABEL_LAYER_ID,
+      POLICE_HOBLIES_LINE_LAYER_ID,
+      POLICE_HOBLIES_FILL_LAYER_ID,
+    ].forEach((id) => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    });
+    [POLICE_VILLAGES_SOURCE_ID, POLICE_HOBLIES_SOURCE_ID].forEach((id) => {
+      if (map.getSource(id)) map.removeSource(id);
+    });
+  };
+
+  const clearStatePolice = (map: MapLibreMap) => {
+    clearPoliceCoverage(map);
+    if (map.getLayer(STATE_POLICE_FILL_LAYER_ID)) map.removeLayer(STATE_POLICE_FILL_LAYER_ID);
+    if (map.getLayer(STATE_POLICE_LINE_LAYER_ID)) map.removeLayer(STATE_POLICE_LINE_LAYER_ID);
+    if (map.getLayer(STATE_POLICE_LABEL_LAYER_ID)) map.removeLayer(STATE_POLICE_LABEL_LAYER_ID);
+    if (map.getSource(STATE_POLICE_SOURCE_ID)) map.removeSource(STATE_POLICE_SOURCE_ID);
+    loadedPoliceStateRef.current = null;
+    selectedPoliceIdRef.current = null;
+  };
+
   // Clears whichever state-level boundary layer is loaded (districts, assembly
   // constituencies, or parliamentary constituencies), used when switching states,
   // deselecting a state, or changing the Boundary Layers filter option.
@@ -1508,6 +1582,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     clearStateDistricts(map);
     clearStateAssembly(map);
     clearStateParliament(map);
+    clearStatePolice(map);
   };
 
   // Fetches and renders a state's district boundaries from MinIO (via /api/datasets/state-districts).
@@ -1753,6 +1828,173 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load parliamentary constituency boundaries for "${stateName}":`, error);
+    }
+  };
+
+  // Loads all police-station jurisdiction polygons for a state from the same MinIO
+  // administrative-boundary hierarchy used by the constituency layers.
+  const loadStatePolice = async (map: MapLibreMap, stateName: string) => {
+    const normalized = stateName.trim().toLowerCase();
+    if (loadedPoliceStateRef.current === normalized) return;
+
+    try {
+      const response = await fetch(
+        `/api/datasets/state-police-stations?state=${encodeURIComponent(stateName)}`,
+      );
+      if (!response.ok) {
+        console.warn(`No police station boundary data available for "${stateName}"`);
+        return;
+      }
+      const policeData = await response.json();
+
+      clearStateBoundaryLayers(map);
+      map.addSource(STATE_POLICE_SOURCE_ID, {
+        type: "geojson",
+        data: policeData,
+        generateId: true,
+      });
+      map.addLayer({
+        id: STATE_POLICE_FILL_LAYER_ID,
+        type: "fill",
+        source: STATE_POLICE_SOURCE_ID,
+        paint: {
+          "fill-color": "#8b5cf6",
+          "fill-opacity": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            0.4,
+            ["boolean", ["feature-state", "hover"], false],
+            0.24,
+            0.07,
+          ],
+        },
+      });
+      map.addLayer({
+        id: STATE_POLICE_LINE_LAYER_ID,
+        type: "line",
+        source: STATE_POLICE_SOURCE_ID,
+        paint: {
+          "line-color": "#7c3aed",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            3,
+            1.25,
+          ],
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: STATE_POLICE_LABEL_LAYER_ID,
+        type: "symbol",
+        source: STATE_POLICE_SOURCE_ID,
+        minzoom: 7,
+        layout: {
+          "text-field": ["coalesce", ["get", "PS_BOUNDName"], ["get", "_police_station"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 11, 13, 15, 16],
+          "text-anchor": "center",
+          "text-max-width": 12,
+          "text-padding": 3,
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+        },
+        paint: {
+          "text-color": "#32105f",
+          "text-halo-color": "rgba(255, 255, 255, 0.96)",
+          "text-halo-width": 2,
+          "text-halo-blur": 0.4,
+        },
+      });
+
+      loadedPoliceStateRef.current = normalized;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load police station boundaries for "${stateName}":`, error);
+    }
+  };
+
+  const loadPoliceCoverage = async (map: MapLibreMap, folder: string) => {
+    try {
+      const response = await fetch(
+        `/api/datasets/police-station-coverage?folder=${encodeURIComponent(folder)}`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { hoblis, villages } = (await response.json()) as {
+        hoblis: GeoJSON.FeatureCollection;
+        villages: GeoJSON.FeatureCollection;
+      };
+      clearPoliceCoverage(map);
+
+      map.addSource(POLICE_HOBLIES_SOURCE_ID, { type: "geojson", data: hoblis });
+      map.addLayer({
+        id: POLICE_HOBLIES_FILL_LAYER_ID,
+        type: "fill",
+        source: POLICE_HOBLIES_SOURCE_ID,
+        minzoom: 8,
+        paint: { "fill-color": "#f59e0b", "fill-opacity": 0.06 },
+      });
+      map.addLayer({
+        id: POLICE_HOBLIES_LINE_LAYER_ID,
+        type: "line",
+        source: POLICE_HOBLIES_SOURCE_ID,
+        minzoom: 8,
+        paint: { "line-color": "#f59e0b", "line-width": 1.5, "line-opacity": 0.95 },
+      });
+      map.addLayer({
+        id: POLICE_HOBLIES_LABEL_LAYER_ID,
+        type: "symbol",
+        source: POLICE_HOBLIES_SOURCE_ID,
+        minzoom: 9,
+        layout: {
+          "text-field": ["get", "KGISHobliName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-max-width": 10,
+        },
+        paint: {
+          "text-color": "#7c2d12",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+
+      map.addSource(POLICE_VILLAGES_SOURCE_ID, { type: "geojson", data: villages });
+      map.addLayer({
+        id: POLICE_VILLAGES_FILL_LAYER_ID,
+        type: "fill",
+        source: POLICE_VILLAGES_SOURCE_ID,
+        minzoom: 10,
+        paint: { "fill-color": "#06b6d4", "fill-opacity": 0.035 },
+      });
+      map.addLayer({
+        id: POLICE_VILLAGES_LINE_LAYER_ID,
+        type: "line",
+        source: POLICE_VILLAGES_SOURCE_ID,
+        minzoom: 10,
+        paint: { "line-color": "#06b6d4", "line-width": 1, "line-opacity": 0.9 },
+      });
+      map.addLayer({
+        id: POLICE_VILLAGES_LABEL_LAYER_ID,
+        type: "symbol",
+        source: POLICE_VILLAGES_SOURCE_ID,
+        minzoom: 11,
+        layout: {
+          "text-field": ["get", "KGISVillageName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 11, 9, 15, 13],
+          "text-max-width": 10,
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": "#164e63",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.4,
+        },
+      });
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load administrative coverage for ${folder}:`, error);
     }
   };
 
@@ -3171,6 +3413,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 .toLowerCase();
               const isAssemblyMode = boundaryLayerModeRef.current === "assembly";
               const isParliamentMode = boundaryLayerModeRef.current === "parliamentary";
+              const isPoliceMode = boundaryLayerModeRef.current === "police_station";
 
               // If the click landed within the boundary layer currently on top for this
               // state (assembly/parliamentary constituencies in their respective modes,
@@ -3182,6 +3425,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 ? loadedAssemblyStateRef.current === clickedStateName
                 : isParliamentMode
                   ? loadedParliamentStateRef.current === clickedStateName
+                  : isPoliceMode
+                    ? loadedPoliceStateRef.current === clickedStateName
                   : loadedDistrictsStateRef.current === clickedStateName;
 
               if (boundaryLoadedForState) {
@@ -3194,7 +3439,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               // In the constituency modes, a click on a state always (re)loads that mode's
               // boundaries — even if the state is already selected from a previous session
               // — instead of toggling it off.
-              if (isAssemblyMode || isParliamentMode) {
+              if (isAssemblyMode || isParliamentMode || isPoliceMode) {
                 if (!wasSelected) {
                   if (selectedStateIdRef.current !== null) {
                     clearStateSelection(map);
@@ -3209,9 +3454,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   if (isAssemblyMode) {
                     console.log(`Auto-loading assembly constituencies for state: ${stateName}`);
                     void loadStateAssembly(map, stateName);
-                  } else {
+                  } else if (isParliamentMode) {
                     console.log(`Auto-loading parliamentary constituencies for state: ${stateName}`);
                     void loadStateParliament(map, stateName);
+                  } else {
+                    console.log(`Auto-loading police station boundaries for state: ${stateName}`);
+                    void loadStatePolice(map, stateName);
                   }
                 }
                 return;
@@ -3508,6 +3756,67 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (e.originalEvent) {
                 e.originalEvent.stopPropagation();
               }
+            });
+
+            // Hover/click interaction for police-station jurisdiction boundaries.
+            let hoveredPoliceId: string | number | null = null;
+            map.on("mousemove", STATE_POLICE_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredPoliceId !== null && hoveredPoliceId !== feature.id) {
+                map.setFeatureState(
+                  { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
+                  { hover: false },
+                );
+              }
+              hoveredPoliceId = feature.id;
+              map.setFeatureState(
+                { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
+                { hover: true },
+              );
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", STATE_POLICE_FILL_LAYER_ID, () => {
+              if (hoveredPoliceId !== null) {
+                map.setFeatureState(
+                  { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
+                  { hover: false },
+                );
+              }
+              hoveredPoliceId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", STATE_POLICE_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (selectedPoliceIdRef.current !== null) {
+                map.setFeatureState(
+                  { source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current },
+                  { selected: false },
+                );
+              }
+              const wasSelected = selectedPoliceIdRef.current === feature.id;
+              selectedPoliceIdRef.current = wasSelected ? null : feature.id;
+              if (selectedPoliceIdRef.current !== null) {
+                map.setFeatureState(
+                  { source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current },
+                  { selected: true },
+                );
+                if (feature.geometry) {
+                  map.fitBounds(boundsOfGeometry(feature.geometry), {
+                    padding: 80,
+                    duration: 800,
+                    maxZoom: 13,
+                  });
+                }
+                const folder = feature.properties?._storage_folder as string | undefined;
+                if (folder) void loadPoliceCoverage(map, folder);
+              } else {
+                clearPoliceCoverage(map);
+              }
+              e.preventDefault();
+              e.originalEvent?.stopPropagation();
             });
 
             // Hover/click highlighting for taluks, once loaded. Registered once here
@@ -3931,6 +4240,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!mapRef.current) return;
     
     const map = mapRef.current;
+
+    // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
+    removeIndiaTerrain(map);
     
     // Get the current style to preserve custom sources and layers
     const style = map.getStyle();
@@ -3949,6 +4261,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
         l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
         l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
+        l.id === STATE_POLICE_FILL_LAYER_ID ||
+        l.id === STATE_POLICE_LINE_LAYER_ID ||
+        l.id === STATE_POLICE_LABEL_LAYER_ID ||
+        l.id.startsWith("police-") ||
         l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
         l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
         l.id === DISTRICT_TALUKS_LABELS_LAYER_ID ||
@@ -3977,6 +4293,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         sourceId === STATE_DISTRICTS_LABELS_SOURCE_ID ||
         sourceId === STATE_ASSEMBLY_SOURCE_ID ||
         sourceId === STATE_PARLIAMENT_SOURCE_ID ||
+        sourceId === STATE_POLICE_SOURCE_ID ||
+        sourceId.startsWith("police-") ||
         sourceId === DISTRICT_TALUKS_SOURCE_ID ||
         sourceId === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
         sourceId === TALUK_HOBLIES_SOURCE_ID ||
@@ -4041,23 +4359,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         break;
 
       case "terrain":
-        map.addSource("terrain-tiles", {
-          type: "raster",
-          tiles: [
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}",
-          ],
-          tileSize: 256,
-          attribution: "Esri, USGS, NOAA",
-        });
-
-        map.addLayer(
-          {
-            id: "terrain-layer",
-            type: "raster",
-            source: "terrain-tiles",
-          },
-          firstCustomLayerId
-        );
+        addIndiaTerrain(map, firstCustomLayerId);
         map.setMaxZoom(22);
         break;
 
@@ -4178,6 +4480,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedAssemblyIdRef.current = null;
       loadedParliamentStateRef.current = null;
       selectedParliamentIdRef.current = null;
+      loadedPoliceStateRef.current = null;
+      selectedPoliceIdRef.current = null;
       loadedCadastralsVillageRef.current = null;
       loadedCadastralsDataRef.current = null;
       selectedVillageNameRef.current = null;
@@ -4373,17 +4677,25 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       // loads the right boundary type: switching to a constituency mode drops leftover
       // district/taluk layers (and the other constituency's layers), switching back to
       // "administrative" drops the constituency layers.
-      if (mode === "assembly" || mode === "parliamentary") {
+      if (mode === "assembly" || mode === "parliamentary" || mode === "police_station") {
         clearStateDistricts(map);
         clearDistrictTaluks(map);
         if (mode === "assembly") {
           clearStateParliament(map);
+          clearStatePolice(map);
+        } else if (mode === "parliamentary") {
+          clearStateAssembly(map);
+          clearStatePolice(map);
         } else {
           clearStateAssembly(map);
+          clearStateParliament(map);
+          const selectedState = selectedStateNameRef.current;
+          if (selectedState) void loadStatePolice(map, selectedState);
         }
       } else if (mode === "administrative") {
         clearStateAssembly(map);
         clearStateParliament(map);
+        clearStatePolice(map);
       }
       applyBoundaryLayerVisibility(map);
     },

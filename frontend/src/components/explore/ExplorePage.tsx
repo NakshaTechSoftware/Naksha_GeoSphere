@@ -40,6 +40,7 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "assembly", label: "Assembly Constituency Boundaries" },
   { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
   { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
+  { id: "civic_amenities", label: "Civic Amenities" },
 ];
 
 const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;

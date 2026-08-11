@@ -90,5 +90,6 @@ services/api/migrations/.autogenerate/
 *.bak
 *.orig
 
-# === Freebuff desktop app local data (never commit — live SQLite DB is locked while the app runs) ===
+# === Local app data (never commit) ===
+.claude/
 .freebuff/

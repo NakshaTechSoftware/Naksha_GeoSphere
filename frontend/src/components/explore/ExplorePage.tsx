@@ -26,8 +26,7 @@ const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
 // The Boundary Layers group is single-select: exactly one option is active at a time
 // (radio-like behavior, rendered as checkboxes). "administrative" shows every loaded
 // administrative boundary layer; "assembly" and "parliamentary" show the neon-blue
-// india_states geojson plus their loaded constituency boundaries; "gram panchayat" shows
-// the neon-blue states too (panchayat boundaries aren't wired to data yet).
+// updated states GeoJSON plus the selected mode's loaded boundary hierarchy.
 
 const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "administrative", label: "Administrative Boundaries" },
@@ -308,7 +307,7 @@ export function ExplorePage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/data/india_states.geojson");
+        const res = await fetch("/data/india_states_updated.geojson");
         if (res.ok) {
           const geo = await res.json();
           const names = Array.from(
@@ -951,7 +950,7 @@ export function ExplorePage() {
                     {/* Single-select: picking a new option deselects the previous one.
                       "administrative" shows every loaded boundary layer; "assembly" and
                       "parliamentary" show the neon-blue india_states geojson plus their
-                      loaded constituency boundaries; "gram panchayat" isn't wired to data
+                      loaded constituency boundaries; "gram panchayat" loads Karnataka GP data
                       yet (no extra layers). */}
                     {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
                       <label key={id} className="flex items-center text-sm text-gray-600">

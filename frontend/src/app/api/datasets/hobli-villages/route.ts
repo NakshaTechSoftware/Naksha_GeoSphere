@@ -1,264 +1,123 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { cleanFolderName, namesMatch } from '../_folder-match';
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { NextRequest, NextResponse } from "next/server";
+import { namesMatch } from "../_folder-match";
 
-// Remote MinIO configuration
-const MINIO_ENDPOINT = '192.168.10.81:9010';
-const MINIO_ACCESS_KEY = 'geosphere_storage';
-const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
-const S3_REGION = 'geosphere';
-const S3_BUCKET = 'geosphere-source-data';
+const client = new S3Client({
+  endpoint: "http://192.168.10.81:9010",
+  region: "geosphere",
+  credentials: {
+    accessKeyId: "geosphere_storage",
+    secretAccessKey: "706f803f67c143c884305e7085b59210ffb29ac69e724a70",
+  },
+  forcePathStyle: true,
+});
+const BUCKET = "geosphere-source-data";
+const PREFIX = "Administrative Boundaries/india/karnataka/KARNATAKA/";
+
+const DISTRICTS: Array<[string, string, string]> = [
+  ["01", "Belagavi", "01_Belagavi.geojson"], ["02", "Bagalkote", "02_Bagalkote.geojson"],
+  ["03", "Vijayapura", "03_Vijayapura.geojson"], ["04", "Kalaburgi", "04_Kalaburgi.geojson"],
+  ["05", "Bidar", "05_Bidar.geojson"], ["06", "Raichur", "06_Raichur.geojson"],
+  ["07", "Koppal", "07_Koppal.geojson"], ["08", "Gadag", "08_Gadag.geojson"],
+  ["09", "Dharwad", "09_Dharwad.geojson"], ["10", "Uttara Kannada", "10_Uttara_Kannada.geojson"],
+  ["11", "Haveri", "11_Haveri.geojson"], ["12", "Ballari", "12_Ballari.geojson"],
+  ["13", "Chitradurga", "13_Chitradurga.geojson"], ["14", "Davanagere", "14_Davanagere.geojson"],
+  ["15", "Shivamogga", "15_Shivamogga.geojson"], ["16", "Udupi", "16_Udupi.geojson"],
+  ["17", "Chikkamagaluru", "17_Chikkamagaluru.geojson"], ["18", "Tumakuru", "18_Tumakuru.geojson"],
+  ["19", "Kolara", "19_Kolara.geojson"], ["20", "Bengaluru (Urban)", "20_Bengaluru_Urban.geojson"],
+  ["21", "Bengaluru (Rural)", "21_Bengaluru_Rural.geojson"], ["22", "Mandya", "22_Mandya.geojson"],
+  ["23", "Hassan", "23_Hassan.geojson"], ["24", "Dakshina Kannada", "24_Dakshina_Kannada.geojson"],
+  ["25", "Kodagu", "25_Kodagu.geojson"], ["26", "Mysuru", "26_Mysuru.geojson"],
+  ["27", "Chamarajanagara", "27_Chamarajanagara.geojson"],
+  ["28", "Chikkaballapura", "28_Chikkaballapura.geojson"],
+  ["29", "Bengaluru South", "29_Bengaluru_South.geojson"], ["30", "Yadgir", "30_Yadgir.geojson"],
+  ["31", "Vijayanagara", "31_Vijayanagara.geojson"],
+];
+
+async function readGeoJson(key: string) {
+  const response = await client.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  return JSON.parse((await response.Body?.transformToString()) ?? "{}") as GeoJSON.FeatureCollection;
+}
+
+let taluksCache: Promise<GeoJSON.FeatureCollection> | null = null;
+let hobliesCache: Promise<GeoJSON.FeatureCollection> | null = null;
+const getTaluks = () =>
+  (taluksCache ??= readGeoJson(`${PREFIX}KARNATAKA_TALUKS.geojson`).catch((error) => {
+    taluksCache = null;
+    throw error;
+  }));
+const getHoblies = () =>
+  (hobliesCache ??= readGeoJson(`${PREFIX}KARNATAKA_HOBLIS.geojson`).catch((error) => {
+    hobliesCache = null;
+    throw error;
+  }));
 
 export async function GET(request: NextRequest) {
-  const district = request.nextUrl.searchParams.get('district');
-  const state = request.nextUrl.searchParams.get('state');
-  const taluk = request.nextUrl.searchParams.get('taluk');
-  const hobli = request.nextUrl.searchParams.get('hobli');
+  const district = request.nextUrl.searchParams.get("district")?.trim();
+  const state = request.nextUrl.searchParams.get("state")?.trim();
+  const taluk = request.nextUrl.searchParams.get("taluk")?.trim();
+  const hobli = request.nextUrl.searchParams.get("hobli")?.trim();
+  if (!district || !state || !taluk || !hobli) {
+    return NextResponse.json({ error: "district, state, taluk, and hobli are required" }, { status: 400 });
+  }
+  if (!namesMatch(state, "Karnataka")) {
+    return NextResponse.json({ error: `No village data available for state "${state}"` }, { status: 404 });
+  }
 
-  console.log(`\n\n[hobli-villages] ========================================`);
-  console.log(`[hobli-villages] NEW REQUEST RECEIVED`);
-  console.log(`[hobli-villages] Params: hobli="${hobli}", taluk="${taluk}", district="${district}", state="${state}"`);
-  console.log(`[hobli-villages] ========================================\n`);
+  const districtEntry = DISTRICTS.find(([, name]) => namesMatch(name, district));
+  if (!districtEntry) {
+    return NextResponse.json({ error: `District "${district}" was not found` }, { status: 404 });
+  }
+  const [districtCode, , villageFile] = districtEntry;
 
   try {
-    if (!district || !state || !taluk || !hobli) {
-      return NextResponse.json(
-        { error: 'district, state, taluk, and hobli parameters are all required' },
-        { status: 400 }
-      );
-    }
-
-    const s3Client = new S3Client({
-      endpoint: `http://${MINIO_ENDPOINT}`,
-      region: S3_REGION,
-      credentials: {
-        accessKeyId: MINIO_ACCESS_KEY,
-        secretAccessKey: MINIO_SECRET_KEY,
-      },
-      forcePathStyle: true,
-    });
-
-    const normalizedState = state.trim().toLowerCase();
-
-    // Find the district folder (the numbered district folders live under the state's
-    // Districts/ subfolder).
-    const statePrefix = `Administrative Boundaries/india/${normalizedState}/Districts/`;
-    const stateListCommand = new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: statePrefix,
-      Delimiter: '/',
-    });
-    const stateListResponse = await s3Client.send(stateListCommand);
-
-    console.log(`[hobli-villages] Searching for district="${district}" in state="${normalizedState}"`);
-    console.log(`[hobli-villages] Available district folders:`, stateListResponse.CommonPrefixes?.map(p => p.Prefix));
-    
-    const districtFolder = stateListResponse.CommonPrefixes?.find((prefix) => {
-      const folderName = prefix.Prefix?.split('/').slice(-2)[0] || '';
-      const cleaned = cleanFolderName(folderName);
-      const match = namesMatch(cleaned, district);
-      console.log(`[hobli-villages] District check: "${folderName}" -> cleaned="${cleaned}" vs "${district}" -> ${match}`);
-      return match;
-    });
-
-    if (!districtFolder?.Prefix) {
-      return NextResponse.json(
-        { error: `District folder not found for "${district}" in state "${state}"` },
-        { status: 404 }
-      );
-    }
-
-    // Find the taluk subfolder
-    let subDistrictsPrefix = `${districtFolder.Prefix}SubDistricts/`;
-    let talukListCommand = new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: subDistrictsPrefix,
-      Delimiter: '/',
-    });
-    let talukListResponse = await s3Client.send(talukListCommand);
-
-    if (!talukListResponse.CommonPrefixes || talukListResponse.CommonPrefixes.length === 0) {
-      subDistrictsPrefix = `${districtFolder.Prefix}Sub_Districts/`;
-      talukListCommand = new ListObjectsV2Command({
-        Bucket: S3_BUCKET,
-        Prefix: subDistrictsPrefix,
-        Delimiter: '/',
-      });
-      talukListResponse = await s3Client.send(talukListCommand);
-    }
-
-    console.log(`[hobli-villages] Looking for taluk="${taluk}"`);
-    console.log(`[hobli-villages] Available taluk folders:`, talukListResponse.CommonPrefixes?.map(p => p.Prefix));
-    
-    const talukFolder = talukListResponse.CommonPrefixes?.find((prefix) => {
-      const folderName = prefix.Prefix?.split('/').slice(-2)[0] || '';
-      const cleaned = cleanFolderName(folderName);
-      const match = namesMatch(cleaned, taluk);
-      console.log(`[hobli-villages] Taluk check: "${folderName}" -> cleaned="${cleaned}" vs "${taluk}" -> ${match}`);
-      return match;
-    });
-
-    if (!talukFolder?.Prefix) {
-      return NextResponse.json(
-        { error: `Taluk folder not found for "${taluk}" in district "${district}"` },
-        { status: 404 }
-      );
-    }
-
-    // Find the Hoblis folder and then the hobli subfolder
-    // Try multiple variants: "Hoblis", "Hoblies", "hoblies", "hoblis"
-    let hobliesPrefix = `${talukFolder.Prefix}Hoblis/`;
-    console.log(`[hobli-villages] ✓ Taluk folder: "${talukFolder.Prefix}"`);
-    console.log(`[hobli-villages] Looking for hobli="${hobli}" in Hoblis prefix="${hobliesPrefix}"`);
-    
-    let hobliListCommand = new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: hobliesPrefix,
-      Delimiter: '/',
-    });
-    let hobliListResponse = await s3Client.send(hobliListCommand);
-    
-    // Try different folder name variants
-    const folderVariants = ['Hoblies/', 'hoblies/', 'hoblis/'];
-    for (const variant of folderVariants) {
-      if (!hobliListResponse.CommonPrefixes || hobliListResponse.CommonPrefixes.length === 0) {
-        console.log(`[hobli-villages] No folders found, trying "${variant}"`);
-        hobliesPrefix = `${talukFolder.Prefix}${variant}`;
-        hobliListCommand = new ListObjectsV2Command({
-          Bucket: S3_BUCKET,
-          Prefix: hobliesPrefix,
-          Delimiter: '/',
-        });
-        hobliListResponse = await s3Client.send(hobliListCommand);
-      }
-    }
-    
-    // If still no folders, try checking what folders actually exist in taluk
-    if (!hobliListResponse.CommonPrefixes || hobliListResponse.CommonPrefixes.length === 0) {
-      console.log(`[hobli-villages] No hobli folders found. Checking what folders exist in taluk...`);
-      const talukContentsCommand = new ListObjectsV2Command({
-        Bucket: S3_BUCKET,
-        Prefix: talukFolder.Prefix,
-        Delimiter: '/',
-      });
-      const talukContents = await s3Client.send(talukContentsCommand);
-      console.log(`[hobli-villages] Available folders in taluk:`, talukContents.CommonPrefixes?.map(p => p.Prefix));
-    }
-    
-    console.log(`[hobli-villages] Hobli list response - IsTruncated: ${hobliListResponse.IsTruncated}, KeyCount: ${hobliListResponse.KeyCount}`);
-    console.log(`[hobli-villages] Available hobli folders:`, hobliListResponse.CommonPrefixes?.map(p => p.Prefix));
-    console.log(`[hobli-villages] Contents (if any):`, hobliListResponse.Contents?.map(c => c.Key));
-    
-    if (!hobliListResponse.CommonPrefixes || hobliListResponse.CommonPrefixes.length === 0) {
-      console.log(`[hobli-villages] ERROR: No hobli folders found in "${hobliesPrefix}"`);
-      return NextResponse.json(
-        { error: `Hoblies folder not found or empty for taluk "${taluk}"` },
-        { status: 404 }
-      );
-    }
-    
-    const hobliFolder = hobliListResponse.CommonPrefixes?.find((prefix) => {
-      const folderName = prefix.Prefix?.split('/').slice(-2)[0] || '';
-      const cleaned = cleanFolderName(folderName);
-      const hobliCleaned = hobli.trim().toLowerCase().replace(/[_-]/g, ' ');
-      
-      console.log(`[hobli-villages] >>> Comparing: folderName="${folderName}"`);
-      console.log(`[hobli-villages] >>> After cleanFolderName: cleaned="${cleaned}"`);
-      console.log(`[hobli-villages] >>> Search term: hobli="${hobli}", hobliCleaned="${hobliCleaned}"`);
-      
-      // Try exact match first
-      let match = namesMatch(cleaned, hobli);
-      console.log(`[hobli-villages] >>> namesMatch result: ${match}`);
-      
-      // If no match, try contains matching (handles cases like "230308_Kanakatte" matching "Kanakatte")
-      if (!match) {
-        match = cleaned.includes(hobliCleaned) || hobliCleaned.includes(cleaned);
-        console.log(`[hobli-villages] >>> contains match result: ${match}`);
-      }
-      
-      console.log(`[hobli-villages] Hobli check: "${folderName}" -> cleaned="${cleaned}" vs "${hobli}" -> FINAL MATCH=${match}\n`);
-      return match;
-    });
-
-    if (!hobliFolder?.Prefix) {
-      return NextResponse.json(
-        { error: `Hobli folder not found for "${hobli}" in taluk "${taluk}"` },
-        { status: 404 }
-      );
-    }
-
-    console.log(`[hobli-villages] ✓ Matched hobli folder: "${hobliFolder.Prefix}"`);
-
-    // Find the village boundary geojson file inside the hobli folder. Delimiter '/'
-    // lists only direct children - the village geojson sits at the hobli folder root,
-    // so this skips the deeply-nested cadastral files under Villages/ that made the
-    // recursive listing slow.
-    const hobliFilesCommand = new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: hobliFolder.Prefix,
-      Delimiter: '/',
-    });
-    const hobliFilesResponse = await s3Client.send(hobliFilesCommand);
-
-    console.log(`[hobli-villages] Files in hobli folder:`, hobliFilesResponse.Contents?.map(c => c.Key));
-    
-    const villageFile = hobliFilesResponse.Contents?.find((file) => {
-      const fileName = (file.Key || '').toLowerCase();
-      const isVillageFile = (fileName.includes('village') || fileName.includes('villages')) && fileName.endsWith('.geojson');
-      console.log(`[hobli-villages] File check: "${file.Key}" -> contains 'village(s)'=${fileName.includes('village') || fileName.includes('villages')}, ends with '.geojson'=${fileName.endsWith('.geojson')} -> match=${isVillageFile}`);
-      return isVillageFile;
-    });
-
-    if (!villageFile?.Key) {
-      return NextResponse.json(
-        { error: `No village boundaries file found for hobli "${hobli}"` },
-        { status: 404 }
-      );
-    }
-
-    console.log(`[hobli-villages] ✓✓✓ FINAL SELECTION: Will load village file "${villageFile.Key}"`);
-
-    const getCommand = new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: villageFile.Key,
-    });
-
-    const presignedUrl = await getSignedUrl(s3Client, getCommand, {
-      expiresIn: 3600,
-    });
-
-    const fileResponse = await fetch(presignedUrl, {
-      cache: 'no-store',
-    });
-
-    if (!fileResponse.ok) {
-      console.error(`Failed to fetch village geojson from MinIO: ${fileResponse.status} ${fileResponse.statusText}`);
-      throw new Error(`MinIO returned ${fileResponse.status}`);
-    }
-
-    const geojson = await fileResponse.text();
-    console.log(`[hobli-villages] SUCCESS: Returning village file "${villageFile.Key}" (${geojson.length} bytes)`);
-
-    return new NextResponse(geojson, {
-      headers: {
-        'Content-Type': 'application/geo+json',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
-
-  } catch (error) {
-    console.error('Error fetching hobli village boundaries:', error);
-    return NextResponse.json(
-      {
-        error: 'Failed to load village boundaries',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        details: 'Check if MinIO storage at 192.168.10.81:9010 is accessible',
-      },
-      { status: 500 }
+    const [taluks, hoblies, villages] = await Promise.all([
+      getTaluks(),
+      getHoblies(),
+      readGeoJson(`${PREFIX}Villages/${villageFile}`),
+    ]);
+    const matchingTaluk = taluks.features.find(
+      (feature) =>
+        String(feature.properties?.KGISDistrictCode ?? "").padStart(2, "0") === districtCode &&
+        namesMatch(String(feature.properties?.KGISTalukName ?? ""), taluk)
     );
+    const talukCode = String(matchingTaluk?.properties?.KGISTalukCode ?? "");
+    const hobliIds = new Set(
+      hoblies.features
+        .filter(
+          (feature) =>
+            String(feature.properties?.KGISTalukCode ?? "") === talukCode &&
+            namesMatch(String(feature.properties?.KGISHobliName ?? ""), hobli)
+        )
+        .map((feature) => String(feature.properties?.KGISHobliId ?? ""))
+        .filter(Boolean)
+    );
+    if (!talukCode || hobliIds.size === 0) {
+      return NextResponse.json({ error: `Hobli "${hobli}" was not found in taluk "${taluk}"` }, { status: 404 });
+    }
+
+    const features = villages.features
+      .filter((feature) => hobliIds.has(String(feature.properties?.KGISHobliI ?? "")))
+      .map((feature) => ({
+        ...feature,
+        properties: {
+          ...feature.properties,
+          KGISVillageId: feature.properties?.KGISVillag,
+          KGISVillageCode: feature.properties?.KGISVill_1,
+          KGISVillageName: feature.properties?.KGISVill_2,
+          KGISHobliId: feature.properties?.KGISHobliI,
+          UniqueVillageCode: feature.properties?.UniqueVill,
+          BhoomiVillageCode: feature.properties?.BhoomiVill,
+          LGDVillageCode: feature.properties?.LGD_Villag,
+        },
+      }));
+
+    return NextResponse.json(
+      { type: "FeatureCollection", features },
+      { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } }
+    );
+  } catch (error) {
+    console.error("[hobli-villages] Failed to load updated village boundaries:", error);
+    return NextResponse.json({ error: "Failed to load village boundaries" }, { status: 500 });
   }
 }

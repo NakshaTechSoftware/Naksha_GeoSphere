@@ -49,8 +49,12 @@ export function similarity(a: string, b: string): number {
 // district/taluk name) plausibly refer to the same place: exact match, one contains the
 // other, or - as a last resort - they're within a small edit-distance tolerance to absorb
 // minor transliteration differences like "Kalaburagi" vs "Kalaburgi".
-export function namesMatch(cleanFolder: string, displayName: string): boolean {
-  const cleanDisplay = displayName.toLowerCase().replace(/[-_]/g, ' ').trim();
+export function namesMatch(folderOrName: string, displayName: string): boolean {
+  // Most legacy callers pass an already-cleaned folder name, while the consolidated
+  // statewide APIs pass ordinary display names. Normalize both sides here so casing,
+  // parentheses and separators can never prevent a valid hierarchy match.
+  const cleanFolder = cleanFolderName(folderOrName);
+  const cleanDisplay = cleanFolderName(displayName);
   if (!cleanFolder || !cleanDisplay) return false;
 
   if (

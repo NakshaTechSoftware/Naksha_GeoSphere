@@ -627,7 +627,7 @@ export type BoundaryLayerMode =
   | "assembly"
   | "parliamentary"
   | "gram_panchayat"
-  | "police_station";
+  | "police_station"
   | "civic_amenities";
 
 export interface IndiaMapViewerHandle {
@@ -694,6 +694,13 @@ const STATE_ASSEMBLY_LINE_LAYER_ID = "state-assembly-line";
 const STATE_PARLIAMENT_SOURCE_ID = "state-parliament-data";
 const STATE_PARLIAMENT_FILL_LAYER_ID = "state-parliament-fill";
 const STATE_PARLIAMENT_LINE_LAYER_ID = "state-parliament-line";
+
+// Statewide Gram Panchayat boundaries loaded when their filter is selected.
+const STATE_GP_SOURCE_ID = "state-gram-panchayats-data";
+const STATE_GP_LABELS_SOURCE_ID = "state-gram-panchayats-labels-data";
+const STATE_GP_FILL_LAYER_ID = "state-gram-panchayats-fill";
+const STATE_GP_LINE_LAYER_ID = "state-gram-panchayats-line";
+const STATE_GP_LABEL_LAYER_ID = "state-gram-panchayats-labels";
 
 // Statewide police-station jurisdiction boundaries loaded from MinIO.
 const STATE_POLICE_SOURCE_ID = "state-police-data";
@@ -856,6 +863,7 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   DISTRICT_TALUKS_FILL_LAYER_ID,
   GP_TALUKS_FILL_LAYER_ID,
   STATE_PARLIAMENT_FILL_LAYER_ID,
+  STATE_GP_FILL_LAYER_ID,
   STATE_POLICE_FILL_LAYER_ID,
   STATE_ASSEMBLY_FILL_LAYER_ID,
   STATE_DISTRICTS_FILL_LAYER_ID,
@@ -887,6 +895,7 @@ const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
   [GP_BOUNDARIES_FILL_LAYER_ID]: "Gram Panchayat",
   [STATE_ASSEMBLY_FILL_LAYER_ID]: "Assembly Constituency",
   [STATE_PARLIAMENT_FILL_LAYER_ID]: "Parliamentary Constituency",
+  [STATE_GP_FILL_LAYER_ID]: "Gram Panchayat",
   [STATE_POLICE_FILL_LAYER_ID]: "Police Station",
   [POLICE_HOBLIES_FILL_LAYER_ID]: "Police-area Hobli",
   [POLICE_VILLAGES_FILL_LAYER_ID]: "Police-area Village",
@@ -976,6 +985,9 @@ const BOUNDARY_LAYER_IDS = [
   STATE_ASSEMBLY_LINE_LAYER_ID,
   STATE_PARLIAMENT_FILL_LAYER_ID,
   STATE_PARLIAMENT_LINE_LAYER_ID,
+  STATE_GP_FILL_LAYER_ID,
+  STATE_GP_LINE_LAYER_ID,
+  STATE_GP_LABEL_LAYER_ID,
   STATE_POLICE_FILL_LAYER_ID,
   STATE_POLICE_LINE_LAYER_ID,
   STATE_POLICE_LABEL_LAYER_ID,
@@ -1020,6 +1032,8 @@ const BOUNDARY_SOURCE_IDS = [
   STATE_DISTRICTS_LABELS_SOURCE_ID,
   STATE_ASSEMBLY_SOURCE_ID,
   STATE_PARLIAMENT_SOURCE_ID,
+  STATE_GP_SOURCE_ID,
+  STATE_GP_LABELS_SOURCE_ID,
   STATE_POLICE_SOURCE_ID,
   POLICE_HOBLIES_SOURCE_ID,
   POLICE_VILLAGES_SOURCE_ID,
@@ -1049,6 +1063,18 @@ const STATE_BOUNDARY_LAYER_IDS = [
   "states-fill-default",
   "states-borders-default",
   "states-labels-default",
+  "states-labels-default-hover",
+];
+
+// The national outline is the first administrative level shown on initial load. Clicking it
+// reveals the updated state/UT layer, after which the existing state -> district hierarchy
+// continues unchanged.
+const INDIA_SOURCE_ID = "india-boundary-updated";
+const INDIA_LABELS_SOURCE_ID = "india-boundary-updated-label";
+const INDIA_BOUNDARY_LAYER_IDS = [
+  "india-fill-entry",
+  "india-border-entry",
+  "india-label-entry",
 ];
 
 // Every layer id that belongs to the "Administrative Boundaries" group: the default
@@ -1057,6 +1083,7 @@ const STATE_BOUNDARY_LAYER_IDS = [
 // filters panel's "Administrative Boundaries" checkbox. The raster basemap layers are
 // intentionally excluded.
 const ADMIN_BOUNDARY_LAYER_IDS = [
+  ...INDIA_BOUNDARY_LAYER_IDS,
   ...STATE_BOUNDARY_LAYER_IDS,
   ...BOUNDARY_LAYER_IDS,
 ];
@@ -1312,6 +1339,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // "administrative" so the india states / districts / taluks / hoblies / villages layers
   // show initially. Layers added later follow the active mode.
   const boundaryLayerModeRef = useRef<BoundaryLayerMode>("administrative");
+  // False on initial load: only the national India outline is visible. It becomes true when
+  // India is clicked (or a state is reached through search), revealing the updated states.
+  const statesRevealedRef = useRef(false);
   // Mirrors the active base layer ("satellite" | "terrain" | "default") for refs that run
   // outside React (async cadastral loads), so the parcel grid recolors correctly even when
   // the basemap switched while a village's cadastrals were still loading.
@@ -1330,11 +1360,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     ADMIN_BOUNDARY_LAYER_IDS.forEach((layerId) => {
       if (!map.getLayer(layerId)) return;
+      const isIndiaLayer = INDIA_BOUNDARY_LAYER_IDS.includes(layerId);
       const isStatesLayer = STATE_BOUNDARY_LAYER_IDS.includes(layerId);
       const isAssemblyLayer =
         layerId === STATE_ASSEMBLY_FILL_LAYER_ID || layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
       const isParliamentLayer =
         layerId === STATE_PARLIAMENT_FILL_LAYER_ID || layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+      const isGramPanchayatLayer =
+        layerId === STATE_GP_FILL_LAYER_ID ||
+        layerId === STATE_GP_LINE_LAYER_ID ||
+        layerId === STATE_GP_LABEL_LAYER_ID;
       const isPoliceLayer =
         layerId === STATE_POLICE_FILL_LAYER_ID ||
         layerId === STATE_POLICE_LINE_LAYER_ID ||
@@ -1357,13 +1392,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         layerId === GP_BOUNDARIES_FILL_LAYER_ID ||
         layerId === GP_BOUNDARIES_LINE_LAYER_ID ||
         layerId === GP_BOUNDARIES_LABELS_LAYER_ID;
-      const visible =
-        showAll ||
-        (mode === "assembly" && (isStatesLayer || isAssemblyLayer)) ||
-        (mode === "parliamentary" && (isStatesLayer || isParliamentLayer)) ||
-        (mode === "police_station" && (isStatesLayer || isPoliceLayer));
-        (mode === "gram_panchayat" && (isStatesLayer || isGpLayer)) ||
-        (mode === "civic_amenities" && (isStatesLayer || isCivicLayer));
+      const atIndiaEntry = !statesRevealedRef.current;
+      const visible = isIndiaLayer
+        ? atIndiaEntry
+        : isStatesLayer
+          ? !atIndiaEntry
+          : !atIndiaEntry &&
+            (showAll ||
+              (mode === "assembly" && isAssemblyLayer) ||
+              (mode === "parliamentary" && isParliamentLayer) ||
+              (mode === "gram_panchayat" && (isGramPanchayatLayer || isGpLayer)) ||
+              (mode === "police_station" && isPoliceLayer) ||
+              (mode === "civic_amenities" && isCivicLayer));
       map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
     });
 
@@ -1632,6 +1672,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // haven't finished loading yet or no state with that name exists.
   const selectStateByName = (map: MapLibreMap, name: string): boolean => {
     if (!map.getSource(STATE_SOURCE_ID)) return false;
+    if (!statesRevealedRef.current) revealUpdatedStates(map);
     const normalized = name.trim().toLowerCase();
     const features = map.querySourceFeatures(STATE_SOURCE_ID, {
       filter: ["==", ["downcase", ["get", "st_nm"]], normalized],
@@ -1674,6 +1715,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Name (lowercased) of the taluk whose gram panchayat boundaries are currently loaded.
   const loadedGpBoundariesTalukRef = useRef<string | null>(null);
   const selectedParliamentIdRef = useRef<string | number | null>(null);
+
+  const loadedGramPanchayatStateRef = useRef<string | null>(null);
 
   // Name of the state whose police-station jurisdictions are currently loaded, if any.
   const loadedPoliceStateRef = useRef<string | null>(null);
@@ -1757,6 +1800,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     selectedParliamentIdRef.current = null;
   };
 
+  const clearStateGramPanchayats = (map: MapLibreMap) => {
+    if (map.getLayer(STATE_GP_LABEL_LAYER_ID)) map.removeLayer(STATE_GP_LABEL_LAYER_ID);
+    if (map.getLayer(STATE_GP_LINE_LAYER_ID)) map.removeLayer(STATE_GP_LINE_LAYER_ID);
+    if (map.getLayer(STATE_GP_FILL_LAYER_ID)) map.removeLayer(STATE_GP_FILL_LAYER_ID);
+    if (map.getSource(STATE_GP_LABELS_SOURCE_ID)) map.removeSource(STATE_GP_LABELS_SOURCE_ID);
+    if (map.getSource(STATE_GP_SOURCE_ID)) map.removeSource(STATE_GP_SOURCE_ID);
+    loadedGramPanchayatStateRef.current = null;
+  };
+
+  const revealUpdatedStates = (map: MapLibreMap) => {
+    statesRevealedRef.current = true;
+    applyBoundaryLayerVisibility(map);
+    map.fitBounds(
+      [
+        [67.5, 5.5],
+        [98.5, 38.5],
+      ],
+      { padding: 36, duration: 700 }
+    );
+  };
+
   const clearPoliceCoverage = (map: MapLibreMap) => {
     [
       POLICE_VILLAGES_LABEL_LAYER_ID,
@@ -1781,6 +1845,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getSource(STATE_POLICE_SOURCE_ID)) map.removeSource(STATE_POLICE_SOURCE_ID);
     loadedPoliceStateRef.current = null;
     selectedPoliceIdRef.current = null;
+  };
+
   const clearGpBoundaries = (map: MapLibreMap) => {
     if (map.getLayer(GP_BOUNDARIES_FILL_LAYER_ID)) map.removeLayer(GP_BOUNDARIES_FILL_LAYER_ID);
     if (map.getLayer(GP_BOUNDARIES_LINE_LAYER_ID)) map.removeLayer(GP_BOUNDARIES_LINE_LAYER_ID);
@@ -1842,6 +1908,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     clearStateDistricts(map);
     clearStateAssembly(map);
     clearStateParliament(map);
+    clearStateGramPanchayats(map);
     clearStatePolice(map);
     clearGpDistricts(map);
     clearCivicDistricts(map);
@@ -2093,6 +2160,76 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
+  const loadStateGramPanchayats = async (map: MapLibreMap, stateName: string) => {
+    const normalized = stateName.trim().toLowerCase();
+    if (loadedGramPanchayatStateRef.current === normalized) return;
+
+    try {
+      const response = await fetch(
+        `/api/datasets/state-gram-panchayats?state=${encodeURIComponent(stateName)}`
+      );
+      if (!response.ok) {
+        console.warn(`No Gram Panchayat boundary data available for "${stateName}"`);
+        return;
+      }
+      const gramPanchayatData = await response.json();
+
+      clearStateBoundaryLayers(map);
+      map.addSource(STATE_GP_SOURCE_ID, {
+        type: "geojson",
+        data: gramPanchayatData,
+        generateId: true,
+      });
+      map.addLayer({
+        id: STATE_GP_FILL_LAYER_ID,
+        type: "fill",
+        source: STATE_GP_SOURCE_ID,
+        paint: {
+          "fill-color": "#22c55e",
+          "fill-opacity": [
+            "case",
+            ["boolean", ["feature-state", "hover"], false],
+            0.25,
+            0.06,
+          ],
+        },
+      });
+      map.addLayer({
+        id: STATE_GP_LINE_LAYER_ID,
+        type: "line",
+        source: STATE_GP_SOURCE_ID,
+        paint: {
+          "line-color": "#22c55e",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 11, 1.5],
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: STATE_GP_LABEL_LAYER_ID,
+        type: "symbol",
+        source: STATE_GP_SOURCE_ID,
+        minzoom: 9,
+        layout: {
+          "text-field": ["get", "KGISGPName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 9, 9, 13, 12],
+          "text-max-width": 9,
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": "#14532d",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+
+      loadedGramPanchayatStateRef.current = normalized;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Gram Panchayat boundaries for "${stateName}":`, error);
+    }
+  };
+
   // Loads all police-station jurisdiction polygons for a state from the same MinIO
   // administrative-boundary hierarchy used by the constituency layers.
   const loadStatePolice = async (map: MapLibreMap, stateName: string) => {
@@ -2260,106 +2397,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
-  const clearTalukHoblies = (map: MapLibreMap) => {
-    clearHobliVillages(map);
-    if (map.getLayer(TALUK_HOBLIES_FILL_LAYER_ID)) map.removeLayer(TALUK_HOBLIES_FILL_LAYER_ID);
-    if (map.getLayer(TALUK_HOBLIES_LINE_LAYER_ID)) map.removeLayer(TALUK_HOBLIES_LINE_LAYER_ID);
-    removeLabelLayer(map, TALUK_HOBLIES_LABELS_LAYER_ID);
-    if (map.getSource(TALUK_HOBLIES_SOURCE_ID)) map.removeSource(TALUK_HOBLIES_SOURCE_ID);
-    if (map.getSource(TALUK_HOBLIES_LABELS_SOURCE_ID)) map.removeSource(TALUK_HOBLIES_LABELS_SOURCE_ID);
-    loadedHobliesTalukRef.current = null;
-    selectedHobliIdRef.current = null;
-    loadedHobliesDataRef.current = null;
-  };
-
-  // Restores the pristine (hole-free) ancestor fill data when the cadastral view clears.
-  const restoreAncestorFills = (map: MapLibreMap) => {
-    const sources: Array<[string, GeoJSON.FeatureCollection | null]> = [
-      [STATE_SOURCE_ID, loadedStatesDataRef.current],
-      [STATE_DISTRICTS_SOURCE_ID, loadedDistrictsDataRef.current],
-      [DISTRICT_TALUKS_SOURCE_ID, loadedTaluksDataRef.current],
-      [TALUK_HOBLIES_SOURCE_ID, loadedHobliesDataRef.current],
-    ];
-    for (const [sourceId, pristine] of sources) {
-      if (!pristine) continue;
-      const source = map.getSource(sourceId);
-      if (source && "setData" in source) {
-        (source as GeoJSONSource).setData(pristine);
-      }
-    }
-  };
-
   // Punches the selected village polygon as a hole into each ancestor fill layer's geometry
   // (state → district → taluk → hobli), so those fills stay visible everywhere EXCEPT inside
   // the selected village - where the cadastral grid and the basemap underneath show through
   // clearly. Only the source data is swapped (from the pristine refs), so feature ids and
   // hover/selection states are untouched; restoreAncestorFills reverses it on clear.
-  const applyVillageCutout = (map: MapLibreMap, villageGeometry: GeoJSON.Geometry) => {
-    const sources: Array<[string, GeoJSON.FeatureCollection | null]> = [
-      [STATE_SOURCE_ID, loadedStatesDataRef.current],
-      [STATE_DISTRICTS_SOURCE_ID, loadedDistrictsDataRef.current],
-      [DISTRICT_TALUKS_SOURCE_ID, loadedTaluksDataRef.current],
-      [TALUK_HOBLIES_SOURCE_ID, loadedHobliesDataRef.current],
-    ];
-    for (const [sourceId, pristine] of sources) {
-      if (!pristine) continue;
-      const source = map.getSource(sourceId);
-      if (!source || !("setData" in source)) continue;
-      (source as GeoJSONSource).setData(withVillageHole(pristine, villageGeometry));
-    }
-  };
-
-  const clearVillageCadastrals = (map: MapLibreMap) => {
-    if (map.getLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID);
-    if (map.getLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID);
-    if (map.getLayer(VILLAGE_CADASTRALS_LABELS_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_LABELS_LAYER_ID);
-    if (map.getSource(VILLAGE_CADASTRALS_SOURCE_ID)) map.removeSource(VILLAGE_CADASTRALS_SOURCE_ID);
-    loadedCadastralsVillageRef.current = null;
-    loadedCadastralsDataRef.current = null;
-    // Restore the ancestor drill fills now that the cadastral view is gone.
-    restoreAncestorFills(map);
-  };
-
-  const clearHobliVillages = (map: MapLibreMap) => {
-    clearVillageCadastrals(map);
-    if (map.getLayer(HOBLI_VILLAGES_FILL_LAYER_ID)) map.removeLayer(HOBLI_VILLAGES_FILL_LAYER_ID);
-    if (map.getLayer(HOBLI_VILLAGES_LINE_LAYER_ID)) map.removeLayer(HOBLI_VILLAGES_LINE_LAYER_ID);
-    removeLabelLayer(map, HOBLI_VILLAGES_LABELS_LAYER_ID);
-    if (map.getSource(HOBLI_VILLAGES_SOURCE_ID)) map.removeSource(HOBLI_VILLAGES_SOURCE_ID);
-    if (map.getSource(HOBLI_VILLAGES_LABELS_SOURCE_ID)) map.removeSource(HOBLI_VILLAGES_LABELS_SOURCE_ID);
-    loadedVillagesHobliRef.current = null;
-    selectedVillageIdRef.current = null;
-    selectedVillageNameRef.current = null;
-    loadedVillagesDataRef.current = null;
-    selectedHobliNameRef.current = null;
-  };
-
-  const clearDistrictTaluks = (map: MapLibreMap) => {
-    clearTalukHoblies(map);
-    if (map.getLayer(DISTRICT_TALUKS_FILL_LAYER_ID)) map.removeLayer(DISTRICT_TALUKS_FILL_LAYER_ID);
-    if (map.getLayer(DISTRICT_TALUKS_LINE_LAYER_ID)) map.removeLayer(DISTRICT_TALUKS_LINE_LAYER_ID);
-    removeLabelLayer(map, DISTRICT_TALUKS_LABELS_LAYER_ID);
-    if (map.getSource(DISTRICT_TALUKS_SOURCE_ID)) map.removeSource(DISTRICT_TALUKS_SOURCE_ID);
-    if (map.getSource(DISTRICT_TALUKS_LABELS_SOURCE_ID)) map.removeSource(DISTRICT_TALUKS_LABELS_SOURCE_ID);
-    loadedTaluksDistrictRef.current = null;
-    selectedTalukIdRef.current = null;
-    loadedTaluksDataRef.current = null;
-  };
-
-  // Fetches and renders a district's taluk/subdistrict boundaries from MinIO
-  // (via /api/datasets/district-taluks). Triggered by clicking an already-selected
-  // district a second time.
-  const loadDistrictTaluks = async (
-    map: MapLibreMap,
-    districtName: string,
-    stateName: string,
-    data?: GeoJSON.FeatureCollection
-  ) => {
-    const normalized = districtName.trim().toLowerCase();
-    if (loadedTaluksDistrictRef.current === normalized) return; // already showing
-    const generation = drillGenerationRef.current; // stale-load guard for undo/redo
-
-    console.log(`Loading taluks for district: ${districtName}, state: ${stateName}`);
   // Fetches and renders a state's gram panchayat district boundaries from MinIO (via
   // /api/datasets/gram-panchayat-districts), e.g. Karnataka's KARNATAKA_DISTRICTS.geojson.
   // Triggered by clicking a state while the "Gram Panchayat Boundaries" filter option is
@@ -4212,11 +4254,82 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           // the user switches to "default" via the LayersControl.
           if (DEFAULT_MAP_LAYER === "default") addDefaultBaseLayers(map);
 
-          // Load India state boundaries by default
+          // Start with the updated national India boundary. The updated state/UT boundaries
+          // are loaded at the same time but remain hidden until India is clicked.
           try {
-            const statesResponse = await fetch("/data/india_states.geojson");
+            const [indiaResponse, statesResponse] = await Promise.all([
+              fetch("/data/india_boundary_updated.geojson"),
+              fetch("/data/india_states_updated.geojson"),
+            ]);
+            if (!indiaResponse.ok || !statesResponse.ok) {
+              throw new Error("Unable to load the updated India administrative boundaries");
+            }
+            const indiaData = await indiaResponse.json();
             const statesData = await statesResponse.json();
             loadedStatesDataRef.current = statesData;
+
+            map.addSource(INDIA_SOURCE_ID, {
+              type: "geojson",
+              data: indiaData,
+              generateId: true,
+            });
+            map.addSource(INDIA_LABELS_SOURCE_ID, {
+              type: "geojson",
+              data: labelAnchorFeatures(indiaData, ["name"]),
+            });
+            map.addLayer({
+              id: "india-fill-entry",
+              type: "fill",
+              source: INDIA_SOURCE_ID,
+              paint: {
+                "fill-color": "#00FFFF",
+                "fill-opacity": [
+                  "case",
+                  ["boolean", ["feature-state", "hover"], false],
+                  0.2,
+                  0.07,
+                ],
+              },
+            });
+            map.addLayer({
+              id: "india-border-entry",
+              type: "line",
+              source: INDIA_SOURCE_ID,
+              paint: {
+                "line-color": "#00FFFF",
+                "line-width": 3,
+                "line-opacity": 1,
+              },
+            });
+            map.addLayer({
+              id: "india-label-entry",
+              type: "symbol",
+              source: INDIA_LABELS_SOURCE_ID,
+              layout: {
+                "text-field": "INDIA",
+                "text-font": ["Noto Sans Regular"],
+                "text-size": 18,
+                "text-letter-spacing": 0.16,
+              },
+              paint: {
+                "text-color": "#0f172a",
+                "text-halo-color": "#ffffff",
+                "text-halo-width": 2.5,
+              },
+            });
+
+            map.on("mouseenter", "india-fill-entry", () => {
+              map.setFeatureState({ source: INDIA_SOURCE_ID, id: 0 }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", "india-fill-entry", () => {
+              map.setFeatureState({ source: INDIA_SOURCE_ID, id: 0 }, { hover: false });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", "india-fill-entry", () => {
+              if (drawingToolRef.current) return;
+              revealUpdatedStates(map);
+            });
 
             // Add state boundaries source. generateId assigns each feature a numeric id so we
             // can address it with setFeatureState for hover/selection highlighting below.
@@ -4254,6 +4367,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   0,
                 ],
               },
+              layout: { visibility: "none" },
             });
 
             // Add state boundary lines - pure neon cyan at full opacity and a slightly
@@ -4272,6 +4386,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 ],
                 "line-opacity": 1,
               },
+              layout: { visibility: "none" },
             });
 
             // Label-grow-on-hover for every boundary-name label layer (states, districts,
@@ -4380,7 +4495,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   ? loadedParliamentStateRef.current === clickedStateName
                   : isPoliceMode
                     ? loadedPoliceStateRef.current === clickedStateName
-                  : loadedDistrictsStateRef.current === clickedStateName;
                   : isGramPanchayatMode
                     ? loadedGpDistrictsStateRef.current === clickedStateName
                     : isCivicAmenitiesMode
@@ -4417,15 +4531,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   } else if (isParliamentMode) {
                     console.log(`Auto-loading parliamentary constituencies for state: ${stateName}`);
                     void loadStateParliament(map, stateName);
-                  } else {
-                    console.log(`Auto-loading police station boundaries for state: ${stateName}`);
-                    void loadStatePolice(map, stateName);
                   } else if (isGramPanchayatMode) {
                     console.log(`Auto-loading gram panchayat districts for state: ${stateName}`);
                     void loadStateGramPanchayatDistricts(map, stateName);
                   } else if (isCivicAmenitiesMode) {
                     console.log(`Auto-loading civic amenities districts for state: ${stateName}`);
                     void loadStateCivicDistricts(map, stateName);
+                  } else {
+                    console.log(`Auto-loading police station boundaries for state: ${stateName}`);
+                    void loadStatePolice(map, stateName);
                   }
                 }
                 return;
@@ -4934,7 +5048,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               // Automatically load taluks when district is selected
-              const stateName = feature.properties?.stname as string | undefined;
+              // New KGIS district boundaries do not repeat the parent state name on every
+              // feature. Use it when present for legacy data, otherwise use the state that
+              // was selected to load this district layer.
+              const stateName =
+                (feature.properties?.stname as string | undefined) ??
+                selectedStateNameRef.current ??
+                undefined;
               selectedDistrictNameRef.current = districtName ?? null;
               if (districtName && stateName) {
                 console.log(`Loading taluks automatically for ${districtName}, ${stateName}`);
@@ -5556,6 +5676,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 // Wrap long names like "Andaman and Nicobar Islands" so they stay inside
                 // small states instead of spilling over their neighbours.
                 "text-max-width": 9,
+                visibility: "none",
               },
               paint: {
                 "text-color": "#475569",
@@ -5564,7 +5685,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               },
             };
             map.addLayer(stateLabelLayer);
-            map.addLayer(hoverLabelLayerSpec(stateLabelLayer));
+            const stateHoverLabelLayer = hoverLabelLayerSpec(stateLabelLayer);
+            stateHoverLabelLayer.layout = {
+              ...stateHoverLabelLayer.layout,
+              visibility: "none",
+            };
+            map.addLayer(stateHoverLabelLayer);
           } catch (error) {
             console.error("Failed to load India state boundaries:", error);
           }
@@ -5628,9 +5754,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // Identify custom layers we want to keep
     const customLayerIds = currentLayers
       .filter((l) => 
+        l.id === "india-fill-entry" ||
+        l.id === "india-border-entry" ||
+        l.id === "india-label-entry" ||
         l.id === "states-fill-default" ||
         l.id === "states-borders-default" ||
         l.id === "states-labels-default" ||
+        l.id === "states-labels-default-hover" ||
         l.id === STATE_DISTRICTS_FILL_LAYER_ID ||
         l.id === STATE_DISTRICTS_LINE_LAYER_ID ||
         l.id === STATE_DISTRICTS_LABELS_LAYER_ID ||
@@ -5638,6 +5768,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
         l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
         l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
+        l.id === STATE_GP_FILL_LAYER_ID ||
+        l.id === STATE_GP_LINE_LAYER_ID ||
+        l.id === STATE_GP_LABEL_LAYER_ID ||
         l.id === STATE_POLICE_FILL_LAYER_ID ||
         l.id === STATE_POLICE_LINE_LAYER_ID ||
         l.id === STATE_POLICE_LABEL_LAYER_ID ||
@@ -5664,12 +5797,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // Identify custom sources we want to keep
     const customSourceIds = Object.keys(style.sources).filter(
       (sourceId) =>
+        sourceId === INDIA_SOURCE_ID ||
+        sourceId === INDIA_LABELS_SOURCE_ID ||
         sourceId === STATE_SOURCE_ID ||
         sourceId === STATE_LABELS_SOURCE_ID ||
         sourceId === STATE_DISTRICTS_SOURCE_ID ||
         sourceId === STATE_DISTRICTS_LABELS_SOURCE_ID ||
         sourceId === STATE_ASSEMBLY_SOURCE_ID ||
         sourceId === STATE_PARLIAMENT_SOURCE_ID ||
+        sourceId === STATE_GP_SOURCE_ID ||
+        sourceId === STATE_GP_LABELS_SOURCE_ID ||
         sourceId === STATE_POLICE_SOURCE_ID ||
         sourceId.startsWith("police-") ||
         sourceId === DISTRICT_TALUKS_SOURCE_ID ||
@@ -5857,6 +5994,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedAssemblyIdRef.current = null;
       loadedParliamentStateRef.current = null;
       selectedParliamentIdRef.current = null;
+      loadedGramPanchayatStateRef.current = null;
       loadedPoliceStateRef.current = null;
       selectedPoliceIdRef.current = null;
       loadedGpDistrictsStateRef.current = null;
@@ -6073,24 +6211,35 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearDistrictTaluks(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
-        if (mode === "gram_panchayat" || mode === "civic_amenities") {
+        if (mode === "gram_panchayat") {
           clearStateAssembly(map);
           clearStateParliament(map);
+          clearStateGramPanchayats(map);
+          clearStatePolice(map);
+        } else if (mode === "civic_amenities") {
+          clearStateAssembly(map);
+          clearStateParliament(map);
+          clearStateGramPanchayats(map);
+          clearStatePolice(map);
         } else if (mode === "assembly") {
           clearStateParliament(map);
+          clearStateGramPanchayats(map);
           clearStatePolice(map);
         } else if (mode === "parliamentary") {
           clearStateAssembly(map);
+          clearStateGramPanchayats(map);
           clearStatePolice(map);
         } else {
           clearStateAssembly(map);
           clearStateParliament(map);
+          clearStateGramPanchayats(map);
           const selectedState = selectedStateNameRef.current;
           if (selectedState) void loadStatePolice(map, selectedState);
         }
       } else if (mode === "administrative") {
         clearStateAssembly(map);
         clearStateParliament(map);
+        clearStateGramPanchayats(map);
         clearStatePolice(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);

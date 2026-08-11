@@ -8,6 +8,7 @@ Nothing depends on an external boundary API at runtime.
 
 | File | Contents | Source |
 | --- | --- | --- |
+| `world-land.geojson` | All continents + country polygons (177 countries), used as the globe backdrop from the first frame | Natural Earth 110m (public domain), packaged by the `world-atlas` npm package; converted from TopoJSON by `scripts/prepare-geodata.mjs` |
 | `india-boundary.geojson` | India national outline (dissolved from state polygons, simplified to ~56 KB for the subtle globe outline) | Derived from `india-states.geojson` |
 | `india-states.geojson` | 37 Indian states / union territories with `st_nm` (state name) attributes | Derived from the project's existing `frontend/public/data/india_states.geojson` |
 | `karnataka-boundary.geojson` | Karnataka state boundary (extracted MultiPolygon) | Derived from `india-states.geojson` |
@@ -52,6 +53,26 @@ City centres in `src/data/locations.ts` are real, standard geographic references
 | Hubballi-Dharwad | 75.1239 | 15.3647 | Hubballi-Dharwad municipal centre |
 
 ## Basemap tiles
+
+### Satellite imagery (local city stage)
+
+When the camera reaches the local city stage (e.g. Bengaluru), the map fades in a
+**satellite basemap** so the workflow shows real imagery of the searched place, kept in
+the component's light theme by a soft pale-blue wash over the tiles.
+
+| Item | Value |
+| --- | --- |
+| Provider | ESRI World Imagery (`server.arcgisonline.com/ArcGIS/rest/services/World_Imagery`) |
+| Licence | Free for non-commercial/demo use (attribution required) |
+| Attribution | "Imagery © Esri, Maxar, Earthstar Geographics" |
+| Layer | `satellite-raster` (raster tiles) + `satellite-tint` (pale-blue wash) |
+| Visibility | Fades in by zoom: `0` below z5 → `0.9` at z7 → `0.95` at z9, so it appears only as the camera dives to the city and auto-fades out on reset |
+| Fallback | If the tile host is unreachable, the pale-blue canvas simply shows through (graceful degradation) |
+
+**Note:** This is demo imagery, NOT the final commercial basemap — the production
+product will use its licensed satellite providers (e.g. ISRO Bhuvan).
+
+### Optional external style
 
 The demo may optionally load a raster/vector basemap via `VITE_MAP_STYLE_URL` /
 `VITE_MAP_ACCESS_TOKEN` (see `.env.example`). **Demo tiles are NOT the final commercial

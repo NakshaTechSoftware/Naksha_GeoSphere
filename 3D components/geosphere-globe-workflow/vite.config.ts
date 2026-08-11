@@ -4,6 +4,11 @@ import react from "@vitejs/plugin-react";
 // Isolated review prototype - plain Vite app. Geodata and assets live in /public.
 export default defineConfig({
   plugins: [react()],
+  // maplibre-gl v6 is ESM-only and imports its worker via `new URL(..., import.meta.url)`;
+  // excluding it from the dep optimizer avoids broken worker resolution in dev.
+  optimizeDeps: {
+    exclude: ["maplibre-gl"],
+  },
   server: {
     port: 5199,
     strictPort: true,

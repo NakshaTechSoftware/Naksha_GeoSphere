@@ -21,7 +21,7 @@
     "@turf/turf": "^7.1.0",
     "gsap": "^3.12.7",
     "lucide-react": "^0.469.0",
-    "maplibre-gl": "^4.7.1",
+    "maplibre-gl": "^6.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -36,8 +36,10 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^25.0.1",
+    "topojson-client": "^3.1.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "world-atlas": "^2.0.2"
   }
 }

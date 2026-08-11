@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import gsap from "gsap";
 import { buildWorkflowTimeline, type StageHandler } from "./workflowTimeline";
 import { WORKFLOW_STAGES, STAGE_ORDER, type WorkflowStage } from "./workflowStages";
 import { STAGE_START_TIMES } from "./workflowDurations";
@@ -82,6 +81,7 @@ export function useWorkflowController(args: WorkflowControllerArgs): WorkflowCon
   const onLoopCompleteRef = useRef(onLoopComplete);
   const createHandlersRef = useRef(createHandlers);
   const userPausedRef = useRef(false);
+  const loopRafRef = useRef<number | null>(null);
 
   useEffect(() => { loopRef.current = isLooping; }, [isLooping]);
   useEffect(() => { locationIndexRef.current = locationIndex; }, [locationIndex]);
@@ -111,7 +111,8 @@ export function useWorkflowController(args: WorkflowControllerArgs): WorkflowCon
           const nextIdx = locationIndexRef.current;
           onLoopCompleteRef.current?.(nextIdx);
           // Rebuild on the next frame to avoid setState-during-complete issues.
-          requestAnimationFrame(() => {
+          loopRafRef.current = requestAnimationFrame(() => {
+            loopRafRef.current = null;
             buildAndStart(true);
           });
         } else {
@@ -141,6 +142,10 @@ export function useWorkflowController(args: WorkflowControllerArgs): WorkflowCon
   useEffect(() => {
     const tl = buildAndStart(autoPlay);
     return () => {
+      if (loopRafRef.current !== null) {
+        cancelAnimationFrame(loopRafRef.current);
+        loopRafRef.current = null;
+      }
       tl.kill();
       timelineRef.current = null;
     };

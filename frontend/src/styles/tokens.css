@@ -74,4 +74,38 @@
   /* Typography */
   --font-sans: var(--font-inter, "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
   --font-inter: var(--font-inter, "Inter", system-ui, sans-serif);
+
+  /* ------------------------------------------------------------------------
+   * Bare aliases for the globe-workflow component (approved palette).
+   * The 3D workflow component (portable from the isolated prototype) references
+   * the approved palette by these short names; keep them in sync with the
+   * --color-* tokens above.
+   * ------------------------------------------------------------------------ */
+  --polar-pearl: #f6f8fb;
+  --obsidian-graphite: #151a23;
+  --atlas-cobalt: #3563e9;
+  --cobalt-hover: #2f57ce;
+  --cobalt-active: #294db8;
+  --map-light-blue: #dcebfb;
+
+  --panel: rgba(255, 255, 255, 0.9);
+  --panel-solid: #ffffff;
+  --border: rgba(21, 26, 35, 0.08);
+  --border-strong: rgba(21, 26, 35, 0.14);
+  --shadow: 0 18px 50px rgba(21, 26, 35, 0.14);
+  --shadow-soft: 0 6px 24px rgba(21, 26, 35, 0.08);
+
+  --aoi-fill: rgba(53, 99, 233, 0.24);
+  --aoi-outline: #3563e9;
+
+  --text-primary: #151a23;
+  --text-secondary: rgba(21, 26, 35, 0.6);
+  --text-tertiary: rgba(21, 26, 35, 0.42);
+
+  /* NOTE: the component's radius tokens (--radius-sm/md/lg) are deliberately NOT
+   * declared at :root here - the frontend already owns those names with different
+   * values (6px/10px/16px). The globe-workflow module CSS re-declares its own
+   * values (9px/12px/16px) scoped to the component root so nothing else changes. */
+
+  --font-ui: var(--font-inter, "Inter", "Segoe UI", system-ui, -apple-system, sans-serif);
 }

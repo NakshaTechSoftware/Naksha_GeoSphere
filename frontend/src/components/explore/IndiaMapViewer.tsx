@@ -4,9 +4,12 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import type {
   Map as MapLibreMap,
   MapGeoJSONFeature,
+  GeoJSONFeature,
   GeoJSONSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
+import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
 
 // Matches a place label (e.g. "Karnataka", "Bengaluru") rendered by the basemap's place layer
@@ -663,6 +666,32 @@ const VILLAGE_CADASTRALS_FILL_LAYER_ID = "village-cadastrals-fill";
 const VILLAGE_CADASTRALS_LINE_LAYER_ID = "village-cadastrals-line";
 const VILLAGE_CADASTRALS_LABELS_LAYER_ID = "village-cadastrals-labels";
 
+// Cadastral (survey/parcel) overlay palette: bright white on satellite imagery (so the grid
+// pops against the darker aerial backdrop, with survey numbers carrying a dark halo), classic
+// navy on the OSM-style/terrain bases. Shared by the addLayer specs in loadVillageCadastrals
+// and applyCadastralColors so the two can never drift apart.
+const CADASTRAL_COLORS = {
+  satellite: { line: "#ffffff", lineWidth: 1.1, lineOpacity: 1, text: "#ffffff", halo: "#151a23", haloWidth: 2 },
+  standard: { line: "#000080", lineWidth: 0.8, lineOpacity: 0.9, text: "#000080", halo: "#ffffff", haloWidth: 1.5 },
+} as const;
+
+// Recolors the cadastral overlay to match the active basemap (see CADASTRAL_COLORS). Paint is
+// updated in place, so an already-loaded cadastral view recolors instantly when the user
+// switches basemaps; missing layers (nothing loaded yet) are skipped safely.
+function applyCadastralColors(map: MapLibreMap, satellite: boolean) {
+  const c = CADASTRAL_COLORS[satellite ? "satellite" : "standard"];
+  if (map.getLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID)) {
+    map.setPaintProperty(VILLAGE_CADASTRALS_LINE_LAYER_ID, "line-color", c.line);
+    map.setPaintProperty(VILLAGE_CADASTRALS_LINE_LAYER_ID, "line-width", c.lineWidth);
+    map.setPaintProperty(VILLAGE_CADASTRALS_LINE_LAYER_ID, "line-opacity", c.lineOpacity);
+  }
+  if (map.getLayer(VILLAGE_CADASTRALS_LABELS_LAYER_ID)) {
+    map.setPaintProperty(VILLAGE_CADASTRALS_LABELS_LAYER_ID, "text-color", c.text);
+    map.setPaintProperty(VILLAGE_CADASTRALS_LABELS_LAYER_ID, "text-halo-color", c.halo);
+    map.setPaintProperty(VILLAGE_CADASTRALS_LABELS_LAYER_ID, "text-halo-width", c.haloWidth);
+  }
+}
+
 // Layers queried by the right-click attribute-info popup (deepest boundary under the cursor
 // wins). The invisible hit-test fill layers are included - like the click handlers, they are
 // rendered (fill-opacity 0) and thus queryable. Order does not matter: queryRenderedFeatures
@@ -1062,6 +1091,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // "administrative" so the india states / districts / taluks / hoblies / villages layers
   // show initially. Layers added later follow the active mode.
   const boundaryLayerModeRef = useRef<BoundaryLayerMode>("administrative");
+  // Mirrors the active base layer ("satellite" | "terrain" | "default") for refs that run
+  // outside React (async cadastral loads), so the parcel grid recolors correctly even when
+  // the basemap switched while a village's cadastrals were still loading.
+  const currentLayerRef = useRef<MapLayer>(DEFAULT_MAP_LAYER);
 
   // Shows/hides every existing boundary layer to match the active mode, including any
   // manually-toggled Bengaluru extra files. In the constituency modes the neon-blue
@@ -1332,7 +1365,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
-  const selectStateFeature = (map: MapLibreMap, feature: MapGeoJSONFeature) => {
+  const selectStateFeature = (map: MapLibreMap, feature: GeoJSONFeature) => {
     if (feature.id === undefined) return;
     clearStateSelection(map);
     selectedStateIdRef.current = feature.id;
@@ -2276,9 +2309,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: VILLAGE_CADASTRALS_SOURCE_ID,
         paint: {
-          "line-color": "#000080",
-          "line-width": 0.8,
-          "line-opacity": 0.9,
+          "line-color": CADASTRAL_COLORS.standard.line,
+          "line-width": CADASTRAL_COLORS.standard.lineWidth,
+          "line-opacity": CADASTRAL_COLORS.standard.lineOpacity,
         },
       });
 
@@ -2304,9 +2337,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           visibility: "visible",
         },
         paint: {
-          "text-color": "#000080",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 1.5,
+          "text-color": CADASTRAL_COLORS.standard.text,
+          "text-halo-color": CADASTRAL_COLORS.standard.halo,
+          "text-halo-width": CADASTRAL_COLORS.standard.haloWidth,
         },
       });
 
@@ -2325,6 +2358,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           applyVillageCutout(map, villageFeature.geometry);
         }
       }
+      // Recolor the parcel grid for the active basemap (white/bright on satellite).
+      applyCadastralColors(map, currentLayerRef.current === "satellite");
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load cadastral boundaries for "${villageName}":`, error);
@@ -2719,6 +2754,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           };
         };
 
+        configureMaplibreWorker();
         // OpenFreeMap "Liberty" style: MapLibre's classic look (parks, land, water, roads all colored)
         const map = new maplibregl.Map({
           container: containerRef.current,
@@ -3999,6 +4035,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
 
     setCurrentLayer(layer);
+    currentLayerRef.current = layer;
+    // Recolor the cadastral overlay for the new basemap (white on satellite, navy otherwise).
+    applyCadastralColors(map, layer === "satellite");
   };
 
   // Pressing Escape clears any loaded boundary (Karnataka, Bengaluru wards, or a manually

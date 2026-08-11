@@ -1,5 +1,5 @@
 import { HeroContent } from "./HeroContent";
-import { MarketplaceMapPreview } from "./MarketplaceMapPreview";
+import { GlobeWorkflowPreview } from "./GlobeWorkflowPreview";
 
 export function HeroSection() {
   return (
@@ -9,8 +9,8 @@ export function HeroSection() {
           {/* Left: Hero Content */}
           <HeroContent />
 
-          {/* Right: Map Preview */}
-          <MarketplaceMapPreview />
+          {/* Right: 3D Workflow Preview */}
+          <GlobeWorkflowPreview />
         </div>
       </div>
     </section>

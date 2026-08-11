@@ -6,7 +6,7 @@ export const STAGE_DURATIONS: Record<WorkflowStage, number> = {
   GLOBE_INTRO: 2.1, // 0.0 - 2.5
   ROTATE_TO_INDIA: 2.5, // 2.5 - 5.0
   INDIA_FOCUS: 1.8, // 5.0 - 6.8
-  KARNATAKA_FOCUS: 2.0, // 6.8 - 8.8
+  KARNATAKA_FOCUS: 1.5, // 6.8 - 8.3
   LOCAL_FLY_IN: 2.7, // 8.8 - 11.5
   LOCAL_MAP_READY: 1.0, // 11.5 - 12.5 (interface assemble)
   AOI_SELECTION: 3.2, // 12.5 - 15.7

@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import gsap from "gsap";
 import type { WorkflowStage } from "../../animation/workflowStages";
 import type { StageHandler } from "../../animation/workflowTimeline";
-import { STAGE_GROUP } from "../../animation/workflowStages";
 import { useWorkflowController } from "../../animation/useWorkflowController";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useVisibilityPause } from "../../hooks/useVisibilityPause";
@@ -10,21 +9,19 @@ import { GlobeMap, type GlobeMapHandle } from "./GlobeMap";
 import { GlobeIntro } from "./GlobeIntro";
 import { GeographyHighlight } from "./GeographyHighlight";
 import { SearchBar } from "./SearchBar";
-import { LayerPanel } from "./LayerPanel";
 import { AOISelection } from "./AOISelection";
 import { DataPanel } from "./DataPanel";
 import { DatasetSelector } from "./DatasetSelector";
-import { FormatSelector } from "./FormatSelector";
 import { ExportPanel } from "./ExportPanel";
 import { PaymentPanel } from "./PaymentPanel";
 import { SecureProcessing } from "./SecureProcessing";
 import { EmailDelivery } from "./EmailDelivery";
 import { CompletionState } from "./CompletionState";
 import { AnimatedCursor, type CursorHandle } from "./AnimatedCursor";
-import { WorkflowStatus } from "./WorkflowStatus";
 import { buildAOIPolygon, seedForCity } from "../../map/aoiGeometry";
 import {
   GLOBE_START,
+  GLOBE_SPIN_TARGET,
   INDIA_TARGET,
   KARNATAKA_TARGET,
   localCityTarget,
@@ -50,25 +47,6 @@ export interface GlobeWorkflowProps {
   onControllerReady?: (controller: ReturnType<typeof useWorkflowController>) => void;
   className?: string;
 }
-
-const STAGE_LABELS: Record<WorkflowStage, string> = {
-  BOOT: "Preparing",
-  GLOBE_INTRO: "Exploring Earth",
-  ROTATE_TO_INDIA: "Flying to India",
-  INDIA_FOCUS: "India",
-  KARNATAKA_FOCUS: "Karnataka",
-  LOCAL_FLY_IN: "Approaching location",
-  LOCAL_MAP_READY: "Map ready",
-  AOI_SELECTION: "Selecting area",
-  DATA_DISCOVERY: "Finding data",
-  FORMAT_SELECTION: "Choosing format",
-  EXPORT_REQUEST: "Exporting data",
-  PAYMENT: "Secure payment",
-  SECURE_PROCESSING: "Preparing package",
-  EMAIL_DELIVERY: "Delivering to email",
-  DELIVERY_COMPLETE: "Delivered",
-  RESET: "Resetting",
-};
 
 /**
  * The isolated cinematic workflow component. One GSAP timeline (useWorkflowController)
@@ -104,15 +82,8 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [searchTyping, setSearchTyping] = useState(false);
-  const [layersVisible, setLayersVisible] = useState(false);
-  const [layerChecks, setLayerChecks] = useState<Record<string, boolean>>({
-    imagery: true,
-    elevation: false,
-  });
   const [aoiOverlay, setAoiOverlay] = useState(false);
   const [vertexCount, setVertexCount] = useState(0);
-  const [areaLabel, setAreaLabel] = useState("");
-  const [areaVisible, setAreaVisible] = useState(false);
   const [dataVisible, setDataVisible] = useState(false);
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]);
   const [formats, setFormats] = useState<string[]>([]);
@@ -130,8 +101,6 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
   const [emailVisible, setEmailVisible] = useState(false);
   const [emailStatus, setEmailStatus] = useState<"sending" | "sent">("sending");
   const [completeVisible, setCompleteVisible] = useState(false);
-  const [statusVisible, setStatusVisible] = useState(true);
-  const [uiFade] = useState(true);
 
   const createHandlers = useCallback(
     (location: WorkflowLocation) => {
@@ -141,8 +110,13 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
       handlers.BOOT = ({ sub }) => {
         sub.set({}, {}).call(() => {
           setIntroVisible(true);
-          setStatusVisible(false);
+          // Clear any leftover local-stage UI (also covers manual Restart jumps).
+          setAoiOverlay(false);
+          setVertexCount(0);
+          setDataVisible(false);
+          setSearchVisible(false);
           const map = mapHandleRef.current;
+          map?.clearAOI();
           map?.flyTo(GLOBE_START, 0);
         });
       };
@@ -152,16 +126,20 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           setIntroVisible(true);
           const map = mapHandleRef.current;
           map?.setProjection("globe");
+          // Open on the full globe with all continents visible, then let it spin slowly.
           map?.flyTo(GLOBE_START, 0);
+          map?.easeTo(GLOBE_SPIN_TARGET, reducedMotion ? 0 : 1650);
         }, [], 0);
-        sub.to({}, { duration: reducedMotion ? 0.1 : 0.6 });
+        sub.to({}, { duration: reducedMotion ? 0.1 : 0.5 });
       };
 
       handlers.ROTATE_TO_INDIA = ({ sub }) => {
         sub.call(() => {
           const map = mapHandleRef.current;
           map?.showIndia();
-          map?.flyTo(INDIA_TARGET, 1800);
+          // Rotate straight to the focused India view - no intermediate stop on the
+          // globe-level India swing (removed the first pause).
+          map?.easeTo({ ...INDIA_TARGET, zoom: 3.4 }, 2100);
           setIntroVisible(false);
           setIndiaLabel(true);
         }, [], 0);
@@ -179,7 +157,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
         sub.call(() => {
           const map = mapHandleRef.current;
           map?.showKarnataka();
-          map?.easeTo(KARNATAKA_TARGET, 1400);
+          map?.easeTo(KARNATAKA_TARGET, 800);
           setIndiaLabel(false);
           setKarnatakaLabel(true);
           setCrumbs(["India", "Karnataka"]);
@@ -187,21 +165,37 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
       };
 
       handlers.LOCAL_FLY_IN = ({ sub }) => {
+        // Hold the Karnataka view: type "Karnataka, <City>" letter-by-letter (a bit
+        // fast), and only then dive the camera to the city.
+        const full = `${location.state}, ${location.city}`;
+        const charDur = 0.05; // ~50ms per keystroke - fast but readable
+
         sub.call(() => {
-          const map = mapHandleRef.current;
-          map?.flyTo(localCityTarget(location), 2400);
           setKarnatakaLabel(true);
           setCrumbs(["India", "Karnataka", location.city]);
           setSearchVisible(true);
+          setSearchText("");
+          setSearchTyping(true);
         }, [], 0);
-        // Type the search text progressively.
-        const full = location.label;
+
+        // Letter-by-letter typing timeline (deterministic, no setInterval).
         const typingTl = gsap.timeline();
-        typingTl.set({}, {});
-        typingTl.call(() => setSearchTyping(true));
-        typingTl.call(() => setSearchText(full), [], 0.1);
-        typingTl.call(() => setSearchTyping(false), [], 1.8);
-        sub.add(typingTl, 0.5);
+        full.split("").forEach((_, i) => {
+          typingTl.call(() => setSearchText(full.slice(0, i + 1)), [], i * charDur);
+        });
+        typingTl.call(() => setSearchTyping(false), [], full.length * charDur + 0.2);
+        // Padding so the typing sub has non-zero duration (fires under seek-driven tests).
+        typingTl.to({}, { duration: 0.001, ease: "none" });
+        sub.add(typingTl, 0.2);
+
+        // After typing finishes, switch to the 2D map and dive to the city.
+        const diveAt = 0.2 + full.length * charDur + 0.35;
+        sub.call(() => {
+          const map = mapHandleRef.current;
+          // At this zoom the globe and Mercator projections align, so the switch is seamless.
+          map?.setProjection("mercator");
+          map?.flyTo(localCityTarget(location), 2000);
+        }, [], diveAt);
       };
 
       handlers.LOCAL_MAP_READY = ({ sub }) => {
@@ -209,63 +203,83 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           setKarnatakaLabel(false);
           setCrumbs([]);
           setSearchTyping(false);
-          setLayersVisible(true);
-          setDataVisible(true);
           setDatasetsVisible(true);
-          setStatusVisible(true);
         }, [], 0);
       };
 
       handlers.AOI_SELECTION = ({ sub, reducedMotion }) => {
         const geom = buildAOIPolygon(location.center, seedForCity(location.city));
+        // The "Draw AOI" button shows first; the cursor clicks it, then drawing begins.
+        const clickAt = 0.7; // cursor reaches the button
+        const drawStart = clickAt + 0.5; // drawing begins after the click registers
+
         sub.call(() => {
           setAoiOverlay(true);
           setVertexCount(0);
           const map = mapHandleRef.current;
-          map?.easeTo(aoiViewTarget(location), 800);
+          // Push the AOI toward the lower half of the rounded box (below the toolbar),
+          // scaled to the container's real height so it never escapes the box.
+          const boxH = containerEl?.getBoundingClientRect().height ?? 500;
+          map?.easeTo(aoiViewTarget(location, boxH), 800);
           const cursor = cursorRef.current;
           cursor?.show();
         }, [], 0);
+
+        // Cursor clicks the "Draw AOI" button (toolbar acts as the button).
+        sub.call(() => {
+          const cursor = cursorRef.current;
+          const btn = findCursorTarget("aoi-button", containerEl);
+          if (btn && cursor) {
+            cursor.moveTo(btn.x, btn.y, 0.6);
+            cursor.click();
+          }
+        }, [], clickAt);
 
         if (reducedMotion) {
           sub.call(() => {
             const map = mapHandleRef.current;
             map?.setAOIData(geom.feature, geom.vertices);
+            map?.fitAOI(geom.bounds);
             setVertexCount(geom.vertices.length);
-            setAreaLabel(`${formatAreaKm2(geom.areaSqKm)} km²`);
-          }, [], 0);
-          sub.call(() => setAreaVisible(true), [], 0.9);
+            // Selected Data panel appears only once the AOI has been drawn.
+            setDataVisible(true);
+          }, [], drawStart);
         } else {
-          // Draw the polygon point-by-point, like a real manual selection.
+          // Draw the polygon point-by-point, like a real manual selection: the cursor
+          // glides to each vertex's on-map position and clicks there as it lays the edge.
           const total = geom.vertices.length;
-          const stepDur = 2.6 / total;
+          const stepDur = 2.4 / total;
+          const travel = Math.min(0.28, stepDur * 0.45);
           geom.vertices.forEach((_, i) => {
+            const t0 = drawStart + i * stepDur;
+            sub.call(() => {
+              const map = mapHandleRef.current;
+              const cursor = cursorRef.current;
+              if (map && cursor) {
+                const p = map.projectPoint(geom.vertices[i]);
+                cursor.moveTo(p.x, p.y, travel);
+              }
+            }, [], t0);
             sub.call(
               () => {
                 const map = mapHandleRef.current;
                 map?.setAOIPartial(geom.vertices.slice(0, i + 1));
                 setVertexCount(i + 1);
+                cursorRef.current?.click();
               },
-            [],
-            i * stepDur
-          );
+              [],
+              t0 + travel
+            );
           });
           sub.call(() => {
             const map = mapHandleRef.current;
             map?.setAOIData(geom.feature, geom.vertices);
+            // Keep the drawn AOI inside the rounded box (below the toolbar).
+            map?.fitAOI(geom.bounds);
             setVertexCount(total);
-            setAreaLabel(`${formatAreaKm2(geom.areaSqKm)} km²`);
-            setAreaVisible(true);
-          }, [], total * stepDur + 0.15);
-          // Cursor click on the AOI button first.
-          sub.call(() => {
-            const cursor = cursorRef.current;
-          const btn = findCursorTarget("aoi-button", containerEl);
-          if (btn && cursor) {
-            cursor.moveTo(btn.x, btn.y, 0.7);
-            cursor.click();
-          }
-          }, [], 0);
+            // Selected Data panel appears only once the AOI has finished drawing.
+            setDataVisible(true);
+          }, [], drawStart + total * stepDur + 0.15);
         }
       };
 
@@ -286,7 +300,6 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
               setPriceVisible(true);
             },
           });
-          setLayerChecks((c) => ({ ...c, elevation: true }));
         }, [], 0);
       };
 
@@ -317,19 +330,24 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
             cursor.click();
           }
         }, [], 0);
+        // Switch to the summary card AFTER the button click registers (React needs a
+        // render cycle for the summary's DOM to exist).
         sub.call(() => {
           setExportStage("summary");
           cursorRef.current?.hover(false);
-        }, [], 0);
+        }, [], 0.55);
+        // Then glide the cursor to "Continue to Payment" and click it - scheduled after
+        // the summary has rendered so the target element actually exists.
         sub.call(() => {
           const cursor = cursorRef.current;
           const target = findCursorTarget("continue", containerEl);
           if (target && cursor) {
-            cursor.moveTo(target.x, target.y, 0.7);
+            cursor.moveTo(target.x, target.y, 0.45);
             cursor.hover(true);
             cursor.click();
           }
-        }, [], 0);
+        }, [], 0.7);
+        sub.call(() => cursorRef.current?.hover(false), [], 1.3);
       };
 
       handlers.PAYMENT = ({ sub }) => {
@@ -408,12 +426,10 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           setCompleteVisible(false);
           setSearchVisible(false);
           setSearchText("");
-          setLayersVisible(false);
           setDataVisible(false);
           setDatasetsVisible(false);
           setAoiOverlay(false);
           setVertexCount(0);
-          setAreaVisible(false);
           setExportVisible(false);
           setPaymentVisible(false);
           setProcessingVisible(false);
@@ -422,7 +438,6 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           setFormats([]);
           setPriceVisible(false);
           setPriceLabel("");
-          setLayerChecks({ imagery: true, elevation: false });
           const map = mapHandleRef.current;
           map?.clearAOI();
           map?.resetGeography();
@@ -458,18 +473,19 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
 
   useVisibilityPause(controller.timeline, controller.isPlaying, containerRef);
 
-  // Surface the controller to the parent (review panel) once it exists.
+  // Surface the controller to the parent (review panel) once it exists. Done in an
+  // effect so the parent's setState never runs during this component's render.
   const onControllerReadyRef = useRef(onControllerReady);
   onControllerReadyRef.current = onControllerReady;
   const controllerExposed = useRef(false);
-  if (controller.timeline && !controllerExposed.current) {
-    controllerExposed.current = true;
-    onControllerReadyRef.current?.(controller);
-  }
+  useEffect(() => {
+    if (controller.timeline && !controllerExposed.current) {
+      controllerExposed.current = true;
+      onControllerReadyRef.current?.(controller);
+    }
+  }, [controller]);
 
   const currentStage = controller.stage;
-  const stageGroup = STAGE_GROUP[currentStage];
-  const stageLabel = STAGE_LABELS[currentStage];
 
   const aoi = useMemo(
     () => buildAOIPolygon(controller.location.center, seedForCity(controller.location.city)),
@@ -497,7 +513,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
       <GlobeMap ref={mapHandleRef} className={styles.mapCanvas} />
 
       {/* Overlays / panels (all decorative). */}
-      <div className={`${styles.uiLayer} ${uiFade ? "" : styles.uiFadeOut}`}>
+      <div className={styles.uiLayer}>
         <GlobeIntro visible={introVisible} />
         <GeographyHighlight label="INDIA" crumbs={[]} visible={indiaLabel} position="center" />
         <GeographyHighlight
@@ -507,13 +523,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           position="northwest"
         />
         <SearchBar visible={searchVisible} value={searchText} typing={searchTyping} />
-        <LayerPanel visible={layersVisible} checked={layerChecks} />
-        <AOISelection
-          visible={aoiOverlay}
-          vertexCount={vertexCount}
-          areaLabel={areaLabel || areaLabelText}
-          areaVisible={areaVisible}
-        />
+        <AOISelection visible={aoiOverlay} vertexCount={vertexCount} cursorTarget />
         <DataPanel
           visible={dataVisible}
           locationLabel={controller.location.label}
@@ -524,7 +534,6 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           priceVisible={priceVisible}
         />
         <DatasetSelector visible={datasetsVisible} selected={selectedDatasets} />
-        <FormatSelector visible={formats.length > 0 && stageGroup === "data"} formats={formats} />
         <ExportPanel
           visible={exportVisible}
           stage={exportStage}
@@ -532,6 +541,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           formats={formats}
           areaLabel={areaLabelText}
           priceLabel={priceLabel || formatINR(demoPrice(["imagery", "kml"]))}
+          cursorTarget
         />
         <PaymentPanel
           visible={paymentVisible}
@@ -543,7 +553,6 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
         <SecureProcessing visible={processingVisible} progress={progress} stepLabel={stepLabel} />
         <EmailDelivery visible={emailVisible} status={emailStatus} />
         <CompletionState visible={completeVisible} />
-        <WorkflowStatus visible={statusVisible} stageLabel={stageLabel} locationLabel={controller.location.city} />
       </div>
 
       {cursorVisible && <AnimatedCursor ref={cursorRef} />}

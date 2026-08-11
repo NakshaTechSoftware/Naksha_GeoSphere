@@ -12,6 +12,7 @@ import {
   type AttributeInfo,
 } from "./IndiaMapViewer";
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
+import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
 import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
@@ -25,8 +26,8 @@ const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
 // The Boundary Layers group is single-select: exactly one option is active at a time
 // (radio-like behavior, rendered as checkboxes). "administrative" shows every loaded
 // administrative boundary layer; "assembly" and "parliamentary" show the neon-blue
-// india_states geojson plus their loaded constituency boundaries; the gram panchayat
-// option isn't wired to map data yet.
+// india_states geojson plus their loaded constituency boundaries; "gram panchayat" shows
+// the neon-blue states too (panchayat boundaries aren't wired to data yet).
 
 const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "administrative", label: "Administrative Boundaries" },
@@ -34,6 +35,7 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
   { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
   { id: "police_station", label: "Police Station Boundaries" },
+  { id: "civic_amenities", label: "Civic Amenities" },
 ];
 
 const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;
@@ -248,6 +250,11 @@ export function ExplorePage() {
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+
+  // Whether the export-format picker (opened from the attribute panel's "Export" action) is
+  // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
+  // the panel closes rather than tracking its own copy of the feature.
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Owner names for the selected cadastral parcel. They aren't in the cadastral GeoJSON, so
   // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
@@ -776,6 +783,7 @@ export function ExplorePage() {
                 type="button"
                 onClick={() => {
                   setAttributeInfo(null);
+                  setExportModalOpen(false);
                   mapViewerRef.current?.clearAttributeInfo();
                 }}
                 aria-label="Close attribute panel"
@@ -859,7 +867,26 @@ export function ExplorePage() {
                 ))}
               </tbody>
             </table>
+            <div className="border-t border-gray-100 p-3">
+              <button
+                type="button"
+                onClick={() => setExportModalOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-gray-50"
+              >
+                Export
+              </button>
+            </div>
           </aside>
+        )}
+
+        {exportModalOpen && attributeInfo && (
+          <ExportFeatureModal
+            title={attributeInfo.title}
+            geometry={attributeInfo.geometry}
+            properties={attributeInfo.properties}
+            hierarchy={attributeInfo.hierarchy}
+            onClose={() => setExportModalOpen(false)}
+          />
         )}
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}

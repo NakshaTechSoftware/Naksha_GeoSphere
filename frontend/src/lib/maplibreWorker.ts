@@ -16,7 +16,13 @@ import * as maplibregl from "maplibre-gl";
  * `scripts/sync-maplibre-worker.mjs` (wired into `postinstall` so they always match the
  * installed maplibre version).
  */
-const MAPLIBRE_WORKER_URL = "/maplibre/maplibre-gl-worker.mjs";
+// Browsers cache workers aggressively. Bump MAPLIBRE_WORKER_VERSION whenever the synced
+// worker changes (i.e. after upgrading maplibre-gl and re-running
+// scripts/sync-maplibre-worker.mjs) so a stale pre-upgrade worker can never run against a
+// newer main-thread build - a version mismatch between the two is exactly what produces
+// maplibre-gl-js#7752 ("Out of bounds ... _numberToString.length 0" in queryRenderedFeatures).
+const MAPLIBRE_WORKER_VERSION = "6.2.0";
+const MAPLIBRE_WORKER_URL = `/maplibre/maplibre-gl-worker.mjs?v=${MAPLIBRE_WORKER_VERSION}`;
 
 /**
  * Points maplibre's GeoJSON worker at the public-served copy. Must run before any map is

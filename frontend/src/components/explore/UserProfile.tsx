@@ -6,6 +6,8 @@ import { User, LogOut, Settings, HelpCircle } from "lucide-react";
 interface UserProfileProps {
   userName?: string;
   userEmail?: string;
+  /** Fired with the new open state whenever the avatar button toggles the dropdown. */
+  onMenuToggle?: (open: boolean) => void;
 }
 
 /**
@@ -15,6 +17,7 @@ interface UserProfileProps {
 export function UserProfile({
   userName = "Guest User",
   userEmail = "guest@naksha.com",
+  onMenuToggle,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -34,7 +37,11 @@ export function UserProfile({
     <div className="relative flex-shrink-0">
       {/* Profile Avatar Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          const next = !isOpen;
+          setIsOpen(next);
+          onMenuToggle?.(next);
+        }}
         className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors shadow-lg flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
         aria-label="User profile menu"
       >

@@ -3324,6 +3324,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       map.addLayer(villageLabelLayer);
       map.addLayer(hoverLabelLayerSpec(villageLabelLayer));
 
+      // Village labels replace the parent hobli label while drilling down. Keeping both
+      // makes the hobli name (for example "Bikkodu") look like another village label and
+      // encourages clicks on a village polygon underneath it.
+      if (map.getLayer(TALUK_HOBLIES_LABELS_LAYER_ID)) {
+        map.setLayoutProperty(TALUK_HOBLIES_LABELS_LAYER_ID, "visibility", "none");
+      }
+      if (map.getLayer(`${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`)) {
+        map.setLayoutProperty(`${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`, "visibility", "none");
+      }
+
       loadedVillagesHobliRef.current = normalized;
       applyBoundaryLayerVisibility(map);
     } catch (error) {
@@ -3343,16 +3353,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     talukName: string,
     districtName: string,
     stateName: string,
+    villageCode?: string,
     data?: GeoJSON.FeatureCollection
   ) => {
-    const normalized = villageName.trim().toLowerCase();
+    const normalized = `${villageCode ?? ""}:${villageName.trim().toLowerCase()}`;
     if (loadedCadastralsVillageRef.current === normalized) return; // already showing
     const generation = drillGenerationRef.current; // stale-load guard for undo/redo
 
     console.log(`Loading cadastrals for village: ${villageName}, hobli: ${hobliName}, taluk: ${talukName}, district: ${districtName}, state: ${stateName}`);
 
     const cacheBust = Date.now();
-    const url = `/api/datasets/village-cadastrals?village=${encodeURIComponent(villageName)}&hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}&_t=${cacheBust}`;
+    const villageCodeParam = villageCode ? `&villageCode=${encodeURIComponent(villageCode)}` : "";
+    const url = `/api/datasets/village-cadastrals?village=${encodeURIComponent(villageName)}${villageCodeParam}&hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}&_t=${cacheBust}`;
 
     try {
       let cadastralData: GeoJSON.FeatureCollection;
@@ -3656,6 +3668,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         snap.hoblies?.parent ?? "",
         snap.taluks?.parent ?? "",
         snap.state ?? "",
+        undefined,
         snap.cadastrals.data
       );
     }
@@ -5647,8 +5660,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 const districtName = selectedDistrictNameRef.current;
                 const stateName = selectedStateNameRef.current;
                 if (villageName !== "Unknown Village" && hobliName && talukName && districtName && stateName) {
+                  const villageCode = String(
+                    feature.properties?.KGISVillageCode ??
+                      feature.properties?.UniqueVillageCode ??
+                      feature.properties?.KGISVill_1 ??
+                      ""
+                  ).split("_")[0];
                   console.log(`[Village Cadastrals] Requesting cadastrals for village="${villageName}", hobli="${hobliName}", taluk="${talukName}", district="${districtName}", state="${stateName}"`);
-                  void loadVillageCadastrals(map, villageName, hobliName, talukName, districtName, stateName);
+                  void loadVillageCadastrals(
+                    map,
+                    villageName,
+                    hobliName,
+                    talukName,
+                    districtName,
+                    stateName,
+                    villageCode || undefined
+                  );
                 }
               } else {
                 // Deselected the village - clear its cadastral boundaries

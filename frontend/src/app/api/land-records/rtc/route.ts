@@ -85,7 +85,7 @@ class BhoomiSession {
   }
 }
 
-async function prepareParcel(p: ParcelParams) {
+async function prepareSurvey(p: ParcelParams) {
   const session = new BhoomiSession();
   await session.open();
 
@@ -112,9 +112,26 @@ async function prepareParcel(p: ParcelParams) {
   await session.post({ ...form, __EVENTTARGET: `${PREFIX}txtCSurveyNo` }, "survey number");
   await session.post({ ...form, [`${PREFIX}btnCGo`]: "Go" }, "Go");
 
-  await step("ddlCSurnocNo", p.surnoc, "Surnoc");
-
   return { session, form };
+}
+
+async function prepareSurnoc(
+  p: ParcelParams,
+  surnoc: { value: string; text: string },
+) {
+  const prepared = await prepareSurvey(p);
+  const current =
+    prepared.session.options("ddlCSurnocNo").find((option) => option.value === surnoc.value) ??
+    prepared.session.options("ddlCSurnocNo").find(
+      (option) => matchOption([option], surnoc.text) === option.value,
+    );
+  if (!current) throw new Error(`Surnoc "${surnoc.text}" not found in Bhoomi records`);
+  prepared.form[`${PREFIX}ddlCSurnocNo`] = current.value;
+  await prepared.session.post(
+    { ...prepared.form, __EVENTTARGET: `${PREFIX}ddlCSurnocNo` },
+    `Surnoc ${current.text}`,
+  );
+  return prepared;
 }
 
 async function fetchPreparedHissa(
@@ -138,30 +155,46 @@ async function fetchPreparedHissa(
 }
 
 async function fetchOwners(p: ParcelParams): Promise<RtcOwner[]> {
-  let prepared = await prepareParcel(p);
-  const available = prepared.session.options("ddlCHissaNo");
-
-  // KGIS uses XX for an aggregate survey parcel whose Bhoomi subdivisions are not mapped
-  // individually. All available Bhoomi Hissas therefore belong to this selected geometry.
-  const aggregate = p.hissa.trim().toUpperCase() === "XX";
-  const selected = aggregate
-    ? available
-    : available.filter((option) => matchOption([option], p.hissa) === option.value);
-
-  if (selected.length === 0) {
-    throw new Error(`Hissa "${p.hissa}" not found in Bhoomi records`);
+  const initial = await prepareSurvey(p);
+  const availableSurnocs = initial.session.options("ddlCSurnocNo");
+  const allSurnocs = p.surnoc.trim() === "*" || p.surnoc.trim().toUpperCase() === "XX";
+  const selectedSurnocs = allSurnocs
+    ? availableSurnocs
+    : availableSurnocs.filter(
+        (option) => matchOption([option], p.surnoc) === option.value,
+      );
+  if (selectedSurnocs.length === 0) {
+    throw new Error(`Surnoc "${p.surnoc}" not found in Bhoomi records`);
   }
 
+  const allHissas = p.hissa.trim() === "*" || p.hissa.trim().toUpperCase() === "XX";
   const owners: RtcOwner[] = [];
-  for (let index = 0; index < selected.length; index += 1) {
-    // Fetching details advances the WebForms state. Use a fresh state chain for every
-    // additional Hissa so one result cannot contaminate the next lookup.
-    if (index > 0) prepared = await prepareParcel(p);
-    const option =
-      prepared.session
-        .options("ddlCHissaNo")
-        .find((candidate) => candidate.value === selected[index]!.value) ?? selected[index]!;
-    owners.push(...(await fetchPreparedHissa(prepared.session, prepared.form, option)));
+  for (const surnoc of selectedSurnocs) {
+    const hissaProbe = await prepareSurnoc(p, surnoc);
+    const availableHissas = hissaProbe.session.options("ddlCHissaNo");
+    const selectedHissas = allHissas
+      ? availableHissas
+      : availableHissas.filter(
+          (option) => matchOption([option], p.hissa) === option.value,
+        );
+    if (selectedHissas.length === 0) continue;
+
+    for (const hissa of selectedHissas) {
+      // Fetch details mutates WebForms state, so start a fresh chain for every combination.
+      const prepared = await prepareSurnoc(p, surnoc);
+      const currentHissa =
+        prepared.session
+          .options("ddlCHissaNo")
+          .find((option) => option.value === hissa.value) ?? hissa;
+      owners.push(
+        ...(await fetchPreparedHissa(prepared.session, prepared.form, currentHissa)),
+      );
+    }
+  }
+  if (owners.length === 0) {
+    throw new Error(
+      `No Bhoomi owner records found for survey "${p.survey}" (surnoc "${p.surnoc}", hissa "${p.hissa}")`,
+    );
   }
   return owners;
 }
@@ -174,8 +207,7 @@ export async function GET(request: NextRequest) {
     hobli: q.get("hobli") ?? "",
     village: q.get("village") ?? "",
     survey: q.get("survey") ?? "",
-    // A parcel with no subdivision carries "*" in both fields, which is exactly what the
-    // Bhoomi dropdowns offer, so the cadastral values pass through unchanged.
+    // A cadastral wildcard means all Bhoomi dropdown options for this survey.
     surnoc: q.get("surnoc") ?? "*",
     hissa: q.get("hissa") ?? "*",
   };

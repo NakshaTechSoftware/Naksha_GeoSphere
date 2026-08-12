@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { cleanFolderName, namesMatch } from '../_folder-match';
+import { cleanFolderName, namesMatch, similarity } from '../_folder-match';
 import { pickCadastralFile } from '../_cadastral-files';
 
 // Remote MinIO configuration
@@ -52,6 +52,66 @@ function findFolderByName(folders: string[], displayName: string): string | unde
   });
 }
 
+// Village names must not use the generic substring rule: names such as "Holalu" and
+// "Intitholalu" legitimately coexist under one hobli. Prefer an exact normalized match;
+// only accept a spelling-tolerance fallback when it is unique and very close.
+function findVillageFolder(folders: string[], displayName: string): string | undefined {
+  const target = cleanFolderName(displayName);
+  const candidates = folders.map((prefix) => ({
+    prefix,
+    name: cleanFolderName(prefix.split('/').slice(-2)[0] ?? ''),
+  }));
+  const exact = candidates.find(({ name }) => name === target);
+  if (exact) return exact.prefix;
+
+  const close = candidates
+    .map((candidate) => ({ ...candidate, score: similarity(candidate.name, target) }))
+    .filter(({ score }) => score >= 0.92)
+    .sort((a, b) => b.score - a.score);
+  return close.length === 1 || (close[0] && close[1] && close[0].score > close[1].score)
+    ? close[0]?.prefix
+    : undefined;
+}
+
+function findVillageFolderByCode(folders: string[], villageCode: string): string | undefined {
+  const code = villageCode.trim();
+  if (!code) return undefined;
+  return folders.find((prefix) => {
+    const folderName = prefix.split('/').slice(-2)[0] ?? '';
+    return folderName === code || folderName.startsWith(`${code}_`) || folderName.startsWith(`${code}-`);
+  });
+}
+
+async function findLegacyVillageFolderByCode(
+  s3: S3Client,
+  folders: string[],
+  villageCode: string
+): Promise<string | undefined> {
+  // Older uploads use a plain village-name folder. Inspect the cadastral metadata only
+  // when no code-prefixed folder matched, which disambiguates duplicate village names.
+  for (const folder of folders) {
+    const files = await s3.send(
+      new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: folder })
+    );
+    const key = pickCadastralFile(
+      (files.Contents ?? []).map((item) => item.Key ?? '').filter(Boolean)
+    );
+    if (!key) continue;
+    const object = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+    const text = (await object.Body?.transformToString()) ?? '{}';
+    const data = JSON.parse(text) as GeoJSON.FeatureCollection;
+    const properties = data.features[0]?.properties ?? {};
+    const storedCode = String(
+      properties.KGISVillageCode ??
+        properties._parent_village_code ??
+        properties.UniqueVillageCode ??
+        ''
+    ).split('_')[0];
+    if (storedCode === villageCode) return folder;
+  }
+  return undefined;
+}
+
 // Resolves the district → taluk → hobli → Villages/{village} → cadastral file chain, i.e.
 //   .../Districts/17_Chikkamagaluru/SubDistricts/Chikkamagaluru/Hoblis/Kasaba/Villages/{village}/...
 // Uploading a village subfolder (containing a cadastral .geojson) under the hobli's Villages/
@@ -62,6 +122,7 @@ export async function GET(request: NextRequest) {
   const taluk = request.nextUrl.searchParams.get('taluk');
   const hobli = request.nextUrl.searchParams.get('hobli');
   const village = request.nextUrl.searchParams.get('village');
+  const villageCode = request.nextUrl.searchParams.get('villageCode');
 
   try {
     if (!state || !district || !taluk || !hobli || !village) {
@@ -133,10 +194,17 @@ export async function GET(request: NextRequest) {
 
     // 5. The village folder under Villages/ (the user uploads cadastral data into a
     // village-named subfolder here, e.g. ".../Villages/Hiremagaluru/").
-    const villageFolder = findFolderByName(
-      await listSubfolders(s3Client, villagesFolder),
-      village
-    );
+    const villageFolders = await listSubfolders(s3Client, villagesFolder);
+    let villageFolder = villageCode
+      ? findVillageFolderByCode(villageFolders, villageCode)
+      : undefined;
+    if (!villageFolder && villageCode) {
+      const sameNameFolders = villageFolders.filter(
+        (folder) => cleanFolderName(folder.split('/').slice(-2)[0] ?? '') === cleanFolderName(village)
+      );
+      villageFolder = await findLegacyVillageFolderByCode(s3Client, sameNameFolders, villageCode);
+    }
+    villageFolder ??= findVillageFolder(villageFolders, village);
     if (!villageFolder) {
       return NextResponse.json(
         { error: `Village folder not found for "${village}" in hobli "${hobli}"` },

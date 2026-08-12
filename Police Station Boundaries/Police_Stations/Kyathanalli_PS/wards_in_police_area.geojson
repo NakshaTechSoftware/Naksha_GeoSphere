@@ -1,8 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "wards_in_police_area.writing_20260805_172659",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "KGISWardID": 2998, "KGISWardCode": "2207005", "KGISWardName": "Ranganatha Temple", "SHAPE.STArea()": 2022564.8792211751, "SHAPE.STLength()": 10890.094956768162, "OBJECTID": 19427, "KGISWardNo": "5", "KGISTownCode": "2207", "LGD_WardCode": 26746, "created_user": "SA", "created_date": 1634898537000, "last_edited_user": "SURESHBV1", "last_edited_date": 1692254035000, "_overlap_percent": 0.05002283396194239, "_police_station": "Kyathanalli PS", "_police_feature_index": "834", "_admin_layer": "Ward", "_geometry_clipped": true }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 76.657022174149489, 12.426205475743199 ], [ 76.658125809342437, 12.427164892394671 ], [ 76.659646412964094, 12.428493110323108 ], [ 76.660077207910376, 12.428764875131208 ], [ 76.661817041318685, 12.42986242764308 ], [ 76.66182303939209, 12.431709387839309 ], [ 76.661838394669914, 12.431706957842311 ], [ 76.661838011295742, 12.429849642550344 ], [ 76.659650231752082, 12.428492676518282 ], [ 76.658132728729782, 12.427164194654759 ], [ 76.657034392465789, 12.42620265293453 ], [ 76.657027169121278, 12.426199006920145 ], [ 76.657022174149489, 12.426205475743199 ] ] ] } }
-]
-}

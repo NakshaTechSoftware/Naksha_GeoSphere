@@ -1,8 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "wards_in_police_area.writing_20260805_172659",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "KGISWardID": 2991, "KGISWardCode": "2609013", "KGISWardName": "Yalavarahundi EXT", "SHAPE.STArea()": 3623888.7144007902, "SHAPE.STLength()": 9244.5929147044953, "OBJECTID": 20249, "KGISWardNo": "13", "KGISTownCode": "2609", "LGD_WardCode": 1920851, "created_user": "SA", "created_date": 1634898537000, "last_edited_user": "SURESHBV1", "last_edited_date": 1692254057000, "_overlap_percent": 0.017816680696092213, "_police_station": "Biligere PS", "_police_feature_index": "519", "_admin_layer": "Ward", "_geometry_clipped": true }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ 76.868538783583659, 12.207075733677673 ], [ 76.868567654504631, 12.207177870785967 ], [ 76.868561275406137, 12.207136987346546 ], [ 76.868438945037383, 12.206722527035618 ], [ 76.868538783583659, 12.207075733677673 ] ] ], [ [ [ 76.867471660368963, 12.199597197565291 ], [ 76.867741626698873, 12.199624741201015 ], [ 76.867794271412791, 12.199630112246355 ], [ 76.867916778543915, 12.199647812747029 ], [ 76.867933958255094, 12.199543822241884 ], [ 76.867777058353639, 12.199507446070184 ], [ 76.867528538700952, 12.199468447644751 ], [ 76.867471660368963, 12.199597197565291 ] ] ] ] } }
-]
-}

@@ -1,8 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "wards_in_police_area.writing_20260805_172659",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "KGISWardID": 820, "KGISWardCode": "1905007", "KGISWardName": "Bullense", "SHAPE.STArea()": 7780538.6324425647, "SHAPE.STLength()": 13154.585556858719, "OBJECTID": 18742, "KGISWardNo": "7", "KGISTownCode": "1905", "LGD_WardCode": 25825, "created_user": "SA", "created_date": 1634898537000, "last_edited_user": "SURESHBV1", "last_edited_date": 1692254014000, "_overlap_percent": 0.014121873733914119, "_police_station": "Kamasamudram PS", "_police_feature_index": "96", "_admin_layer": "Ward", "_geometry_clipped": true }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 78.241489886181256, 12.928637663696216 ], [ 78.236735315117642, 12.932947310987922 ], [ 78.236734921062251, 12.932950409520087 ], [ 78.236758357540666, 12.932951475651466 ], [ 78.241500616966093, 12.928641292387711 ], [ 78.241489886181256, 12.928637663696216 ] ] ] } }
-]
-}

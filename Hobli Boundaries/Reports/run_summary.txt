@@ -1,8 +1,0 @@
-KSRSAC Hobli downloader summary
-Finished: 2026-07-23 16:56:36
-Output: E:\KSRSAC files\Hobli Boundaries
-
-SUCCESS: 93
-
-Failed report: E:\KSRSAC files\Hobli Boundaries\Reports\failed_downloads.csv
-Unavailable report: E:\KSRSAC files\Hobli Boundaries\Reports\not_available_downloads.csv

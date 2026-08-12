@@ -1376,7 +1376,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         (mode === "police_station" && (isStatesLayer || isPoliceLayer)) ||
         (mode === "gram_panchayat" && (isStatesLayer || isGpLayer)) ||
         (mode === "civic_amenities" && (isStatesLayer || isCivicLayer));
-      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+      // Once the India states are loaded (by clicking the national boundary), the
+      // India boundary itself stays hidden - the states replace it.
+      const isIndiaBoundaryLayer =
+        layerId === "india-boundary-line" ||
+        layerId === "india-boundary-fill" ||
+        layerId === "india-boundary-label";
+      const isVisible =
+        visible && !(isIndiaBoundaryLayer && loadedStatesDataRef.current !== null);
+      map.setLayoutProperty(layerId, "visibility", isVisible ? "visible" : "none");
     });
 
     extraLayerKeysRef.current.forEach((key) => {
@@ -4155,35 +4163,42 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               generateId: true,
             });
 
-            // Visible national outline line.
+            // Visible national outline line. On hover (feature-state) the border thickens and
+            // brightens so only the boundary line itself highlights - never a fill over the
+            // country. The selected state also thickens it (kept for consistency, though the
+            // boundary hides once the states load).
             map.addLayer({
               id: "india-boundary-line",
               type: "line",
               source: INDIA_BOUNDARY_SOURCE_ID,
               paint: {
-                "line-color": "#00FFFF",
-                "line-width": 2.5,
+                "line-color": [
+                  "case",
+                  ["boolean", ["feature-state", "hover"], false],
+                  "#FFFFFF",
+                  "#00FFFF",
+                ],
+                "line-width": [
+                  "case",
+                  ["boolean", ["feature-state", "hover"], false],
+                  6,
+                  ["boolean", ["feature-state", "selected"], false],
+                  5,
+                  2.5,
+                ],
                 "line-opacity": 1,
               },
             });
 
-            // Transparent fill so the whole country is clickable to load the states. Its
-            // fill-opacity is driven by feature-states so the country highlights on hover
-            // only while it isn't selected (once selected, hovering no longer highlights it).
+            // Fully transparent fill so the whole country stays clickable to load the states.
+            // It never paints anything - the hover highlight lives on the boundary line.
             map.addLayer({
               id: "india-boundary-fill",
               type: "fill",
               source: INDIA_BOUNDARY_SOURCE_ID,
               paint: {
                 "fill-color": "#00FFFF",
-                "fill-opacity": [
-                  "case",
-                  ["boolean", ["feature-state", "selected"], false],
-                  0,
-                  ["boolean", ["feature-state", "hover"], false],
-                  0.18,
-                  0,
-                ],
+                "fill-opacity": 0,
               },
             });
 
@@ -5636,6 +5651,20 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             };
             map.addLayer(stateLabelLayer);
             map.addLayer(hoverLabelLayerSpec(stateLabelLayer));
+
+            // The India states are now loaded and rendered - hide the national
+            // boundary (outline line, clickable fill and "India" label) so it no
+            // longer overlaps the state boundaries.
+            for (const boundaryLayerId of [
+              "india-boundary-line",
+              "india-boundary-fill",
+              "india-boundary-label",
+              "india-boundary-label-hover",
+            ]) {
+              if (map.getLayer(boundaryLayerId)) {
+                map.setLayoutProperty(boundaryLayerId, "visibility", "none");
+              }
+            }
             } catch (error) {
               console.error("Failed to load India state boundaries:", error);
             }

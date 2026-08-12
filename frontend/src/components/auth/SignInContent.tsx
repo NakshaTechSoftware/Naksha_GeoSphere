@@ -31,12 +31,12 @@ export function SignInContent() {
         sessionStorage.setItem("user", JSON.stringify({ email, name: "Arjun Singh" }));
       }
       
-      // Redirect to home page
+      // Redirect to the explore page after sign-in
       await new Promise(resolve => setTimeout(resolve, 300));
-      console.log("Attempting redirect to /home-page");
+      console.log("Attempting redirect to /explore");
       
       if (typeof window !== "undefined") {
-        window.location.href = "/home-page";
+        window.location.href = "/explore";
       }
     } else {
       console.log("Credentials do not match");

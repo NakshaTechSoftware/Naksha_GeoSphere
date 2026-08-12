@@ -136,84 +136,82 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Find the hobli boundary geojson file inside the taluk folder. Delimiter '/' lists
-    // only direct children - the hobli geojson sits at the taluk folder root, so this
-    // skips the deeply-nested cadastral files under Hoblis/*/Villages/ that made the
-    // recursive listing slow.
-    const talukFilesCommand = new ListObjectsV2Command({
+    // Hobli boundaries live inside the taluk's Hoblis/<hobli>/ subfolders (each hobli
+    // folder holds its own <hobli>_hobli_boundary.geojson). List the hobli subfolders
+    // first, then collect every *_hobli_boundary.geojson and merge them into one
+    // FeatureCollection for the frontend.
+    const hoblisPrefix = `${talukFolder.Prefix}Hoblis/`;
+    const hoblisListCommand = new ListObjectsV2Command({
       Bucket: S3_BUCKET,
-      Prefix: talukFolder.Prefix,
+      Prefix: hoblisPrefix,
       Delimiter: '/',
     });
-    const talukFilesResponse = await s3Client.send(talukFilesCommand);
+    const hoblisListResponse = await s3Client.send(hoblisListCommand);
+    const hobliFolders = hoblisListResponse.CommonPrefixes?.map(p => p.Prefix) || [];
 
     console.log(`[taluk-hoblies] Taluk folder found: "${talukFolder.Prefix}"`);
-    console.log(`[taluk-hoblies] Files in taluk folder:`, talukFilesResponse.Contents?.map(c => c.Key));
-    
-    // Look for file with "hobli_boundary" pattern (e.g., Sakleshpura_hobli_boundary.geojson)
-    const hobliFile = talukFilesResponse.Contents?.find((file) => {
-      const fileName = (file.Key || '').toLowerCase();
-      const isMatch = fileName.includes('hobli_boundary') && fileName.endsWith('.geojson');
-      console.log(`[taluk-hoblies] Checking file: "${file.Key}" -> includes 'hobli_boundary': ${fileName.includes('hobli_boundary')}, ends with .geojson: ${fileName.endsWith('.geojson')} -> MATCH: ${isMatch}`);
-      return isMatch;
-    });
+    console.log(`[taluk-hoblies] Hobli subfolders:`, hobliFolders);
 
-    if (!hobliFile?.Key) {
+    if (hobliFolders.length === 0) {
       return NextResponse.json(
         { error: `No hobli boundaries file found for taluk "${taluk}"` },
         { status: 404 }
       );
     }
 
-    console.log(`[taluk-hoblies] ✓✓✓ FINAL SELECTION: Will load hobli file "${hobliFile.Key}"`);
-    console.log(`[taluk-hoblies] ✓✓✓ Expected path for Bangalore South: india/karnataka/20_Bengaluru_(Urban)/SubDistricts/2002_Bangalore-South/Bangalore-South_hobli_boundary.geojson`);
+    // Fetch and merge every hobli boundary geojson into a single FeatureCollection.
+    const allFeatures: any[] = [];
+    let hobliCount = 0;
+    for (const folder of hobliFolders) {
+      const hobliFilesCommand = new ListObjectsV2Command({
+        Bucket: S3_BUCKET,
+        Prefix: folder,
+        Delimiter: '/',
+      });
+      const hobliFilesResponse = await s3Client.send(hobliFilesCommand);
+      const hobliFile = hobliFilesResponse.Contents?.find((file) => {
+        const fileName = (file.Key || '').toLowerCase();
+        return fileName.includes('hobli_boundary') && fileName.endsWith('.geojson');
+      });
 
-    const getCommand = new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: hobliFile.Key,
-    });
+      if (!hobliFile?.Key) continue;
 
-    const presignedUrl = await getSignedUrl(s3Client, getCommand, {
-      expiresIn: 3600,
-    });
+      const getCommand = new GetObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: hobliFile.Key,
+      });
+      const presignedUrl = await getSignedUrl(s3Client, getCommand, {
+        expiresIn: 3600,
+      });
+      const fileResponse = await fetch(presignedUrl, { cache: 'no-store' });
+      if (!fileResponse.ok) continue;
 
-    const fileResponse = await fetch(presignedUrl, {
-      cache: 'no-store',
-    });
-
-    if (!fileResponse.ok) {
-      console.error(`Failed to fetch hobli geojson from MinIO: ${fileResponse.status} ${fileResponse.statusText}`);
-      throw new Error(`MinIO returned ${fileResponse.status}`);
+      try {
+        const parsed = JSON.parse(await fileResponse.text());
+        if (parsed && Array.isArray(parsed.features)) {
+          allFeatures.push(...parsed.features);
+          hobliCount++;
+        }
+      } catch (e) {
+        console.warn(`[taluk-hoblies] Failed to parse hobli file "${hobliFile.Key}":`, e);
+      }
     }
 
-    const geojson = await fileResponse.text();
-    console.log(`[taluk-hoblies] SUCCESS: Returning hobli file "${hobliFile.Key}" (${geojson.length} bytes)`);
+    if (allFeatures.length === 0) {
+      return NextResponse.json(
+        { error: `No hobli boundaries file found for taluk "${taluk}"` },
+        { status: 404 }
+      );
+    }
 
-    // Validate bounding box of returned GeoJSON
-    try {
-      const parsed = JSON.parse(geojson);
-      if (parsed.features && parsed.features.length > 0) {
-        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
-        const visitCoords = (coords: any[]) => {
-          for (const c of coords) {
-            if (Array.isArray(c[0])) { visitCoords(c); } else {
-              minLng = Math.min(minLng, c[0]); maxLng = Math.max(maxLng, c[0]);
-              minLat = Math.min(minLat, c[1]); maxLat = Math.max(maxLat, c[1]);
-            }
-          }
-        };
-        parsed.features.forEach((f: any) => f.geometry?.coordinates && visitCoords(f.geometry.coordinates));
-        console.log(`[taluk-hoblies] BBOX: Lng[${minLng.toFixed(4)}, ${maxLng.toFixed(4)}] Lat[${minLat.toFixed(4)}, ${maxLat.toFixed(4)}]`);
-        console.log(`[taluk-hoblies] Bangalore South should be approx: Lng[77.45-77.75] Lat[12.82-12.98]`);
-        if (minLat > 12.98 || maxLat < 12.82) {
-          console.warn(`[taluk-hoblies] WARNING: Coordinates look wrong for Bangalore South!`);
-        }
-      }
-    } catch(e) { /* ignore parse errors */ }
+    const merged: { type: 'FeatureCollection'; features: any[] } = {
+      type: 'FeatureCollection',
+      features: allFeatures,
+    };
+    console.log(`[taluk-hoblies] SUCCESS: Merged ${hobliCount} hobli files into ${allFeatures.length} features`);
 
-    return new NextResponse(geojson, {
+    return NextResponse.json(merged, {
       headers: {
-        'Content-Type': 'application/geo+json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
         'Expires': '0',

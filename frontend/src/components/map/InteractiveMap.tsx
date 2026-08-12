@@ -121,7 +121,7 @@ export function InteractiveMap({
 
             // Load India state boundaries
             try {
-              const statesResponse = await fetch("/data/india_states.geojson");
+              const statesResponse = await fetch("/geodata/india-states.geojson");
               const statesData = await statesResponse.json();
 
               // Add state boundaries source
@@ -149,7 +149,7 @@ export function InteractiveMap({
                 source: "india-states",
                 layout: {
                   "text-field": ["get", "st_nm"],
-                  "text-font": ["Open Sans Regular"],
+                  "text-font": ["Noto Sans Regular"],
                   "text-size": 12,
                   "text-anchor": "center",
                 },
@@ -218,7 +218,7 @@ export function InteractiveMap({
                 source: "datasets",
                 layout: {
                   "text-field": ["get", "name"],
-                  "text-font": ["Open Sans Regular"],
+                  "text-font": ["Noto Sans Regular"],
                   "text-size": 11,
                   "text-offset": [0, 1.5],
                   "text-anchor": "top",

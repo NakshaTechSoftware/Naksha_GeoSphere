@@ -61,6 +61,8 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
       WATCHPACK_POLLING: "true"
+      INDIA_DEM_PATH: /app/DEM_Terrain/India_DEM.tif
+      INDIA_DEM_OVERVIEW_PATH: /app/DEM_Terrain/India_DEM_overview.tif
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
@@ -68,3 +70,4 @@ services:
       - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
       - ./frontend/postcss.config.mjs:/app/postcss.config.mjs
       - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./DEM_Terrain:/app/DEM_Terrain:ro

@@ -29,6 +29,16 @@ class WorkerSettings(BaseSettings):
     celery_broker_url: str
     celery_result_backend: str
 
+    # --- Object storage (MinIO locally / S3-compatible in production) ----
+    # Mirrors services/api/app/core/config.py so the same env vars drive both.
+    minio_endpoint: str = "minio:9000"
+    minio_use_ssl: bool = False
+    minio_access_key: str
+    minio_secret_key: str
+    s3_force_path_style: bool = True
+    s3_region: str = "us-east-1"
+    s3_bucket_temporary_data: str = "geosphere-temporary-data"
+
     # Per-task safety limits.
     task_soft_time_limit_seconds: int = 240
     task_time_limit_seconds: int = 300

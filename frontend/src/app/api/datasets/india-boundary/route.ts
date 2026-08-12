@@ -9,22 +9,23 @@ const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
 const S3_REGION = 'geosphere';
 const S3_BUCKET = 'geosphere-source-data';
 
-// Maps a state name (as it appears in india_states.geojson's st_nm property) to the MinIO
-// key holding that state's district boundaries. Only states with district data uploaded to
-// MinIO are listed here.
-const STATE_DISTRICTS_KEYS: Record<string, string> = {
-  karnataka: 'Administrative Boundaries/India/Karnataka/KARNATAKA_DISTRICTS.geojson',
+// India-level administrative boundary files under Administrative Boundaries/India/.
+// `states` feeds the default state-boundary layer on the explore page; `boundary` is the
+// dissolved national outline.
+const INDIA_FILES: Record<string, string> = {
+  states: 'Administrative Boundaries/India/INDIA_STATES.geojson',
+  boundary: 'Administrative Boundaries/India/INDIA_BOUNDARY.geojson',
 };
 
 export async function GET(request: NextRequest) {
   try {
-    const state = request.nextUrl.searchParams.get('state');
-    const key = state ? STATE_DISTRICTS_KEYS[state.trim().toLowerCase()] : undefined;
+    const file = request.nextUrl.searchParams.get('file') ?? 'states';
+    const key = INDIA_FILES[file];
 
     if (!key) {
       return NextResponse.json(
-        { error: `No district data available for "${state ?? ''}"` },
-        { status: 404 }
+        { error: `Unknown india file "${file}"` },
+        { status: 400 }
       );
     }
 
@@ -56,7 +57,7 @@ export async function GET(request: NextRequest) {
     });
 
     if (!fileResponse.ok) {
-      console.error(`Failed to fetch district geojson from MinIO: ${fileResponse.status} ${fileResponse.statusText}`);
+      console.error(`Failed to fetch ${key} from MinIO: ${fileResponse.status} ${fileResponse.statusText}`);
       throw new Error(`MinIO returned ${fileResponse.status}`);
     }
 
@@ -71,12 +72,11 @@ export async function GET(request: NextRequest) {
         'Access-Control-Allow-Origin': '*',
       },
     });
-
   } catch (error) {
-    console.error('Error fetching state district boundaries:', error);
+    console.error('Error fetching India boundary data:', error);
     return NextResponse.json(
       {
-        error: 'Failed to load district boundaries',
+        error: 'Failed to load India boundary data',
         message: error instanceof Error ? error.message : 'Unknown error',
         details: 'Check if MinIO storage at 192.168.10.81:9010 is accessible',
       },

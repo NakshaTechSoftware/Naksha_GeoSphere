@@ -1,19 +1,27 @@
 """API endpoints for converting map features into downloadable GIS files
-(GeoJSON/Shapefile/KML/KMZ/GPKG/GDB) - a single right-clicked feature, or a
-hierarchical bulk export (a clicked admin level plus everything selected
-below it)."""
+(GeoJSON/Shapefile/KML/KMZ/GPKG/GDB/CSV) - a single right-clicked feature, or
+a hierarchical bulk export (a clicked admin level plus everything selected
+below it).
+
+The worker uploads the finished file to the remote object-storage temporary
+bucket and returns only an object key; this module streams the file from
+object storage back to the caller and deletes it once served."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
+import logging
 
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Response, status
 
+from app.core.config import get_settings
 from app.modules.export.schemas import ExportBulkRequest, ExportFeatureRequest
 from app.modules.export.tasks import submit_export_bulk, submit_export_feature
+from app.services.storage_client import get_s3_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -44,7 +52,28 @@ async def _await_export(async_result: AsyncResult, *, timeout: int) -> Response:
             detail=f"Export failed: {exc}",
         ) from exc
 
-    content = base64.b64decode(result["content_base64"])
+    # The worker parked the finished file in the remote temporary bucket;
+    # stream it from there, then remove it (exports are one-shot downloads
+    # and the bucket is only meant to hold transient objects).
+    bucket = get_settings().s3_bucket_temporary_data
+    key = result["key"]
+    try:
+        fetched = await asyncio.to_thread(
+            get_s3_client().get_object, Bucket=bucket, Key=key
+        )
+        content = await asyncio.to_thread(fetched["Body"].read)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Export object %s not retrievable from %s", key, bucket)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Export file could not be retrieved",
+        ) from exc
+
+    try:
+        await asyncio.to_thread(get_s3_client().delete_object, Bucket=bucket, Key=key)
+    except Exception:  # noqa: BLE001 — best-effort cleanup; leftovers are transient.
+        logger.warning("Failed to delete export object %s from %s", key, bucket)
+
     return Response(
         content=content,
         media_type=result["mimetype"],

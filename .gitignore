@@ -93,3 +93,6 @@ services/api/migrations/.autogenerate/
 # === Local app data (never commit) ===
 .claude/
 .freebuff/
+
+# === DEM terrain source data (1.9 GB, provided by ops; not committed) ===
+DEM_Terrain/

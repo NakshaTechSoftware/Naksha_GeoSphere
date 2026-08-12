@@ -447,12 +447,49 @@ export async function POST(request: NextRequest) {
 
         send({ type: "progress", message: "Preparing file…" });
 
-        const upstream = await fetch(`${config.apiUrl}/api/v1/export/bulk`, {
+        // A whole-district export can be hundreds of MB of GeoJSON - far past what a
+        // single JSON.stringify() call can safely produce (V8 has a hard ~512MB
+        // per-string limit; a district-wide survey-plot layer alone can exceed it).
+        // Stage every feature as its own tiny NDJSON line instead of one giant request
+        // body, streamed straight to the backend without ever holding the whole
+        // payload as one string in this process.
+        const stageBody = new ReadableStream<Uint8Array>({
+          start(stageController) {
+            for (const { level, features } of layerPayload) {
+              for (const feature of features) {
+                stageController.enqueue(encoder.encode(`${JSON.stringify({ level, feature })}\n`));
+              }
+            }
+            stageController.close();
+          },
+        });
+
+        const staged = await fetch(`${config.internalApiUrl}/api/v1/export/bulk/stage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-ndjson" },
+          body: stageBody,
+          // Required by Node's fetch (undici) whenever the request body is a stream.
+          duplex: "half",
+          cache: "no-store",
+        } as RequestInit & { duplex: "half" });
+
+        if (!staged.ok) {
+          const message = await parseUpstreamError(staged, staged.status);
+          send({ type: "error", message });
+          controller.close();
+          return;
+        }
+        const { staged_key: stagedKey } = (await staged.json()) as { staged_key: string };
+
+        // The finished file itself never comes back through this response either -
+        // same string-length ceiling, same fix: get back just where it lives, and let
+        // the browser download it directly from a dedicated route below.
+        const upstream = await fetch(`${config.internalApiUrl}/api/v1/export/bulk`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             export_format: exportFormat,
-            layers: layerPayload,
+            staged_key: stagedKey,
             name_hint: nameHint,
           }),
           cache: "no-store",
@@ -466,16 +503,13 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-        const contentType = upstream.headers.get("Content-Type") ?? "application/octet-stream";
-        const disposition = upstream.headers.get("Content-Disposition") ?? "";
-        const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${nameHint}.export`;
-        const buffer = Buffer.from(await upstream.arrayBuffer());
+        const result = (await upstream.json()) as { key: string; filename: string; mimetype: string };
 
         send({
           type: "done",
-          filename,
-          mimetype: contentType,
-          contentBase64: buffer.toString("base64"),
+          filename: result.filename,
+          mimetype: result.mimetype,
+          downloadUrl: `/api/export/bulk/download?key=${encodeURIComponent(result.key)}`,
         });
       } catch (error) {
         console.error("[export/bulk] failed:", error);

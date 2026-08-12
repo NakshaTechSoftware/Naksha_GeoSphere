@@ -13,7 +13,7 @@ export default function TestSignIn() {
     if (email === "demo@gmail.com" && password === "Demo@123") {
       setMessage("✅ Credentials match! Redirecting in 2 seconds...");
       setTimeout(() => {
-        window.location.href = "/home-page";
+        window.location.href = "/explore";
       }, 2000);
     } else {
       setMessage("❌ Wrong credentials. Use demo@gmail.com / Demo@123");

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { cleanFolderName, namesMatch, similarity } from '../_folder-match';
+import { booleanIntersects } from '@turf/turf';
+import { cleanFolderName, namesEqual, namesMatch, similarity } from '../_folder-match';
 import { pickCadastralFile } from '../_cadastral-files';
 
 // Remote MinIO configuration
@@ -46,10 +47,15 @@ async function listFirstPopulatedVariant(
 // like "17_Chikkamagaluru" resolves for the display name "Chikkamagaluru", and a prefixed
 // folder like "230308_Kanakatte" resolves for "Kanakatte".
 function findFolderByName(folders: string[], displayName: string): string | undefined {
-  return folders.find((prefix) => {
+  const candidates = folders.map((prefix) => {
     const folderName = prefix.split('/').slice(-2)[0] ?? '';
-    return namesMatch(cleanFolderName(folderName), displayName);
+    return { prefix, name: cleanFolderName(folderName) };
   });
+  const exact = candidates.find(({ name }) => namesEqual(name, displayName));
+  if (exact) return exact.prefix;
+
+  const fuzzy = candidates.filter(({ name }) => namesMatch(name, displayName));
+  return fuzzy.length === 1 ? fuzzy[0]?.prefix : undefined;
 }
 
 // Village names must not use the generic substring rule: names such as "Holalu" and
@@ -108,6 +114,61 @@ async function findLegacyVillageFolderByCode(
         ''
     ).split('_')[0];
     if (storedCode === villageCode) return folder;
+  }
+  return undefined;
+}
+
+function propertyText(properties: GeoJSON.GeoJsonProperties, keys: string[]): string {
+  for (const key of keys) {
+    const value = properties?.[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+
+async function findSelectedVillageBoundary(
+  s3: S3Client,
+  hobliFolder: string,
+  village: string,
+  villageCode: string | null
+): Promise<GeoJSON.Feature | undefined> {
+  const files = await s3.send(
+    new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: hobliFolder, Delimiter: '/' })
+  );
+  const boundaryKey = (files.Contents ?? [])
+    .map((item) => item.Key ?? '')
+    .find((key) => /village.*\.geojson$/i.test(key));
+  if (!boundaryKey) return undefined;
+
+  const object = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: boundaryKey }));
+  const collection = JSON.parse(
+    (await object.Body?.transformToString()) ?? '{"type":"FeatureCollection","features":[]}'
+  ) as GeoJSON.FeatureCollection;
+  const targetName = cleanFolderName(village);
+  const targetCode = villageCode?.trim() ?? '';
+
+  const candidates = collection.features.map((feature) => {
+    const properties = feature.properties;
+    const code = propertyText(properties, [
+      'KGISVillageCode', 'CensusVillageCode', 'BhoomiVillageCode',
+      'LGD_VillageCode', 'LGDVillageCode', 'village_code',
+    ]).split('_')[0];
+    const name = propertyText(properties, [
+      'KGISVillageName', 'VillageName', 'VILLAGE', 'village_name', 'Name', 'NAME',
+    ]);
+    return { feature, code, name: cleanFolderName(name) };
+  });
+
+  // Bengaluru's source boundary data reuses one village code for many named
+  // polygons. The clicked name is therefore the strongest identity signal.
+  const exactName = candidates.find(({ name }) => name === targetName);
+  if (exactName) return exactName.feature;
+
+  // A code is safe only when it identifies one sibling. Never pick the first
+  // polygon from a duplicated code group.
+  if (targetCode) {
+    const codeMatches = candidates.filter(({ code }) => code === targetCode);
+    if (codeMatches.length === 1) return codeMatches[0]?.feature;
   }
   return undefined;
 }
@@ -247,11 +308,36 @@ export async function GET(request: NextRequest) {
     }
 
     const geojson = await fileResponse.text();
+    const cadastral = JSON.parse(geojson) as GeoJSON.FeatureCollection;
+    const selectedVillage = await findSelectedVillageBoundary(
+      s3Client,
+      hobliFolder,
+      village,
+      villageCode
+    );
+    // Most village cadastral files are already correctly partitioned and must
+    // be returned intact. Spatial filtering exists only as a safeguard for
+    // unusually large aggregate files (the duplicated Bengaluru files contain
+    // thousands of city-wide parcels under every village folder).
+    const isAggregateFile = cadastral.features.length >= 2000;
+    const result = selectedVillage && isAggregateFile
+      ? {
+          ...cadastral,
+          features: cadastral.features.filter((feature) => {
+            try {
+              return Boolean(feature.geometry) && booleanIntersects(feature as never, selectedVillage as never);
+            } catch {
+              return false;
+            }
+          }),
+        }
+      : cadastral;
     console.log(
-      `[village-cadastrals] SUCCESS: "${cadastralKey}" (${geojson.length} bytes)`
+      `[village-cadastrals] SUCCESS: "${cadastralKey}" ` +
+      `(${cadastral.features.length} parcels, ${result.features.length} inside selected village)`
     );
 
-    return new NextResponse(geojson, {
+    return NextResponse.json(result, {
       headers: {
         'Content-Type': 'application/geo+json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',

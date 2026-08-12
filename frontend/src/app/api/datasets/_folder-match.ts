@@ -50,6 +50,15 @@ function canonicalName(name: string): string {
   return PLACE_ALIASES[normalized] ?? normalized;
 }
 
+// Exact comparison after applying the same normalization and known aliases as
+// namesMatch. Use this for sibling folders where suffixes carry identity
+// (for example Kasaba, Kasaba-1 and Kasaba-2).
+export function namesEqual(folderName: string, displayName: string): boolean {
+  const canonicalFolder = canonicalName(folderName);
+  const canonicalDisplay = canonicalName(displayName);
+  return Boolean(canonicalFolder && canonicalDisplay && canonicalFolder === canonicalDisplay);
+}
+
 // 0..1 closeness of two already-normalized names, for callers that need to rank candidates
 // rather than take a yes/no verdict (see namesMatch).
 export function similarity(a: string, b: string): number {

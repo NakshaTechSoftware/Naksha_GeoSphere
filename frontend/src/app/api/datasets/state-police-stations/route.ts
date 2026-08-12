@@ -9,20 +9,39 @@ const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
 const S3_REGION = 'geosphere';
 const S3_BUCKET = 'geosphere-source-data';
 
-// Maps a state name to the MinIO key holding that state's police-station
-// jurisdiction boundaries. Only states with uploaded police data are listed.
-const STATE_POLICE_KEYS: Record<string, string> = {
-  karnataka: 'Police Station Boundaries/KARNATAKA_POLICE_STATIONS.geojson',
+const POLICE_PREFIX = 'Police Station Boundaries/V3/Karnataka/Statewide/';
+const POLICE_TYPES: Record<string, string> = {
+  all: 'Karnataka_all_police_locations_and_boundaries.geojson',
+  law_and_order: 'Karnataka_Law_and_Order_locations_and_boundaries.geojson',
+  women_police: 'Karnataka_Women_Police_locations_and_boundaries.geojson',
+  traffic_police: 'Karnataka_Traffic_Police_locations_and_boundaries.geojson',
+  railway_police: 'Karnataka_Railway_Police_locations_and_boundaries.geojson',
+  railway_police_outpost: 'Karnataka_Railway_Police_Outpost_locations_and_boundaries.geojson',
+  police_outpost: 'Karnataka_Police_OutPost_locations_and_boundaries.geojson',
+  police_check_post: 'Karnataka_Police_Check_Post_locations_and_boundaries.geojson',
+  police_forest_cell: 'Karnataka_Police_Forest_Cell_locations_and_boundaries.geojson',
+  district_armed_reserve: 'Karnataka_District_Armed_Reserve_locations_and_boundaries.geojson',
+  city_armed_reserve: 'Karnataka_City_Armed_Reserve_locations_and_boundaries.geojson',
+  city_crime_branch: 'Karnataka_City_Crime_Branch_locations_and_boundaries.geojson',
+  coastal_security: 'Karnataka_Coastal_Security_locations_and_boundaries.geojson',
+  cyber_crime: 'Karnataka_Cyber_Crime_locations_and_boundaries.geojson',
+  ksisf: 'Karnataka_KSISF_locations_and_boundaries.geojson',
+  ksrp: 'Karnataka_KSRP_locations_and_boundaries.geojson',
 };
 
 export async function GET(request: NextRequest) {
   try {
     const state = request.nextUrl.searchParams.get('state');
-    const key = state ? STATE_POLICE_KEYS[state.trim().toLowerCase()] : undefined;
+    const policeType = request.nextUrl.searchParams.get('type')?.trim().toLowerCase() || 'all';
+    const district = request.nextUrl.searchParams.get('district')?.trim();
+    const filename = POLICE_TYPES[policeType];
+    const key = state?.trim().toLowerCase() === 'karnataka' && filename
+      ? `${POLICE_PREFIX}${filename}`
+      : undefined;
 
     if (!key) {
       return NextResponse.json(
-        { error: `No police station boundary data available for "${state ?? ''}"` },
+        { error: `No ${policeType} police data available for "${state ?? ''}"` },
         { status: 404 }
       );
     }
@@ -61,7 +80,14 @@ export async function GET(request: NextRequest) {
       throw new Error(`MinIO returned ${fileResponse.status}`);
     }
 
-    const geojson = await fileResponse.text();
+    let geojson = await fileResponse.text();
+    if (district && district.toLowerCase() !== 'all') {
+      const collection = JSON.parse(geojson) as GeoJSON.FeatureCollection;
+      collection.features = collection.features.filter((feature) =>
+        String(feature.properties?.district ?? '').localeCompare(district, undefined, { sensitivity: 'base' }) === 0
+      );
+      geojson = JSON.stringify(collection);
+    }
 
     return new NextResponse(geojson, {
       headers: {

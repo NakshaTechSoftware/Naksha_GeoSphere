@@ -7,6 +7,7 @@ import {
   type IndiaMapViewerHandle,
   type WardSelection,
   type BoundaryLayerMode,
+  type PoliceType,
   type AOITool,
   type AOIResult,
   type AttributeInfo,
@@ -37,6 +38,25 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "police_station", label: "Police Station Boundaries" },
   { id: "civic_amenities", label: "Civic Amenities" },
 ];
+const POLICE_TYPE_OPTIONS: { id: PoliceType; label: string }[] = [
+  { id: "all", label: "All Police Types" },
+  { id: "law_and_order", label: "Law and Order" },
+  { id: "women_police", label: "Women Police" },
+  { id: "traffic_police", label: "Traffic Police" },
+  { id: "railway_police", label: "Railway Police" },
+  { id: "railway_police_outpost", label: "Railway Police Outpost" },
+  { id: "police_outpost", label: "Police Outpost" },
+  { id: "police_check_post", label: "Police Check Post" },
+  { id: "police_forest_cell", label: "Police Forest Cell" },
+  { id: "district_armed_reserve", label: "District Armed Reserve" },
+  { id: "city_armed_reserve", label: "City Armed Reserve" },
+  { id: "city_crime_branch", label: "City Crime Branch" },
+  { id: "coastal_security", label: "Coastal Security" },
+  { id: "cyber_crime", label: "Cyber Crime" },
+  { id: "ksisf", label: "KSISF" },
+  { id: "ksrp", label: "KSRP" },
+];
+const POLICE_DISTRICTS = ["Bagalkote", "Ballari", "Belagavi", "Bengaluru (Rural)", "Bengaluru (Urban)", "Bengaluru South", "Bidar", "Chamarajanagara", "Chikkaballapura", "Chikkamagaluru", "Chitradurga", "Dakshina Kannada", "Davanagere", "Dharwad", "Gadag", "Hassan", "Haveri", "Kalaburgi", "Kodagu", "Kolara", "Koppal", "Mandya", "Mysuru", "Raichur", "Shivamogga", "Tumakuru", "Udupi", "Uttara Kannada", "Vijayanagara", "Vijayapura", "Yadgir"];
 
 const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;
 
@@ -232,6 +252,8 @@ export function ExplorePage() {
   // india states / districts / taluks / hoblies / villages layers show initially).
   const [selectedBoundaryLayer, setSelectedBoundaryLayer] =
     useState<BoundaryLayerMode>("administrative");
+  const [selectedPoliceType, setSelectedPoliceType] = useState<PoliceType>("all");
+  const [selectedPoliceDistrict, setSelectedPoliceDistrict] = useState("all");
   const [searchSuggestions, setSearchSuggestions] = useState<
     { category: string; items: string[] }[]
   >([]);
@@ -954,7 +976,8 @@ export function ExplorePage() {
                       loaded constituency boundaries; "gram panchayat" isn't wired to data
                       yet (no extra layers). */}
                     {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
-                      <label key={id} className="flex items-center text-sm text-gray-600">
+                      <div key={id}>
+                      <label className="flex items-center text-sm text-gray-600">
                         <input
                           type="checkbox"
                           className="mr-2 accent-atlas-cobalt"
@@ -966,6 +989,36 @@ export function ExplorePage() {
                         />
                         {label}
                       </label>
+                      {id === "police_station" && selectedBoundaryLayer === "police_station" && (
+                        <div>
+                        <select
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          value={selectedPoliceType}
+                          onChange={(event) => {
+                            const type = event.target.value as PoliceType;
+                            setSelectedPoliceType(type);
+                            mapViewerRef.current?.setPoliceType(type);
+                          }}
+                        >
+                          {POLICE_TYPE_OPTIONS.map((type) => (
+                            <option key={type.id} value={type.id}>{type.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          aria-label="Police district"
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          value={selectedPoliceDistrict}
+                          onChange={(event) => {
+                            setSelectedPoliceDistrict(event.target.value);
+                            mapViewerRef.current?.setPoliceDistrict(event.target.value);
+                          }}
+                        >
+                          <option value="all">All Districts</option>
+                          {POLICE_DISTRICTS.map((district) => <option key={district} value={district}>{district}</option>)}
+                        </select>
+                        </div>
+                      )}
+                      </div>
                     ))}
                   </div>
                 )}

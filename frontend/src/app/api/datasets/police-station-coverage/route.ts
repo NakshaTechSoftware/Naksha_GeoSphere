@@ -38,10 +38,14 @@ async function fetchGeojson(
 
 export async function GET(request: NextRequest) {
   try {
-    const folder = request.nextUrl.searchParams.get('folder');
+    const station = request.nextUrl.searchParams.get('station')?.trim();
+    const folder = request.nextUrl.searchParams.get('folder') ?? station
+      ?.replace(/&/g, 'and')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
     if (!folder) {
       return NextResponse.json(
-        { error: 'Missing required "folder" query parameter' },
+        { error: 'Missing required "station" or "folder" query parameter' },
         { status: 400 }
       );
     }

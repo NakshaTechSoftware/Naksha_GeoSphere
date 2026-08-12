@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "wards_in_police_area.writing_20260805_172659",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "KGISWardID": 897, "KGISWardCode": "0502001", "KGISWardName": " ", "SHAPE.STArea()": 1257829.0954002349, "SHAPE.STLength()": 6171.8628247764464, "OBJECTID": 15652, "KGISWardNo": "1", "KGISTownCode": "0502", "LGD_WardCode": 27395, "created_user": "SA", "created_date": 1634898537000, "last_edited_user": "SURESHBV1", "last_edited_date": 1692253949000, "_overlap_percent": 0.047220082454357278, "_police_station": "Hulsoor PS", "_police_feature_index": "263", "_admin_layer": "Ward", "_geometry_clipped": true }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ 76.951304175208037, 17.893261387009254 ], [ 76.951274687332457, 17.893163240372015 ], [ 76.951274687240883, 17.893163240067235 ], [ 76.951274084595923, 17.893163520156822 ], [ 76.95125666258977, 17.893247902273615 ], [ 76.951304175208037, 17.893261387009254 ] ] ], [ [ [ 76.956820552517058, 17.895253058346086 ], [ 76.956844281618984, 17.895030784191135 ], [ 76.956871668352534, 17.894748206374235 ], [ 76.956871668363689, 17.894748206259081 ], [ 76.95678448059256, 17.894727651254367 ], [ 76.956737910331725, 17.895164729102429 ], [ 76.956725150690303, 17.895284503019919 ], [ 76.956820552517058, 17.895253058346086 ] ] ] ] } }
+]
+}

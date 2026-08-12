@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T17:08:05",
+  "district": "Hassan",
+  "file_type": "PDF File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Village/PDF/23_Hassan.zip",
+  "downloaded_filename": "23 Hassan.zip",
+  "bytes": 2085034,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

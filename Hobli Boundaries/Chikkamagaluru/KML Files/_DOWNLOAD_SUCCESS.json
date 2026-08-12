@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:51:15",
+  "district": "Chikkamagaluru",
+  "file_type": "KML File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/KML/17_Chikkamagaluru.zip",
+  "downloaded_filename": "17 Chikkamagaluru.zip",
+  "bytes": 661587,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

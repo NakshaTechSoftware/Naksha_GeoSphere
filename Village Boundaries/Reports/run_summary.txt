@@ -1,0 +1,8 @@
+KSRSAC Village downloader summary
+Finished: 2026-07-23 17:12:16
+Output: E:\KSRSAC files\Village Boundaries
+
+SUCCESS: 93
+
+Failed report: E:\KSRSAC files\Village Boundaries\Reports\failed_downloads.csv
+Unavailable report: E:\KSRSAC files\Village Boundaries\Reports\not_available_downloads.csv

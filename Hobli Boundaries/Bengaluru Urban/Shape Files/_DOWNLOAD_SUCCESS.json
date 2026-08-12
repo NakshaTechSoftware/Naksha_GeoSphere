@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:49:15",
+  "district": "Bengaluru_Urban",
+  "file_type": "Shape File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/Shapefiles/20_Bengaluru_Urban.zip",
+  "downloaded_filename": "20 Bengaluru Urban.zip",
+  "bytes": 575454,
+  "payload_kind": "zip",
+  "extracted_files": 7,
+  "archive_removed_after_extraction": true
+}

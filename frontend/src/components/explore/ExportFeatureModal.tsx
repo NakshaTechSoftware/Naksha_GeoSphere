@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Download, Loader2, X } from "lucide-react";
 import type { AdminLevel, AttributeHierarchy } from "./IndiaMapViewer";
 
-export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb";
+export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
 type BulkLevel = Exclude<AdminLevel, "state">;
 
 export interface ExportFeatureModalProps {
@@ -22,6 +22,7 @@ const EXPORT_FORMAT_OPTIONS: { id: ExportFormat; label: string; hint: string }[]
   { id: "kmz", label: "KMZ", hint: ".kmz" },
   { id: "gpkg", label: "GeoPackage", hint: ".gpkg" },
   { id: "gdb", label: "File Geodatabase", hint: ".zip" },
+  { id: "csv", label: "CSV", hint: ".csv" },
 ];
 
 const LEVEL_LABEL: Record<BulkLevel, string> = {
@@ -29,16 +30,17 @@ const LEVEL_LABEL: Record<BulkLevel, string> = {
   taluk: "Taluk",
   hobli: "Hobli",
   village: "Village",
+  survey_plot: "Survey Plot",
 };
 
-const LEVEL_ORDER: BulkLevel[] = ["district", "taluk", "hobli", "village"];
+const LEVEL_ORDER: BulkLevel[] = ["district", "taluk", "hobli", "village", "survey_plot"];
 
-// Levels offered in the checklist: the clicked level itself (for district/taluk/hobli - a
-// state click has no boundary of its own to include) plus everything below it, in hierarchy
-// order. A village click offers nothing - it's already the leaf, so the dialog falls back to
-// the plain single-feature flow below.
+// Levels offered in the checklist: the clicked level itself (for district/taluk/hobli/village -
+// a state click has no boundary of its own to include) plus everything below it, in hierarchy
+// order. A survey-plot click offers nothing - it's already the leaf, so the dialog falls back
+// to the plain single-feature flow below.
 function offeredLevels(hierarchy: AttributeHierarchy | undefined): BulkLevel[] {
-  if (!hierarchy || hierarchy.level === "village") return [];
+  if (!hierarchy || hierarchy.level === "survey_plot") return [];
   const startIndex = hierarchy.level === "state" ? 0 : LEVEL_ORDER.indexOf(hierarchy.level);
   return LEVEL_ORDER.slice(startIndex);
 }
@@ -146,6 +148,7 @@ export function ExportFeatureModal({
           district: hierarchy.district,
           taluk: hierarchy.taluk,
           hobli: hierarchy.hobli,
+          village: hierarchy.village,
           clickedLevel: hierarchy.level,
           selectedLevels: LEVEL_ORDER.filter((l) => selectedLevels.has(l)),
           nameHint: title,

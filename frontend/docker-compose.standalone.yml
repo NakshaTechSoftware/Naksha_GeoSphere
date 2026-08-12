@@ -11,4 +11,10 @@ services:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_APP_NAME=Naksha GeoSphere
+      - INDIA_DEM_PATH=/app/DEM_Terrain/India_DEM.tif
+      - INDIA_DEM_OVERVIEW_PATH=/app/DEM_Terrain/India_DEM_overview.tif
+    volumes:
+      # DEM terrain source data lives on the host (\\192.168.10.89\DEM_Terrain →
+      # <repo>/DEM_Terrain); the terrain tile route reads it from here.
+      - ../DEM_Terrain:/app/DEM_Terrain:ro
     restart: unless-stopped

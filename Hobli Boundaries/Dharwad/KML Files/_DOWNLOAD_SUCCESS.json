@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:52:14",
+  "district": "Dharwad",
+  "file_type": "KML File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/KML/09_Dharwad.zip",
+  "downloaded_filename": "09 Dharwad.zip",
+  "bytes": 553206,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

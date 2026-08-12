@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:53:32",
+  "district": "Kodagu",
+  "file_type": "PDF File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/PDF/25_Kodagu.zip",
+  "downloaded_filename": "25 Kodagu.zip",
+  "bytes": 584961,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

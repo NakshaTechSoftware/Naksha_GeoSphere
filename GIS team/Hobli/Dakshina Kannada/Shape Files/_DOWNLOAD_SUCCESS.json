@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:51:40",
+  "district": "Dakshina Kannada",
+  "file_type": "Shape File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/Shapefiles/24_Dakshina%20Kannada.zip",
+  "downloaded_filename": "24 Dakshina Kannada.zip",
+  "bytes": 467083,
+  "payload_kind": "zip",
+  "extracted_files": 4,
+  "archive_removed_after_extraction": true
+}

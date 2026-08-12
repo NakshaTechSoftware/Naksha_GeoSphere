@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T17:08:27",
+  "district": "Haveri",
+  "file_type": "Shape File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Village/Shapefiles/11_Haveri.zip",
+  "downloaded_filename": "11 Haveri.zip",
+  "bytes": 1645292,
+  "payload_kind": "zip",
+  "extracted_files": 7,
+  "archive_removed_after_extraction": true
+}

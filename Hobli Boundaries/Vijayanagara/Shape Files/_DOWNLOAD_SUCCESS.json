@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:56:02",
+  "district": "Vijayanagara",
+  "file_type": "Shape File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/Shapefiles/31_Vijayanagara.zip",
+  "downloaded_filename": "31 Vijayanagara.zip",
+  "bytes": 410664,
+  "payload_kind": "zip",
+  "extracted_files": 7,
+  "archive_removed_after_extraction": true
+}

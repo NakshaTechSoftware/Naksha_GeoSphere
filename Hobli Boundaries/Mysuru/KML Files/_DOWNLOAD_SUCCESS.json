@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:54:40",
+  "district": "Mysuru",
+  "file_type": "KML File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/KML/26_Mysuru.zip",
+  "downloaded_filename": "26 Mysuru.zip",
+  "bytes": 1024463,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

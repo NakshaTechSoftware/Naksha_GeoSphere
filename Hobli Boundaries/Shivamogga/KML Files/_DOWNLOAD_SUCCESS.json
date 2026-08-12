@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:55:09",
+  "district": "Shivamogga",
+  "file_type": "KML File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/KML/15_Shivamogga.zip",
+  "downloaded_filename": "15 Shivamogga.zip",
+  "bytes": 840536,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

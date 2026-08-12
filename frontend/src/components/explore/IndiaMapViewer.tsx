@@ -549,8 +549,9 @@ export interface ParcelLandRecordKey {
 
 // The five admin-hierarchy levels the Explore page's bulk export can walk. Assembly/
 // Parliamentary constituencies and cadastral parcels are separate hierarchies (or leaves) -
-// they only ever get the single-feature export, never the hierarchy checklist.
-export type AdminLevel = "state" | "district" | "taluk" | "hobli" | "village";
+// constituencies only ever get the single-feature export. Cadastral parcels are the
+// survey-plot leaf below village.
+export type AdminLevel = "state" | "district" | "taluk" | "hobli" | "village" | "survey_plot";
 
 // The clicked feature's place in the admin hierarchy, reported alongside AttributeInfo so
 // the Export dialog knows which levels it can offer (the clicked level plus everything
@@ -563,6 +564,7 @@ export interface AttributeHierarchy {
   district?: string;
   taluk?: string;
   hobli?: string;
+  village?: string;
 }
 
 export interface AttributeInfo {
@@ -627,7 +629,7 @@ export type BoundaryLayerMode =
   | "assembly"
   | "parliamentary"
   | "gram_panchayat"
-  | "police_station";
+  | "police_station"
   | "civic_amenities";
 
 export interface IndiaMapViewerHandle {
@@ -865,15 +867,16 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   "states-fill-default",
 ];
 
-// Maps a right-clickable layer id to its place in the admin hierarchy - only the five
-// drill-down levels are listed (constituency/cadastral layers have no entry, so the export
-// dialog's hierarchy checklist never shows for them).
+// Maps a right-clickable layer id to its place in the admin hierarchy - the drill-down
+// levels are listed (constituency layers have no entry, so the export dialog's hierarchy
+// checklist never shows for them; cadastral parcels map to the survey-plot leaf).
 const ATTRIBUTE_POPUP_ADMIN_LEVEL: Record<string, AdminLevel> = {
   "states-fill-default": "state",
   [STATE_DISTRICTS_FILL_LAYER_ID]: "district",
   [DISTRICT_TALUKS_FILL_LAYER_ID]: "taluk",
   [TALUK_HOBLIES_FILL_LAYER_ID]: "hobli",
   [HOBLI_VILLAGES_FILL_LAYER_ID]: "village",
+  [VILLAGE_CADASTRALS_FILL_LAYER_ID]: "survey_plot",
 };
 
 // Friendly boundary-type names for the popup's badge, keyed by layer id.
@@ -1046,6 +1049,9 @@ const BOUNDARY_SOURCE_IDS = [
 // "Administrative Boundaries" option and standalone under the "Assembly Constituency
 // Boundaries" option.
 const STATE_BOUNDARY_LAYER_IDS = [
+  "india-boundary-line",
+  "india-boundary-fill",
+  "india-boundary-label",
   "states-fill-default",
   "states-borders-default",
   "states-labels-default",
@@ -1061,7 +1067,13 @@ const ADMIN_BOUNDARY_LAYER_IDS = [
   ...BOUNDARY_LAYER_IDS,
 ];
 
-// Source id for the default india_states.geojson boundaries, loaded once on map init.
+// Source id for the India national boundary (INDIA_BOUNDARY.geojson), loaded on map init.
+const INDIA_BOUNDARY_SOURCE_ID = "india-boundary-default";
+
+// Source id for the derived "India" label anchor (one Point at the country's centroid).
+const INDIA_BOUNDARY_LABELS_SOURCE_ID = "india-boundary-labels";
+
+// Source id for the default india_states.geojson boundaries, loaded on boundary click.
 const STATE_SOURCE_ID = "india-states-default";
 
 // Source id for the derived label anchors (one Point per state, at the centroid of the
@@ -1361,7 +1373,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         showAll ||
         (mode === "assembly" && (isStatesLayer || isAssemblyLayer)) ||
         (mode === "parliamentary" && (isStatesLayer || isParliamentLayer)) ||
-        (mode === "police_station" && (isStatesLayer || isPoliceLayer));
+        (mode === "police_station" && (isStatesLayer || isPoliceLayer)) ||
         (mode === "gram_panchayat" && (isStatesLayer || isGpLayer)) ||
         (mode === "civic_amenities" && (isStatesLayer || isCivicLayer));
       map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
@@ -1781,6 +1793,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getSource(STATE_POLICE_SOURCE_ID)) map.removeSource(STATE_POLICE_SOURCE_ID);
     loadedPoliceStateRef.current = null;
     selectedPoliceIdRef.current = null;
+  };
+
   const clearGpBoundaries = (map: MapLibreMap) => {
     if (map.getLayer(GP_BOUNDARIES_FILL_LAYER_ID)) map.removeLayer(GP_BOUNDARIES_FILL_LAYER_ID);
     if (map.getLayer(GP_BOUNDARIES_LINE_LAYER_ID)) map.removeLayer(GP_BOUNDARIES_LINE_LAYER_ID);
@@ -2260,106 +2274,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
-  const clearTalukHoblies = (map: MapLibreMap) => {
-    clearHobliVillages(map);
-    if (map.getLayer(TALUK_HOBLIES_FILL_LAYER_ID)) map.removeLayer(TALUK_HOBLIES_FILL_LAYER_ID);
-    if (map.getLayer(TALUK_HOBLIES_LINE_LAYER_ID)) map.removeLayer(TALUK_HOBLIES_LINE_LAYER_ID);
-    removeLabelLayer(map, TALUK_HOBLIES_LABELS_LAYER_ID);
-    if (map.getSource(TALUK_HOBLIES_SOURCE_ID)) map.removeSource(TALUK_HOBLIES_SOURCE_ID);
-    if (map.getSource(TALUK_HOBLIES_LABELS_SOURCE_ID)) map.removeSource(TALUK_HOBLIES_LABELS_SOURCE_ID);
-    loadedHobliesTalukRef.current = null;
-    selectedHobliIdRef.current = null;
-    loadedHobliesDataRef.current = null;
-  };
-
-  // Restores the pristine (hole-free) ancestor fill data when the cadastral view clears.
-  const restoreAncestorFills = (map: MapLibreMap) => {
-    const sources: Array<[string, GeoJSON.FeatureCollection | null]> = [
-      [STATE_SOURCE_ID, loadedStatesDataRef.current],
-      [STATE_DISTRICTS_SOURCE_ID, loadedDistrictsDataRef.current],
-      [DISTRICT_TALUKS_SOURCE_ID, loadedTaluksDataRef.current],
-      [TALUK_HOBLIES_SOURCE_ID, loadedHobliesDataRef.current],
-    ];
-    for (const [sourceId, pristine] of sources) {
-      if (!pristine) continue;
-      const source = map.getSource(sourceId);
-      if (source && "setData" in source) {
-        (source as GeoJSONSource).setData(pristine);
-      }
-    }
-  };
-
-  // Punches the selected village polygon as a hole into each ancestor fill layer's geometry
-  // (state → district → taluk → hobli), so those fills stay visible everywhere EXCEPT inside
-  // the selected village - where the cadastral grid and the basemap underneath show through
-  // clearly. Only the source data is swapped (from the pristine refs), so feature ids and
-  // hover/selection states are untouched; restoreAncestorFills reverses it on clear.
-  const applyVillageCutout = (map: MapLibreMap, villageGeometry: GeoJSON.Geometry) => {
-    const sources: Array<[string, GeoJSON.FeatureCollection | null]> = [
-      [STATE_SOURCE_ID, loadedStatesDataRef.current],
-      [STATE_DISTRICTS_SOURCE_ID, loadedDistrictsDataRef.current],
-      [DISTRICT_TALUKS_SOURCE_ID, loadedTaluksDataRef.current],
-      [TALUK_HOBLIES_SOURCE_ID, loadedHobliesDataRef.current],
-    ];
-    for (const [sourceId, pristine] of sources) {
-      if (!pristine) continue;
-      const source = map.getSource(sourceId);
-      if (!source || !("setData" in source)) continue;
-      (source as GeoJSONSource).setData(withVillageHole(pristine, villageGeometry));
-    }
-  };
-
-  const clearVillageCadastrals = (map: MapLibreMap) => {
-    if (map.getLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID);
-    if (map.getLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID);
-    if (map.getLayer(VILLAGE_CADASTRALS_LABELS_LAYER_ID)) map.removeLayer(VILLAGE_CADASTRALS_LABELS_LAYER_ID);
-    if (map.getSource(VILLAGE_CADASTRALS_SOURCE_ID)) map.removeSource(VILLAGE_CADASTRALS_SOURCE_ID);
-    loadedCadastralsVillageRef.current = null;
-    loadedCadastralsDataRef.current = null;
-    // Restore the ancestor drill fills now that the cadastral view is gone.
-    restoreAncestorFills(map);
-  };
-
-  const clearHobliVillages = (map: MapLibreMap) => {
-    clearVillageCadastrals(map);
-    if (map.getLayer(HOBLI_VILLAGES_FILL_LAYER_ID)) map.removeLayer(HOBLI_VILLAGES_FILL_LAYER_ID);
-    if (map.getLayer(HOBLI_VILLAGES_LINE_LAYER_ID)) map.removeLayer(HOBLI_VILLAGES_LINE_LAYER_ID);
-    removeLabelLayer(map, HOBLI_VILLAGES_LABELS_LAYER_ID);
-    if (map.getSource(HOBLI_VILLAGES_SOURCE_ID)) map.removeSource(HOBLI_VILLAGES_SOURCE_ID);
-    if (map.getSource(HOBLI_VILLAGES_LABELS_SOURCE_ID)) map.removeSource(HOBLI_VILLAGES_LABELS_SOURCE_ID);
-    loadedVillagesHobliRef.current = null;
-    selectedVillageIdRef.current = null;
-    selectedVillageNameRef.current = null;
-    loadedVillagesDataRef.current = null;
-    selectedHobliNameRef.current = null;
-  };
-
-  const clearDistrictTaluks = (map: MapLibreMap) => {
-    clearTalukHoblies(map);
-    if (map.getLayer(DISTRICT_TALUKS_FILL_LAYER_ID)) map.removeLayer(DISTRICT_TALUKS_FILL_LAYER_ID);
-    if (map.getLayer(DISTRICT_TALUKS_LINE_LAYER_ID)) map.removeLayer(DISTRICT_TALUKS_LINE_LAYER_ID);
-    removeLabelLayer(map, DISTRICT_TALUKS_LABELS_LAYER_ID);
-    if (map.getSource(DISTRICT_TALUKS_SOURCE_ID)) map.removeSource(DISTRICT_TALUKS_SOURCE_ID);
-    if (map.getSource(DISTRICT_TALUKS_LABELS_SOURCE_ID)) map.removeSource(DISTRICT_TALUKS_LABELS_SOURCE_ID);
-    loadedTaluksDistrictRef.current = null;
-    selectedTalukIdRef.current = null;
-    loadedTaluksDataRef.current = null;
-  };
-
-  // Fetches and renders a district's taluk/subdistrict boundaries from MinIO
-  // (via /api/datasets/district-taluks). Triggered by clicking an already-selected
-  // district a second time.
-  const loadDistrictTaluks = async (
-    map: MapLibreMap,
-    districtName: string,
-    stateName: string,
-    data?: GeoJSON.FeatureCollection
-  ) => {
-    const normalized = districtName.trim().toLowerCase();
-    if (loadedTaluksDistrictRef.current === normalized) return; // already showing
-    const generation = drillGenerationRef.current; // stale-load guard for undo/redo
-
-    console.log(`Loading taluks for district: ${districtName}, state: ${stateName}`);
   // Fetches and renders a state's gram panchayat district boundaries from MinIO (via
   // /api/datasets/gram-panchayat-districts), e.g. Karnataka's KARNATAKA_DISTRICTS.geojson.
   // Triggered by clicking a state while the "Gram Panchayat Boundaries" filter option is
@@ -4172,6 +4086,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   adminLevel === "taluk" ? title : (selectedTalukNameRef.current ?? undefined),
                 hobli:
                   adminLevel === "hobli" ? title : (selectedHobliNameRef.current ?? undefined),
+                village:
+                  adminLevel === "village"
+                    ? title
+                    : adminLevel === "survey_plot"
+                      ? (selectedVillageNameRef.current ?? undefined)
+                      : undefined,
               }
             : undefined;
 
@@ -4212,9 +4132,157 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           // the user switches to "default" via the LayersControl.
           if (DEFAULT_MAP_LAYER === "default") addDefaultBaseLayers(map);
 
-          // Load India state boundaries by default
+          // Load the India national boundary by default (INDIA_BOUNDARY.geojson). The India
+          // states load only after the boundary is clicked, mirroring the drill-down of the
+          // other administrative layers.
           try {
-            const statesResponse = await fetch("/data/india_states.geojson");
+            let boundaryResponse: Response;
+            try {
+              boundaryResponse = await fetch("/api/datasets/india-boundary?file=boundary");
+            } catch {
+              boundaryResponse = await fetch("/geodata/india-boundary.geojson");
+            }
+            if (!boundaryResponse.ok) {
+              boundaryResponse = await fetch("/geodata/india-boundary.geojson");
+            }
+            const boundaryData = await boundaryResponse.json();
+
+            // Add the national boundary source. generateId assigns each feature a numeric id
+            // so we can address it with setFeatureState for hover/selection below.
+            map.addSource(INDIA_BOUNDARY_SOURCE_ID, {
+              type: "geojson",
+              data: boundaryData,
+              generateId: true,
+            });
+
+            // Visible national outline line.
+            map.addLayer({
+              id: "india-boundary-line",
+              type: "line",
+              source: INDIA_BOUNDARY_SOURCE_ID,
+              paint: {
+                "line-color": "#00FFFF",
+                "line-width": 2.5,
+                "line-opacity": 1,
+              },
+            });
+
+            // Transparent fill so the whole country is clickable to load the states. Its
+            // fill-opacity is driven by feature-states so the country highlights on hover
+            // only while it isn't selected (once selected, hovering no longer highlights it).
+            map.addLayer({
+              id: "india-boundary-fill",
+              type: "fill",
+              source: INDIA_BOUNDARY_SOURCE_ID,
+              paint: {
+                "fill-color": "#00FFFF",
+                "fill-opacity": [
+                  "case",
+                  ["boolean", ["feature-state", "selected"], false],
+                  0,
+                  ["boolean", ["feature-state", "hover"], false],
+                  0.18,
+                  0,
+                ],
+              },
+            });
+
+            // Derived "India" label anchor - one Point at the country's centroid.
+            map.addSource(INDIA_BOUNDARY_LABELS_SOURCE_ID, {
+              type: "geojson",
+              data: labelAnchorFeatures(boundaryData, ["name"]),
+              generateId: true,
+            });
+
+            // "India" text label centered on the country. The anchor source is the
+            // area-weighted centroid (see labelAnchorFeatures), so the label sits at the
+            // visual center of the national boundary.
+            const indiaLabelLayer: any = {
+              id: "india-boundary-label",
+              type: "symbol" as const,
+              source: INDIA_BOUNDARY_LABELS_SOURCE_ID,
+              layout: {
+                "text-field": ["get", "name"],
+                "text-font": ["Noto Sans Regular"],
+                "text-size": 24,
+                "text-anchor": "center",
+                "text-letter-spacing": 0.05,
+                "text-max-width": 9,
+              },
+              paint: {
+                "text-color": "#ffffff",
+                "text-halo-color": "#000000",
+                "text-halo-width": 2.5,
+              },
+            };
+            map.addLayer(indiaLabelLayer);
+            map.addLayer(hoverLabelLayerSpec(indiaLabelLayer));
+            attachLabelHoverGrow(map, "india-boundary-label", "india-boundary-label-hover");
+
+            // Hover highlight + cursor over the country.
+            let hoveredBoundaryId: string | number | null = null;
+            map.on("mousemove", "india-boundary-fill", (e) => {
+              const feature = e.features?.[0];
+              if (feature && feature.id !== undefined && feature.id !== hoveredBoundaryId) {
+                if (hoveredBoundaryId !== null) {
+                  map.setFeatureState(
+                    { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
+                    { hover: false }
+                  );
+                }
+                hoveredBoundaryId = feature.id;
+                map.setFeatureState(
+                  { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
+                  { hover: true }
+                );
+              }
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", "india-boundary-fill", () => {
+              if (hoveredBoundaryId !== null) {
+                map.setFeatureState(
+                  { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
+                  { hover: false }
+                );
+              }
+              hoveredBoundaryId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+
+            // Clicking the India boundary loads the India states and marks it selected, so
+            // it no longer highlights on hover (matching the state-selection behavior).
+            map.on("click", "india-boundary-fill", (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (feature && feature.id !== undefined) {
+                map.setFeatureState(
+                  { source: INDIA_BOUNDARY_SOURCE_ID, id: feature.id },
+                  { selected: true }
+                );
+              }
+              void loadIndiaStates();
+              e.preventDefault?.();
+              if (e.originalEvent) e.originalEvent.stopPropagation();
+            });
+
+            // Loads the India states (INDIA_STATES.geojson) and wires up the full state
+            // drill-down (hover/click, districts, taluks, ...). Defined here so the boundary
+            // click handler above can call it; runs once when the boundary is clicked.
+            const loadIndiaStates = async () => {
+              // Guard against re-entry: the boundary click handler can fire again after the
+              // states are already loaded (e.g. a second click on the country), which would
+              // otherwise throw "Source already exists".
+              if (map.getSource(STATE_SOURCE_ID)) return;
+            try {
+            let statesResponse: Response;
+            try {
+              statesResponse = await fetch("/api/datasets/india-boundary?file=states");
+            } catch {
+              statesResponse = await fetch("/data/india_states.geojson");
+            }
+            if (!statesResponse.ok) {
+              statesResponse = await fetch("/data/india_states.geojson");
+            }
             const statesData = await statesResponse.json();
             loadedStatesDataRef.current = statesData;
 
@@ -4380,12 +4448,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   ? loadedParliamentStateRef.current === clickedStateName
                   : isPoliceMode
                     ? loadedPoliceStateRef.current === clickedStateName
-                  : loadedDistrictsStateRef.current === clickedStateName;
-                  : isGramPanchayatMode
-                    ? loadedGpDistrictsStateRef.current === clickedStateName
-                    : isCivicAmenitiesMode
-                      ? loadedCivicDistrictsStateRef.current === clickedStateName
-                      : loadedDistrictsStateRef.current === clickedStateName;
+                    : isGramPanchayatMode
+                      ? loadedGpDistrictsStateRef.current === clickedStateName
+                      : isCivicAmenitiesMode
+                        ? loadedCivicDistrictsStateRef.current === clickedStateName
+                        : loadedDistrictsStateRef.current === clickedStateName;
 
               if (boundaryLoadedForState) {
                 console.log("Boundaries are loaded for this state - ignoring state click (click was on boundary layer)");
@@ -4417,7 +4484,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   } else if (isParliamentMode) {
                     console.log(`Auto-loading parliamentary constituencies for state: ${stateName}`);
                     void loadStateParliament(map, stateName);
-                  } else {
+                  } else if (isPoliceMode) {
                     console.log(`Auto-loading police station boundaries for state: ${stateName}`);
                     void loadStatePolice(map, stateName);
                   } else if (isGramPanchayatMode) {
@@ -4933,8 +5000,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 });
               }
 
-              // Automatically load taluks when district is selected
-              const stateName = feature.properties?.stname as string | undefined;
+              // Automatically load taluks when district is selected. The district geojson
+              // only carries dtname (no stname), so fall back to the state the user clicked
+              // into (selectedStateNameRef) - without it the taluk load would never fire.
+              const stateName =
+                (feature.properties?.stname as string | undefined) ??
+                selectedStateNameRef.current;
               selectedDistrictNameRef.current = districtName ?? null;
               if (districtName && stateName) {
                 console.log(`Loading taluks automatically for ${districtName}, ${stateName}`);
@@ -5565,8 +5636,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             };
             map.addLayer(stateLabelLayer);
             map.addLayer(hoverLabelLayerSpec(stateLabelLayer));
+            } catch (error) {
+              console.error("Failed to load India state boundaries:", error);
+            }
+            };
           } catch (error) {
-            console.error("Failed to load India state boundaries:", error);
+            console.error("Failed to load India boundary:", error);
           }
 
           setIsLoading(false);

@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "wards_in_police_area.writing_20260805_172659",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "KGISWardID": 6259, "KGISWardCode": "1603016", "KGISWardName": null, "SHAPE.STArea()": 948266.02511761501, "SHAPE.STLength()": 5565.9277921216672, "OBJECTID": 18135, "KGISWardNo": "16", "KGISTownCode": "1603", "LGD_WardCode": 1922579, "created_user": "SA", "created_date": 1634898537000, "last_edited_user": "SURESHBV1", "last_edited_date": 1692254014000, "_overlap_percent": 0.19748995339693826, "_police_station": "Gangolli PS", "_police_feature_index": "572", "_admin_layer": "Ward", "_geometry_clipped": true }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 74.671560363208684, 13.638701279564769 ], [ 74.672321877327946, 13.638573466361285 ], [ 74.673270354996461, 13.638582279207581 ], [ 74.673597330037524, 13.638585053605036 ], [ 74.673601522326067, 13.638546458252433 ], [ 74.673606424392901, 13.638501185992656 ], [ 74.673302431147704, 13.638500070542692 ], [ 74.672358181863686, 13.638496602779977 ], [ 74.671596773225616, 13.638628562961415 ], [ 74.671518014047095, 13.638642182716406 ], [ 74.671560363208684, 13.638701279564769 ] ] ] } }
+]
+}

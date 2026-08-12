@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:53:18",
+  "district": "Kalaburgi",
+  "file_type": "PDF File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/PDF/04_Kalaburgi.zip",
+  "downloaded_filename": "04 Kalaburgi.zip",
+  "bytes": 718246,
+  "payload_kind": "zip",
+  "extracted_files": 1,
+  "archive_removed_after_extraction": true
+}

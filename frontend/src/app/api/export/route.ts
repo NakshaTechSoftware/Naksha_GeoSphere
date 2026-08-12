@@ -6,7 +6,7 @@ import { parseUpstreamError } from "./_error";
 // clicked feature via the worker's GDAL/OGR toolchain and returns the file directly. Kept
 // server-side (rather than the browser calling the API origin itself) so this never needs
 // CORS configuration for whatever port the frontend happens to be running on.
-const EXPORT_FORMATS = ["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb"] as const;
+const EXPORT_FORMATS = ["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"] as const;
 type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 function isExportFormat(value: unknown): value is ExportFormat {

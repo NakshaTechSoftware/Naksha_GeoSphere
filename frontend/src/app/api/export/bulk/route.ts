@@ -9,9 +9,9 @@ import { parseUpstreamError } from "../_error";
 // backend for GDAL/OGR conversion. Streams progress as Server-Sent Events since a deep
 // bulk export (e.g. every village in a district) can take a while.
 
-type BulkLevel = "district" | "taluk" | "hobli" | "village";
+type BulkLevel = "district" | "taluk" | "hobli" | "village" | "survey_plot";
 type AdminLevel = "state" | BulkLevel;
-const EXPORT_FORMATS = ["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb"] as const;
+const EXPORT_FORMATS = ["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"] as const;
 type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 interface BulkRequestBody {
@@ -20,6 +20,7 @@ interface BulkRequestBody {
   district?: unknown;
   taluk?: unknown;
   hobli?: unknown;
+  village?: unknown;
   clickedLevel?: unknown;
   selectedLevels?: unknown;
   nameHint?: unknown;
@@ -39,6 +40,7 @@ const NAME_KEYS: Record<BulkLevel, string[]> = {
     "VILLNAME",
     "name",
   ],
+  survey_plot: ["Surveynumber_Old", "surveynumberi", "survey_no", "survey_number"],
 };
 
 const ROUTE_BY_LEVEL: Record<BulkLevel, string> = {
@@ -46,6 +48,7 @@ const ROUTE_BY_LEVEL: Record<BulkLevel, string> = {
   taluk: "district-taluks",
   hobli: "taluk-hoblies",
   village: "hobli-villages",
+  survey_plot: "village-cadastrals",
 };
 
 const FETCH_CONCURRENCY = 6;
@@ -140,6 +143,7 @@ interface WalkParams {
   district?: string;
   taluk?: string;
   hobli?: string;
+  village?: string;
   clickedLevel: AdminLevel;
   selectedLevels: BulkLevel[];
   emit: (message: string, current?: number, total?: number) => void;
@@ -169,11 +173,16 @@ async function collectLayers(
     }
   }
 
-  if (!need("taluk") && !need("hobli") && !need("village")) return layers;
+  if (!need("taluk") && !need("hobli") && !need("village") && !need("survey_plot")) return layers;
 
   // --- Taluk scope ---
   let talukContexts: { district: string; taluk: string }[] = [];
-  if (clickedLevel === "taluk" || clickedLevel === "hobli" || clickedLevel === "village") {
+  if (
+    clickedLevel === "taluk" ||
+    clickedLevel === "hobli" ||
+    clickedLevel === "village" ||
+    clickedLevel === "survey_plot"
+  ) {
     talukContexts = [{ district: opts.district!, taluk: opts.taluk! }];
     if (need("taluk")) {
       emit(`Fetching ${opts.taluk}…`);
@@ -205,11 +214,11 @@ async function collectLayers(
     if (skipped > 0) emit(`Skipped ${skipped} district(s) with no taluk data`);
   }
 
-  if (!need("hobli") && !need("village")) return layers;
+  if (!need("hobli") && !need("village") && !need("survey_plot")) return layers;
 
   // --- Hobli scope ---
   let hobliContexts: { district: string; taluk: string; hobli: string }[] = [];
-  if (clickedLevel === "hobli" || clickedLevel === "village") {
+  if (clickedLevel === "hobli" || clickedLevel === "village" || clickedLevel === "survey_plot") {
     hobliContexts = [{ district: opts.district!, taluk: opts.taluk!, hobli: opts.hobli! }];
     if (need("hobli")) {
       emit(`Fetching ${opts.hobli}…`);
@@ -246,28 +255,91 @@ async function collectLayers(
     if (skipped > 0) emit(`Skipped ${skipped} taluk(s) with no hobli data`);
   }
 
-  if (!need("village")) return layers;
+  if (!need("village") && !need("survey_plot")) return layers;
 
-  // --- Village scope: leaf level, always the generic "expand every hobli in scope" walk -
-  // a village click never reaches this route (it has nothing below it to bulk-export). ---
-  const villageLayer: GeoJSON.Feature[] = [];
-  let done = 0;
-  let skippedVillages = 0;
-  const results = await mapWithConcurrency(hobliContexts, FETCH_CONCURRENCY, async (h) => {
-    const { features, skipped: wasSkipped } = await fetchLevelTolerant(origin, "village", {
-      state,
-      district: h.district,
-      taluk: h.taluk,
-      hobli: h.hobli,
+  // --- Village scope ---
+  // A village/survey-plot click narrows to the single clicked village; any higher click
+  // expands every hobli in scope. The village contexts are kept so the survey-plot walk
+  // below knows exactly which village each cadastral file belongs to.
+  let villageContexts: { district: string; taluk: string; hobli: string; village: string }[] = [];
+  if (clickedLevel === "village" || clickedLevel === "survey_plot") {
+    villageContexts = [
+      {
+        district: opts.district!,
+        taluk: opts.taluk!,
+        hobli: opts.hobli!,
+        village: opts.village!,
+      },
+    ];
+    if (need("village")) {
+      emit(`Fetching ${opts.village}…`);
+      const all = await fetchLevel(origin, "village", {
+        state,
+        district: opts.district,
+        taluk: opts.taluk,
+        hobli: opts.hobli,
+      });
+      layers.village = filterByName(all, NAME_KEYS.village, opts.village!);
+    }
+  } else {
+    const villageLayer: GeoJSON.Feature[] = [];
+    let done = 0;
+    let skippedVillages = 0;
+    const results = await mapWithConcurrency(hobliContexts, FETCH_CONCURRENCY, async (h) => {
+      const { features, skipped: wasSkipped } = await fetchLevelTolerant(origin, "village", {
+        state,
+        district: h.district,
+        taluk: h.taluk,
+        hobli: h.hobli,
+      });
+      done += 1;
+      if (wasSkipped) skippedVillages += 1;
+      emit(`Fetching villages… (${done}/${hobliContexts.length})`, done, hobliContexts.length);
+      return { ...h, features };
     });
-    done += 1;
-    if (wasSkipped) skippedVillages += 1;
-    emit(`Fetching villages… (${done}/${hobliContexts.length})`, done, hobliContexts.length);
-    return features;
-  });
-  for (const features of results) villageLayer.push(...keepNamed(features, NAME_KEYS.village));
-  layers.village = villageLayer;
-  if (skippedVillages > 0) emit(`Skipped ${skippedVillages} hobli(s) with no village data`);
+    for (const r of results) {
+      const realVillages = keepNamed(r.features, NAME_KEYS.village);
+      villageLayer.push(...realVillages);
+      for (const name of uniqueNames(realVillages, NAME_KEYS.village)) {
+        villageContexts.push({ district: r.district, taluk: r.taluk, hobli: r.hobli, village: name });
+      }
+    }
+    if (need("village")) layers.village = villageLayer;
+    if (skippedVillages > 0) emit(`Skipped ${skippedVillages} hobli(s) with no village data`);
+  }
+
+  if (!need("survey_plot")) return layers;
+
+  // --- Survey plot scope: leaf level, one village-cadastrals fetch per village. ---
+  const surveyPlotLayer: GeoJSON.Feature[] = [];
+  let donePlots = 0;
+  let skippedPlots = 0;
+  const plotResults = await mapWithConcurrency(
+    villageContexts,
+    FETCH_CONCURRENCY,
+    async (v) => {
+      const { features, skipped: wasSkipped } = await fetchLevelTolerant(origin, "survey_plot", {
+        state,
+        district: v.district,
+        taluk: v.taluk,
+        hobli: v.hobli,
+        village: v.village,
+      });
+      donePlots += 1;
+      if (wasSkipped) skippedPlots += 1;
+      emit(
+        `Fetching survey plots… (${donePlots}/${villageContexts.length})`,
+        donePlots,
+        villageContexts.length
+      );
+      return features;
+    }
+  );
+  for (const features of plotResults) {
+    surveyPlotLayer.push(...keepNamed(features, NAME_KEYS.survey_plot));
+  }
+  layers.survey_plot = surveyPlotLayer;
+  if (skippedPlots > 0) emit(`Skipped ${skippedPlots} village(s) with no survey plot data`);
 
   return layers;
 }
@@ -276,8 +348,8 @@ function isExportFormat(value: unknown): value is ExportFormat {
   return typeof value === "string" && (EXPORT_FORMATS as readonly string[]).includes(value);
 }
 
-const ADMIN_LEVELS: AdminLevel[] = ["state", "district", "taluk", "hobli", "village"];
-const BULK_LEVELS: BulkLevel[] = ["district", "taluk", "hobli", "village"];
+const ADMIN_LEVELS: AdminLevel[] = ["state", "district", "taluk", "hobli", "village", "survey_plot"];
+const BULK_LEVELS: BulkLevel[] = ["district", "taluk", "hobli", "village", "survey_plot"];
 
 export async function POST(request: NextRequest) {
   let body: BulkRequestBody;
@@ -311,18 +383,31 @@ export async function POST(request: NextRequest) {
   const district = typeof body.district === "string" ? body.district : undefined;
   const taluk = typeof body.taluk === "string" ? body.taluk : undefined;
   const hobli = typeof body.hobli === "string" ? body.hobli : undefined;
+  const village = typeof body.village === "string" ? body.village : undefined;
   if (clickedLevel !== "state" && !district) {
     return new Response(JSON.stringify({ error: "district is required for this clickedLevel" }), {
       status: 400,
     });
   }
-  if ((clickedLevel === "taluk" || clickedLevel === "hobli") && !taluk) {
-    return new Response(JSON.stringify({ error: "taluk is required for this clickedLevel" }), {
+  if (
+    clickedLevel === "taluk" ||
+    clickedLevel === "hobli" ||
+    clickedLevel === "village" ||
+    clickedLevel === "survey_plot"
+  ) {
+    if (!taluk) {
+      return new Response(JSON.stringify({ error: "taluk is required for this clickedLevel" }), {
+        status: 400,
+      });
+    }
+  }
+  if ((clickedLevel === "hobli" || clickedLevel === "village") && !hobli) {
+    return new Response(JSON.stringify({ error: "hobli is required for this clickedLevel" }), {
       status: 400,
     });
   }
-  if (clickedLevel === "hobli" && !hobli) {
-    return new Response(JSON.stringify({ error: "hobli is required for this clickedLevel" }), {
+  if ((clickedLevel === "village" || clickedLevel === "survey_plot") && !village) {
+    return new Response(JSON.stringify({ error: "village is required for this clickedLevel" }), {
       status: 400,
     });
   }
@@ -344,6 +429,7 @@ export async function POST(request: NextRequest) {
           district,
           taluk,
           hobli,
+          village,
           clickedLevel,
           selectedLevels,
           emit: (message, current, total) => send({ type: "progress", message, current, total }),

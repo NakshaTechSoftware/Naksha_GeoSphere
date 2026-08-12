@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-ExportFormat = Literal["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb"]
-AdminLevel = Literal["state", "district", "taluk", "hobli", "village"]
+ExportFormat = Literal["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"]
+AdminLevel = Literal["state", "district", "taluk", "hobli", "village", "survey_plot"]
 
 
 class ExportFeatureRequest(BaseModel):

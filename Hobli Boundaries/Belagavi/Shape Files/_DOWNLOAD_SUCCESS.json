@@ -1,0 +1,11 @@
+{
+  "completed_at": "2026-07-23T16:48:03",
+  "district": "Belagavi",
+  "file_type": "Shape File",
+  "source_url": "https://kgis.ksrsac.in/kgisdocuments/PDF_KML_SHP/Hobli/Shapefiles/01_Belagavi.zip",
+  "downloaded_filename": "01 Belagavi.zip",
+  "bytes": 1342065,
+  "payload_kind": "zip",
+  "extracted_files": 7,
+  "archive_removed_after_extraction": true
+}

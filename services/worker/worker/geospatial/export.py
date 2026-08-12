@@ -22,7 +22,7 @@ from shapely.errors import ShapelyError
 from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, shape
 from shapely.geometry.base import BaseGeometry
 
-ExportFormat = Literal["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb"]
+ExportFormat = Literal["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"]
 
 # geopandas/Fiona driver name and whether the driver's output is a single
 # file or a directory/file-set that must be zipped before it can be sent
@@ -34,6 +34,7 @@ _DRIVER_BY_FORMAT: dict[ExportFormat, tuple[str, bool]] = {
     "kmz": ("KML", False),  # written as KML, then zipped as .kmz below
     "gpkg": ("GPKG", False),
     "gdb": ("OpenFileGDB", True),  # OpenFileGDB writes a .gdb *directory*
+    "csv": ("CSV", False),  # geometry written as a WKT column (GEOMETRY=AS_WKT)
 }
 
 _EXTENSION_BY_FORMAT: dict[ExportFormat, str] = {
@@ -43,6 +44,7 @@ _EXTENSION_BY_FORMAT: dict[ExportFormat, str] = {
     "kmz": "kmz",
     "gpkg": "gpkg",
     "gdb": "zip",
+    "csv": "csv",
 }
 
 _MIMETYPE_BY_FORMAT: dict[ExportFormat, str] = {
@@ -52,6 +54,7 @@ _MIMETYPE_BY_FORMAT: dict[ExportFormat, str] = {
     "kmz": "application/vnd.google-earth.kmz",
     "gpkg": "application/geopackage+sqlite3",
     "gdb": "application/zip",
+    "csv": "text/csv",
 }
 
 # gpkg/gdb natively hold multiple named layers in one file/directory, so a bulk
@@ -219,7 +222,11 @@ def _write_single_layer(gdf: gpd.GeoDataFrame, export_format: ExportFormat, stem
             content = zip_path.read_bytes()
         else:
             out_path = tmp_dir / filename
-            gdf.to_file(out_path, driver=driver)
+            # The OGR CSV driver drops geometry entirely unless told to write it as WKT.
+            if export_format == "csv":
+                gdf.to_file(out_path, driver=driver, GEOMETRY="AS_WKT")
+            else:
+                gdf.to_file(out_path, driver=driver)
             content = out_path.read_bytes()
 
     return ExportedFile(filename=filename, mimetype=_MIMETYPE_BY_FORMAT[export_format], content=content)

@@ -13,7 +13,7 @@ const S3_BUCKET = 'geosphere-source-data';
 // key holding that state's district boundaries. Only states with district data uploaded to
 // MinIO are listed here.
 const STATE_DISTRICTS_KEYS: Record<string, string> = {
-  karnataka: 'Administrative Boundaries/india/karnataka/KARNATAKA/KARNATAKA_DISTRICTS.geojson',
+  karnataka: 'Administrative Boundaries/India/Karnataka/KARNATAKA_DISTRICTS.geojson',
 };
 
 export async function GET(request: NextRequest) {

@@ -50,7 +50,9 @@ export function similarity(a: string, b: string): number {
 // other, or - as a last resort - they're within a small edit-distance tolerance to absorb
 // minor transliteration differences like "Kalaburagi" vs "Kalaburgi".
 export function namesMatch(cleanFolder: string, displayName: string): boolean {
-  const cleanDisplay = displayName.toLowerCase().replace(/[-_]/g, ' ').trim();
+  // Parentheses are stripped from BOTH sides so "Bengaluru (Rural)" matches the
+  // "Bengaluru_Rural" folder (cleanFolderName already removes parens from folders).
+  const cleanDisplay = displayName.toLowerCase().replace(/[()]/g, ' ').replace(/[-_]/g, ' ').trim();
   if (!cleanFolder || !cleanDisplay) return false;
 
   if (

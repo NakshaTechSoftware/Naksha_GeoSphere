@@ -225,7 +225,6 @@ export function ExplorePage() {
   const [selectedWard, setSelectedWard] = useState<WardSelection | null>(null);
   const mapViewerRef = useRef<IndiaMapViewerHandle>(null);
   const [expandedFilters, setExpandedFilters] = useState({
-    datasetType: true,
     type: true,
   });
   // The single active Boundary Layers option ("administrative" by default, so the
@@ -304,11 +303,23 @@ export function ExplorePage() {
   const [statesList, setStatesList] = useState<string[]>([]);
   const [districtsList, setDistrictsList] = useState<string[]>([]); // Karnataka only, for now
   const [taluksList, setTaluksList] = useState<{ district: string; taluk: string }[]>([]);
+  // All-Karnataka hobli index (district/taluk/hobli triples from
+  // /data/karnataka_hoblis.json), so a bare hobli name can suggest every matching hobli
+  // across the state - not just the ones in the currently-selected taluk.
+  const [hoblisList, setHoblisList] = useState<
+    { district: string; taluk: string; hobli: string }[]
+  >([]);
+  // All-Karnataka village index (district/taluk/hobli/village quadruples from
+  // /data/karnataka_villages.json), so a bare village name can suggest every matching
+  // village across the state. ~27k villages, loaded once on mount.
+  const [villagesList, setVillagesList] = useState<
+    { district: string; taluk: string; hobli: string; village: string }[]
+  >([]);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/data/india_states.geojson");
+        const res = await fetch("/geodata/india-states.geojson");
         if (res.ok) {
           const geo = await res.json();
           const names = Array.from(
@@ -354,6 +365,28 @@ export function ExplorePage() {
         console.error("Failed to load Karnataka taluk names for search suggestions:", error);
       }
     })();
+
+    (async () => {
+      try {
+        const res = await fetch("/data/karnataka_hoblis.json");
+        if (res.ok) {
+          setHoblisList(await res.json());
+        }
+      } catch (error) {
+        console.error("Failed to load Karnataka hobli names for search suggestions:", error);
+      }
+    })();
+
+    (async () => {
+      try {
+        const res = await fetch("/data/karnataka_villages.json");
+        if (res.ok) {
+          setVillagesList(await res.json());
+        }
+      } catch (error) {
+        console.error("Failed to load Karnataka village names for search suggestions:", error);
+      }
+    })();
   }, []);
 
   const stateEntries = useMemo<LocationEntry[]>(
@@ -371,6 +404,26 @@ export function ExplorePage() {
         leaf: taluk,
       })),
     [taluksList],
+  );
+  // One entry per hobli, labeled with its full "State, District, Taluk, Hobli" chain so a
+  // bare hobli name lists every matching hobli across the state (Kasaba has ~95 of them).
+  const hobliEntries = useMemo<LocationEntry[]>(
+    () =>
+      hoblisList.map(({ district, taluk, hobli }) => ({
+        label: `Karnataka, ${district}, ${taluk}, ${hobli}`,
+        leaf: hobli,
+      })),
+    [hoblisList],
+  );
+  // One entry per village, labeled with its full "State, District, Taluk, Hobli, Village"
+  // chain so a bare village name lists every matching village across the state.
+  const villageEntries = useMemo<LocationEntry[]>(
+    () =>
+      villagesList.map(({ district, taluk, hobli, village }) => ({
+        label: `Karnataka, ${district}, ${taluk}, ${hobli}, ${village}`,
+        leaf: village,
+      })),
+    [villagesList],
   );
 
   // Close the suggestions dropdown when clicking anywhere outside the search bar.
@@ -395,6 +448,73 @@ export function ExplorePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // The map's current state/district/taluk drill-down (reported by IndiaMapViewer), used
+  // to scope bare hobli-name suggestions to the taluk the user is currently looking at.
+  const [drillContext, setDrillContext] = useState<{
+    state: string;
+    district: string;
+    taluk: string;
+  } | null>(null);
+
+  // Hobli names are fetched on demand from the taluk-hoblies API (no static list exists),
+  // keyed by "district|taluk", to back the hobli search suggestions - both the 4-part
+  // "Karnataka, <district>, <taluk>, ..." queries and bare hobli names while a taluk is
+  // selected on the map.
+  const [hobliesByTaluk, setHobliesByTaluk] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    const parts = searchQuery.split(",").map((p) => p.trim());
+    let district = "";
+    let taluk = "";
+    if (
+      parts.length >= 3 &&
+      parts[0]?.toLowerCase() === "karnataka" &&
+      parts[1] &&
+      parts[2]
+    ) {
+      district = parts[1];
+      taluk = parts[2];
+    } else if (parts.length === 1 && parts[0] && drillContext) {
+      // Bare hobli-name query - scope it to the map's currently-selected taluk.
+      district = drillContext.district;
+      taluk = drillContext.taluk;
+    }
+    if (!district || !taluk) return;
+    const key = `${district}|${taluk}`;
+    if (hobliesByTaluk[key]) return; // already fetched
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/datasets/taluk-hoblies?taluk=${encodeURIComponent(taluk)}&district=${encodeURIComponent(district)}&state=Karnataka`
+        );
+        if (!res.ok || cancelled) return;
+        const geo = await res.json();
+        if (cancelled) return;
+        const names = Array.from(
+          new Set(
+            (geo.features as Array<{
+              properties?: { KGISHobliName?: string; hobli_name?: string; name?: string };
+            }>)
+              .map(
+                (f) =>
+                  f.properties?.KGISHobliName ??
+                  f.properties?.hobli_name ??
+                  f.properties?.name
+              )
+              .filter((n): n is string => Boolean(n)),
+          ),
+        );
+        setHobliesByTaluk((prev) => ({ ...prev, [key]: names }));
+      } catch (error) {
+        console.error("Failed to load hobli names for search suggestions:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery, hobliesByTaluk, drillContext]);
+
   // Generate search suggestions based on current query
   useEffect(() => {
     if (!searchQuery) {
@@ -404,6 +524,13 @@ export function ExplorePage() {
     }
 
     const suggestions: { category: string; items: string[] }[] = [];
+
+    // The country itself is always searchable ("India") - it isn't a state, so it
+    // would otherwise never match the state/district/taluk lists below.
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    if (normalizedQuery && "india".includes(normalizedQuery)) {
+      suggestions.push({ category: "Country", items: ["India"] });
+    }
 
     // Real state/district/taluk matches take priority over the static Bengaluru lists.
     const stateMatches = filterLocationEntries(stateEntries, searchQuery);
@@ -416,6 +543,88 @@ export function ExplorePage() {
     const talukMatches = filterLocationEntries(talukEntries, searchQuery);
     if (talukMatches.length > 0) suggestions.push({ category: "Taluks", items: talukMatches });
 
+    // Hobli suggestions - labeled with the full "State, District, Taluk, Hobli" chain.
+    // A bare hobli name matches against the all-Karnataka hobli index so EVERY matching
+    // hobli across the state is offered (e.g. "kasaba" lists all ~95 Kasaba hoblies,
+    // each with its own district/taluk).
+    const queryParts = searchQuery.split(",").map((p) => p.trim());
+    if (queryParts.length === 1 && queryParts[0]) {
+      // Match against the hobli name itself (the leaf), not the whole chain - the
+      // state/district/taluk categories already cover chain-queries, and matching the
+      // full label would flood this category with every "Karnataka, ..." entry.
+      const hobliQuery = queryParts[0].toLowerCase();
+      const hobliMatches = hobliEntries
+        .filter((e) => e.leaf.toLowerCase().includes(hobliQuery))
+        .sort((a, b) => {
+          const aStarts = a.leaf.toLowerCase().startsWith(hobliQuery);
+          const bStarts = b.leaf.toLowerCase().startsWith(hobliQuery);
+          if (aStarts === bStarts) return a.label.localeCompare(b.label);
+          return aStarts ? -1 : 1;
+        })
+        .map((e) => e.label);
+      if (hobliMatches.length > 0)
+        suggestions.push({ category: "Hoblies", items: hobliMatches });
+
+      // Villages: same treatment, matching the village name itself (leaf). A 1-char
+      // query would match tens of thousands of villages, so require 2+ chars and cap the
+      // list so the dropdown doesn't freeze.
+      if (hobliQuery.length >= 2) {
+        const villageMatches = villageEntries
+          .filter((e) => e.leaf.toLowerCase().includes(hobliQuery))
+          .sort((a, b) => {
+            const aStarts = a.leaf.toLowerCase().startsWith(hobliQuery);
+            const bStarts = b.leaf.toLowerCase().startsWith(hobliQuery);
+            if (aStarts === bStarts) return a.label.localeCompare(b.label);
+            return aStarts ? -1 : 1;
+          })
+          .slice(0, 100)
+          .map((e) => e.label);
+        if (villageMatches.length > 0)
+          suggestions.push({ category: "Villages", items: villageMatches });
+      }
+    } else if (queryParts.length >= 4 && queryParts[0]?.toLowerCase() === "karnataka") {
+      // Full "Karnataka, <district>, <taluk>, <hobli>, ..." chain - match the 5th
+      // segment (the village name) against the entries whose chain matches parts 1-3.
+      const chainDistrict = queryParts[1] ?? "";
+      const chainTaluk = queryParts[2] ?? "";
+      const chainHobli = queryParts[3] ?? "";
+      const villageQuery = (queryParts[4] ?? "").toLowerCase();
+      const villageMatches = villageEntries
+        .filter((e) => {
+          const parts = e.label.split(", ");
+          return (
+            parts[1] === chainDistrict &&
+            parts[2] === chainTaluk &&
+            parts[3] === chainHobli &&
+            e.leaf.toLowerCase().includes(villageQuery)
+          );
+        })
+        .slice(0, 50)
+        .map((e) => e.label);
+      if (villageMatches.length > 0)
+        suggestions.push({ category: "Villages", items: villageMatches });
+    } else if (queryParts.length >= 3 && queryParts[0]?.toLowerCase() === "karnataka") {
+      // Full "Karnataka, <district>, <taluk>, ..." chain - fetch that taluk's hoblies on
+      // demand (fresh from the actual boundary data) and match the 4th segment.
+      const hobliDistrict = queryParts[1] ?? "";
+      const hobliTaluk = queryParts[2] ?? "";
+      const hobliNames = hobliesByTaluk[`${hobliDistrict}|${hobliTaluk}`];
+      if (hobliNames && hobliNames.length > 0) {
+        const hobliQuery = (queryParts[3] ?? "").toLowerCase();
+        const hobliMatches = hobliNames
+          .filter((hobli) => hobli.toLowerCase().includes(hobliQuery))
+          .sort((a, b) => {
+            const aStarts = a.toLowerCase().startsWith(hobliQuery);
+            const bStarts = b.toLowerCase().startsWith(hobliQuery);
+            if (aStarts === bStarts) return a.localeCompare(b);
+            return aStarts ? -1 : 1;
+          })
+          .map((hobli) => `Karnataka, ${hobliDistrict}, ${hobliTaluk}, ${hobli}`);
+        if (hobliMatches.length > 0)
+          suggestions.push({ category: "Hoblies", items: hobliMatches });
+      }
+    }
+
     // Search across the remaining (static, Bengaluru-specific) categories
     Object.keys(PLACE_SUGGESTIONS).forEach((category) => {
       const filtered = filterSuggestions(searchQuery, category);
@@ -427,10 +636,28 @@ export function ExplorePage() {
       }
     });
 
-    setSearchSuggestions(suggestions);
-    setShowSuggestions(suggestions.length > 0);
+    // Merge categories that share a label (e.g. the dynamic all-Karnataka "Villages" and
+    // the static Bengaluru "Villages") so the dropdown never renders duplicate keys.
+    const merged: { category: string; items: string[] }[] = [];
+    for (const cat of suggestions) {
+      const existing = merged.find((m) => m.category === cat.category);
+      if (existing) existing.items = [...existing.items, ...cat.items];
+      else merged.push(cat);
+    }
+
+    setSearchSuggestions(merged);
+    setShowSuggestions(merged.length > 0);
     setSelectedSuggestionIndex(-1);
-  }, [searchQuery, stateEntries, districtEntries, talukEntries]);
+  }, [
+    searchQuery,
+    stateEntries,
+    districtEntries,
+    talukEntries,
+    hobliEntries,
+    villageEntries,
+    hobliesByTaluk,
+    drillContext,
+  ]);
 
   // Handle keyboard navigation for suggestions
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -549,6 +776,7 @@ export function ExplorePage() {
           onAOIChange={setAoiInfo}
           onDrawingToolChange={setActiveAOITool}
           onAttributeInfo={setAttributeInfo}
+          onDrillContextChange={setDrillContext}
         />
 
         {/* Floating search bar */}
@@ -896,41 +1124,6 @@ export function ExplorePage() {
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
                 <button className="text-sm text-atlas-cobalt hover:underline">Reset all</button>
-              </div>
-
-              {/* Dataset Type Filter */}
-              <div className="mb-4 border-b border-gray-200 pb-4">
-                <button
-                  onClick={() => toggleFilter("datasetType")}
-                  className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-obsidian-graphite"
-                >
-                  Dataset Type
-                  {expandedFilters.datasetType ? (
-                    <ChevronUp className="h-4 w-4 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
-                  )}
-                </button>
-                {expandedFilters.datasetType && (
-                  <div className="space-y-2">
-                    <label className="flex items-center text-sm text-gray-600">
-                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                      DEM / DSM
-                    </label>
-                    <label className="flex items-center text-sm text-gray-600">
-                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" defaultChecked />
-                      Ortho Rectified Image
-                    </label>
-                    <label className="flex items-center text-sm text-gray-600">
-                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                      Point Cloud Data
-                    </label>
-                    <label className="flex items-center text-sm text-gray-600">
-                      <input type="checkbox" className="mr-2 accent-atlas-cobalt" />
-                      Vector Data
-                    </label>
-                  </div>
-                )}
               </div>
 
               {/* Boundary Layers Filter */}

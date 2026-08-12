@@ -21,6 +21,8 @@ import geopandas as gpd
 from shapely.errors import ShapelyError
 from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 ExportFormat = Literal["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"]
 
@@ -92,8 +94,25 @@ def _parse_geometry(geometry: dict[str, Any]) -> BaseGeometry:
         parsed = shape(geometry)
     except (ShapelyError, ValueError, TypeError) as exc:
         raise FeatureExportError(f"invalid geometry: {exc}") from exc
-    if not parsed.is_valid or parsed.is_empty:
+    if parsed.is_empty:
         raise FeatureExportError("geometry is invalid or empty")
+    if not parsed.is_valid:
+        # Real KGIS/government boundary source data commonly has minor topology
+        # defects (self-intersecting rings, duplicate vertices) that are still
+        # practically valid shapes - e.g. roughly a third of Karnataka's district
+        # polygons fail strict OGC validity. Repair via GEOS MakeValid rather than
+        # discarding the whole feature outright.
+        repaired = make_valid(parsed)
+        if repaired.geom_type == "GeometryCollection":
+            # Keep only the parts matching the original geometry's family (e.g. the
+            # polygonal pieces of a self-intersecting polygon) - stray points/lines
+            # MakeValid sometimes emits at the intersection aren't real boundary data.
+            family = _GEOM_FAMILY.get(parsed.geom_type)
+            parts = [g for g in repaired.geoms if _GEOM_FAMILY.get(g.geom_type) == family]
+            repaired = unary_union(parts) if parts else repaired
+        if not repaired.is_valid or repaired.is_empty:
+            raise FeatureExportError("geometry is invalid or empty")
+        parsed = repaired
     return parsed
 
 
@@ -143,13 +162,25 @@ def _normalize_geometry_family(
     return out_geometries, out_rows
 
 
+# "OBJECTID"/"FID" are reserved system field names in the File Geodatabase format -
+# OpenFileGDB treats a source property with either of these names (case-insensitive)
+# as the feature's literal FID rather than a normal attribute. Real KGIS cadastral data
+# is one file per village, each with its own locally-numbered OBJECTID sequence
+# starting near 1; merging many villages' worth into one district-wide survey_plot
+# layer produces duplicate IDs across villages, which OGR then rejects outright
+# ("Cannot create feature of ID ... because one already exists"). Rename them so OGR
+# always auto-assigns a fresh, layer-unique FID instead, keeping the original values
+# as ordinary attributes.
+_RESERVED_FID_FIELDS = {"objectid", "fid"}
+
+
 def _safe_properties(properties: dict[str, Any]) -> dict[str, Any]:
     # Every value must be a type OGR/GDAL can write to an attribute field -
     # geopandas infers column types from these via pandas, so coerce
     # anything exotic (nested dict/list from a source GeoJSON) to a string
     # rather than letting to_file() fail on the whole export.
     return {
-        str(key): (
+        (f"SRC_{key}" if key.lower() in _RESERVED_FID_FIELDS else str(key)): (
             value if isinstance(value, (str, int, float, bool)) or value is None else str(value)
         )
         for key, value in (properties or {}).items()

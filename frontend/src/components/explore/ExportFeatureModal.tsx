@@ -51,21 +51,6 @@ type ModalState =
   | { status: "loading"; progress?: Progress }
   | { status: "error"; message: string };
 
-function triggerDownload(filename: string, mimetype: string, base64: string) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mimetype });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 // Centered format-picker dialog opened from the attribute panel's "Export" action. For
 // district/taluk/hobli boundaries it also offers a hierarchy checklist (that level plus
 // everything below it) for a bulk export; picking any of those streams live progress from
@@ -174,7 +159,7 @@ export function ExportFeatureModal({
           if (!line) continue;
           const event = JSON.parse(line.slice("data: ".length)) as
             | { type: "progress"; message: string; current?: number; total?: number }
-            | { type: "done"; filename: string; mimetype: string; contentBase64: string }
+            | { type: "done"; filename: string; mimetype: string; downloadUrl: string }
             | { type: "error"; message: string };
 
           if (event.type === "progress") {
@@ -183,7 +168,15 @@ export function ExportFeatureModal({
               progress: { message: event.message, current: event.current, total: event.total },
             });
           } else if (event.type === "done") {
-            triggerDownload(event.filename, event.mimetype, event.contentBase64);
+            // The finished file is streamed from a dedicated download route rather
+            // than embedded here - a whole-district export can be hundreds of MB,
+            // past what's safe to hold as one base64 string/Blob in the browser.
+            const link = document.createElement("a");
+            link.href = event.downloadUrl;
+            link.download = event.filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
             onClose();
             return;
           } else {

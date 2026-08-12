@@ -1,0 +1,4222 @@
+[
+  {
+    "district": "Bagalkote",
+    "taluk": "Badami",
+    "hobli": "Badami"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Badami",
+    "hobli": "Kerura"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Badami",
+    "hobli": "Kulageri"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bagalkote",
+    "hobli": "Bagalakota"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bagalkote",
+    "hobli": "Kaladagi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bagalkote",
+    "hobli": "Seetimani"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bilagi",
+    "hobli": "Anagavadi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Bilagi",
+    "hobli": "Beelagi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Guledgudda",
+    "hobli": "Guledagudda"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Hungund",
+    "hobli": "Ameenagada"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Hungund",
+    "hobli": "Hunagunda"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Hungund",
+    "hobli": "Karadi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Ilkal",
+    "hobli": "Ameenagada"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Ilkal",
+    "hobli": "Ilakalla"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Ilkal",
+    "hobli": "Karadi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Jamakhandi",
+    "hobli": "Jamakhandi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Jamakhandi",
+    "hobli": "Savalagi"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Mudhol",
+    "hobli": "Lokapura"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Mudhol",
+    "hobli": "Mudhola"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Rabakavi Banahatti",
+    "hobli": "Mudhola"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Rabakavi Banahatti",
+    "hobli": "Teradala"
+  },
+  {
+    "district": "Bagalkote",
+    "taluk": "Terdal",
+    "hobli": "Teradala"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Ballari",
+    "hobli": "Ballari"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Ballari",
+    "hobli": "Moka"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Ballari",
+    "hobli": "Rupanagudi"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Kampli",
+    "hobli": "Kampli"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Kurugodu",
+    "hobli": "Koluru"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Kurugodu",
+    "hobli": "Kurugodu"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Siruguppa",
+    "hobli": "Hachcholli"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Siruguppa",
+    "hobli": "Karuru"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Siruguppa",
+    "hobli": "Siruguppa"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Siruguppa",
+    "hobli": "Tekkalakote"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Sonduru",
+    "hobli": "Choranuru"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Sonduru",
+    "hobli": "Sanduru"
+  },
+  {
+    "district": "Ballari",
+    "taluk": "Sonduru",
+    "hobli": "Toranagallu"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Athani",
+    "hobli": "Anantapura"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Athani",
+    "hobli": "Athani"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Athani",
+    "hobli": "Telasanga"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Bailhongal",
+    "hobli": "Bailahongala"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Bailhongal",
+    "hobli": "Nesaragi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Belagavi",
+    "hobli": "Bagevadi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Belagavi",
+    "hobli": "Belagavi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Belagavi",
+    "hobli": "Kakati"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Belagavi",
+    "hobli": "Uchaganva"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Chikkodi",
+    "hobli": "Chikkodi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Chikkodi",
+    "hobli": "Nagaramunnoli"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Chikkodi",
+    "hobli": "Sadalaga"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Gokak",
+    "hobli": "Gokaka"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Gokak",
+    "hobli": "Kowjalagi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Hukkeri",
+    "hobli": "Hukkeri"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Hukkeri",
+    "hobli": "Sankeshvara"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Hukkeri",
+    "hobli": "Yamakanamardi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Kagwad",
+    "hobli": "Kagavada"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Khanapur",
+    "hobli": "Beedi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Khanapur",
+    "hobli": "Gunji"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Khanapur",
+    "hobli": "Jamboti"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Khanapur",
+    "hobli": "Khanapura"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Kitthuru",
+    "hobli": "Kittura"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Mudalgi",
+    "hobli": "Arabhanvi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Nippani",
+    "hobli": "Nippani"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Raibag",
+    "hobli": "Kudachi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Raibag",
+    "hobli": "Rayabaga"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Ramadurg",
+    "hobli": "K Chandaragi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Ramadurg",
+    "hobli": "Katakola"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Ramadurg",
+    "hobli": "Mudakavi"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Ramadurg",
+    "hobli": "Surebana"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Savadatti",
+    "hobli": "Munavalli"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Savadatti",
+    "hobli": "Muragoda"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Savadatti",
+    "hobli": "Savadatti"
+  },
+  {
+    "district": "Belagavi",
+    "taluk": "Yaragatti",
+    "hobli": "Yaragatti"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Devanahalli",
+    "hobli": "Channarayapattana"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Devanahalli",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Devanahalli",
+    "hobli": "Kundana"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Devanahalli",
+    "hobli": "Vijayapura"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura",
+    "hobli": "Doddabelavangala"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura",
+    "hobli": "Madure"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura",
+    "hobli": "Sasalu"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Doddaballapura",
+    "hobli": "Tubagere"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote",
+    "hobli": "Anugondanahalli"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote",
+    "hobli": "Jadigenahalli"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote",
+    "hobli": "Nandagudi"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Hoskote",
+    "hobli": "Sulibele"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Sompura"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Sompura 2"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Tyamagundlu"
+  },
+  {
+    "district": "Bengaluru Rural",
+    "taluk": "Nelamangala",
+    "hobli": "Tyamagundlu 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Attibele 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Attibele 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Jigani"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Jigani 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Sarjapura 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Sarjapura 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Anekal",
+    "hobli": "Sarjapura 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Bidarahalli 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Bidarahalli 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Bidarahalli 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "K R Pura 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "K R Pura 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "K R Pura 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Mahadevapura"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Marathahalli"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Varturu 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore East",
+    "hobli": "Varturu 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Dasanapura 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Dasanapura 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Dasanapura 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Kasaba 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Yashavantapura 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Yashavantapura 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore North",
+    "hobli": "Yeshwanthapura"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Beguru 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Beguru 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Beguru 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Kengeri 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Kengeri 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Kengeri 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Kengeri 4"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Tavarekere 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Tavarekere 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Tavarekere 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli 4"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Bangalore South",
+    "hobli": "Uttarahalli 5"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Hesarughatta 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Hesarughatta 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Jala 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Jala 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Jala 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Yalahanka 1"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Yalahanka 2"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Yalahanka 3"
+  },
+  {
+    "district": "Bengaluru Urban",
+    "taluk": "Yelahanka",
+    "hobli": "Yelahanka"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Aurad",
+    "hobli": "Chintaki"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Aurad",
+    "hobli": "Owradabi"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Aurad",
+    "hobli": "Santapura"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan",
+    "hobli": "Basavakalyana"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan",
+    "hobli": "Kohinura"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan",
+    "hobli": "Mantala"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan",
+    "hobli": "Mudabi"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Basavakalyan",
+    "hobli": "Rajeshvara"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Bhalki"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Halabarga"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Khataka Chinchuli"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Lakhanaganva"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Nitturabh"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bhalki",
+    "hobli": "Sayaganva"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Bagadala"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Beedara Uttara"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Beedaradakshina"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Janavada"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Kamatana"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Bidar",
+    "hobli": "Mannalli"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Chitguppa",
+    "hobli": "Bemalakheda"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Chitguppa",
+    "hobli": "Chitaguppa"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Chitguppa",
+    "hobli": "Nirna"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Hulsoor",
+    "hobli": "Hulasura"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Humnabad",
+    "hobli": "Dubalagundi"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Humnabad",
+    "hobli": "Hallilikhedabi"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Humnabad",
+    "hobli": "Humanabada"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Kamalnagar",
+    "hobli": "Dabaka"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Kamalnagar",
+    "hobli": "Kamalanagara"
+  },
+  {
+    "district": "Bidar",
+    "taluk": "Kamalnagar",
+    "hobli": "Tanakusanura"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara",
+    "hobli": "Chandakavadi"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara",
+    "hobli": "Haradanahalli"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara",
+    "hobli": "Harave"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Chamarajanagara",
+    "hobli": "Santemarahalli"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Gundlupet",
+    "hobli": "Beguru"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Gundlupet",
+    "hobli": "Hangala"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Gundlupet",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Gundlupet",
+    "hobli": "Terakanambi"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Hanur",
+    "hobli": "Hanuru"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Hanur",
+    "hobli": "Lokkanahalli"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Hanur",
+    "hobli": "Ramapura"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Kollegal",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Kollegal",
+    "hobli": "Palya"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Yalandur",
+    "hobli": "Agara"
+  },
+  {
+    "district": "Chamarajanagara",
+    "taluk": "Yalandur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Bagepalli",
+    "hobli": "Guluru"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Bagepalli",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Bagepalli",
+    "hobli": "Mittemari"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Bagepalli",
+    "hobli": "Patapalya"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chelur",
+    "hobli": "Cheluru"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chelur",
+    "hobli": "Chilakalanerpu"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chelur",
+    "hobli": "Mittemari"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chelur",
+    "hobli": "Patapalya"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chikkaballapura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chikkaballapura",
+    "hobli": "Mandikallu"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chikkaballapura",
+    "hobli": "Nandi"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani",
+    "hobli": "Ambajidurga"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani",
+    "hobli": "Kaivara"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani",
+    "hobli": "Munganahalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Chinthamani",
+    "hobli": "Muragamalla"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur",
+    "hobli": "D Palya"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur",
+    "hobli": "Hosuru"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur",
+    "hobli": "Nagaragere"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gauribidanur",
+    "hobli": "Tondebavi"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gudibande",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Gudibande",
+    "hobli": "Somenahalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Manchenahalli",
+    "hobli": "Manchenahalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Shidlagatta",
+    "hobli": "Bashettihalli"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Shidlagatta",
+    "hobli": "Jangamakote"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Shidlagatta",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkaballapura",
+    "taluk": "Shidlagatta",
+    "hobli": "Sadali"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Ajjampura",
+    "hobli": "Ajjampura"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Ajjampura",
+    "hobli": "Shivani"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Alduru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Ambale"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Avati"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Jagara"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Khandya"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Lakya"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Chikkamagaluru",
+    "hobli": "Vastare"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Beeruru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Chowlahiriyur"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Hirenalluru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Panchanahalli"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Sakharayapattana"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Singatagere"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kadur",
+    "hobli": "Yagati"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Kalasa",
+    "hobli": "Kalasa"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Koppa",
+    "hobli": "Hariharapura"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Koppa",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Koppa",
+    "hobli": "Megunda"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Mudigere",
+    "hobli": "Baluru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Mudigere",
+    "hobli": "Banakal"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Mudigere",
+    "hobli": "Gonibeedu"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Mudigere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Narasimharajapura",
+    "hobli": "Balehonnuru"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Narasimharajapura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Sringeri",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Sringeri",
+    "hobli": "Kigga"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Tarikere",
+    "hobli": "Amrutapura"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Tarikere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Tarikere",
+    "hobli": "Lakkavalli"
+  },
+  {
+    "district": "Chikkamagaluru",
+    "taluk": "Tarikere",
+    "hobli": "Lingadahalli"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Challakere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Challakere",
+    "hobli": "Nayakanahatti"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Challakere",
+    "hobli": "Parashurampura"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Challakere",
+    "hobli": "Talaku"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Chitradurga",
+    "hobli": "Bharamasagara"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Chitradurga",
+    "hobli": "Hireguntanuru"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Chitradurga",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Chitradurga",
+    "hobli": "Turuvanuru"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hiriyur",
+    "hobli": "Aimangala"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hiriyur",
+    "hobli": "Dharmapura"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hiriyur",
+    "hobli": "J G Halli"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hiriyur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Holalkere",
+    "hobli": "Beedurga"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Holalkere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Holalkere",
+    "hobli": "Ramagiri"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Holalkere",
+    "hobli": "Talya"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hosadurga",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hosadurga",
+    "hobli": "Madadakere"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hosadurga",
+    "hobli": "Mattodu"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Hosadurga",
+    "hobli": "Shreerampura"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Molakalmuru",
+    "hobli": "Devasamudra"
+  },
+  {
+    "district": "Chitradurga",
+    "taluk": "Molakalmuru",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Bantwal",
+    "hobli": "Bantvala"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Bantwal",
+    "hobli": "Panemangaluru"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Bantwal",
+    "hobli": "Vitla"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Belthangady",
+    "hobli": "Beltangadi"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Belthangady",
+    "hobli": "Kokkada"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Belthangady",
+    "hobli": "Venuru"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Kadaba",
+    "hobli": "Kadaba"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Kadaba",
+    "hobli": "Panja"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Kadaba",
+    "hobli": "Uppinangadi"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mangaluru",
+    "hobli": "Gurupura"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mangaluru",
+    "hobli": "Mangaluru A"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mangaluru",
+    "hobli": "Mangaluru B"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mangaluru",
+    "hobli": "Suratkal"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Moodubidire",
+    "hobli": "Mudabidri"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Mulki",
+    "hobli": "Mulki"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Puttur",
+    "hobli": "Putturu"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Puttur",
+    "hobli": "Uppinangadi"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Sullia",
+    "hobli": "Panja"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Sullia",
+    "hobli": "Sulya"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Ullala",
+    "hobli": "Mangaluru B"
+  },
+  {
+    "district": "Dakshina Kannada",
+    "taluk": "Ullala",
+    "hobli": "Panemangaluru"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Basavapattana 1"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Basavapattana 2"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Santebennuru 1"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Santebennuru 2"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Channagiri",
+    "hobli": "Ubrani"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Davanagere",
+    "hobli": "Anagodu"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Davanagere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Davanagere",
+    "hobli": "Mayakonda"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Harihar",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Harihar",
+    "hobli": "Malebennuru"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Honnali",
+    "hobli": "Govinakovi 2"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Honnali",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Honnali",
+    "hobli": "Sasvehalli 1"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Honnali",
+    "hobli": "Sasvehalli 2"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Jagaluru",
+    "hobli": "Bilichodu"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Jagaluru",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Jagaluru",
+    "hobli": "Sokke"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Nyamati",
+    "hobli": "Belagutti"
+  },
+  {
+    "district": "Davanagere",
+    "taluk": "Nyamati",
+    "hobli": "Govinakovi 1"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Alnavar",
+    "hobli": "Alnavara"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Annigeri",
+    "hobli": "Annigeri"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Dharwad",
+    "hobli": "Amminabavi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Dharwad",
+    "hobli": "Dharavada"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Dharwad",
+    "hobli": "Garaga"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi",
+    "hobli": "Chabbi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi",
+    "hobli": "Hubballi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi",
+    "hobli": "Shiraguppi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi Urban",
+    "hobli": "Chabbi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Hubballi Urban",
+    "hobli": "Hubballi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kalgatgi",
+    "hobli": "Dhummavada"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kalgatgi",
+    "hobli": "Kalaghatagi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kalgatgi",
+    "hobli": "Tabakadahonnihalli"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kundgol",
+    "hobli": "Kundagola"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Kundgol",
+    "hobli": "Sanshi"
+  },
+  {
+    "district": "Dharwad",
+    "taluk": "Navalagund",
+    "hobli": "Moraba"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Gadag",
+    "hobli": "Betageri"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Gadag",
+    "hobli": "Gadaga"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Gajendragad",
+    "hobli": "Naregalla"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Laxmeshwar",
+    "hobli": "Lakshmeshvara"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Mundargi",
+    "hobli": "Dambala"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Mundargi",
+    "hobli": "Mundaragi"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Naragund",
+    "hobli": "Konnura"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Naragund",
+    "hobli": "Naragunda"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Ron",
+    "hobli": "Holealura"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Ron",
+    "hobli": "Naregalla"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Ron",
+    "hobli": "Rona"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Shirahatti",
+    "hobli": "Lakshmeshvara"
+  },
+  {
+    "district": "Gadag",
+    "taluk": "Shirahatti",
+    "hobli": "Shirahatti"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Alur",
+    "hobli": "K Hosakote"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Alur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Alur",
+    "hobli": "Kunduru"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Alur",
+    "hobli": "Palya"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud",
+    "hobli": "Doddamagge"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud",
+    "hobli": "Konanuru"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud",
+    "hobli": "Mallipattana"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arkalgud",
+    "hobli": "Ramanathapura"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere",
+    "hobli": "Banavara"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere",
+    "hobli": "Gandasi"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere",
+    "hobli": "Javagal"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere",
+    "hobli": "Kanakatte"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Arsikere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur",
+    "hobli": "Arehalli"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur",
+    "hobli": "Bikkodu"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur",
+    "hobli": "Halebeedu"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Belur",
+    "hobli": "Madeehalli"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Baguru"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Dandiganahalli"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Hireesave"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Nuggehalli"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Channarayapatna",
+    "hobli": "Shravanabelagola"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan",
+    "hobli": "Dudda"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan",
+    "hobli": "Kattaya"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan",
+    "hobli": "Salagame"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Hassan",
+    "hobli": "Shantigrama"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Holenarasipura",
+    "hobli": "Halekote"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Holenarasipura",
+    "hobli": "Hallimaisuru"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Holenarasipura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura",
+    "hobli": "Belagodu"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura",
+    "hobli": "Hanubalu"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura",
+    "hobli": "Hetturu"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Hassan",
+    "taluk": "Sakleshpura",
+    "hobli": "Yasaluru"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Byadagi",
+    "hobli": "Byadagi"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Byadagi",
+    "hobli": "Kaginelli"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hangal",
+    "hobli": "Akkialura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hangal",
+    "hobli": "Bammanalli"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hangal",
+    "hobli": "Hanagalla"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Haveri",
+    "hobli": "Guttala"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Haveri",
+    "hobli": "Haveri"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Haveri",
+    "hobli": "Karajagi"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hirekerur",
+    "hobli": "Hansabhavi"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Hirekerur",
+    "hobli": "Hirekerura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Ranebennur",
+    "hobli": "Kuppelura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Ranebennur",
+    "hobli": "Medleri"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Ranebennur",
+    "hobli": "Ranebennura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Rattihalli",
+    "hobli": "Hirekerura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Rattihalli",
+    "hobli": "Ratteehalli"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Savanur",
+    "hobli": "Hattimattura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Savanur",
+    "hobli": "Savanura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Shiggaon",
+    "hobli": "Bankapura"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Shiggaon",
+    "hobli": "Dundashi"
+  },
+  {
+    "district": "Haveri",
+    "taluk": "Shiggaon",
+    "hobli": "Shigganva"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Afzalpur",
+    "hobli": "Afajalapura"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Afzalpur",
+    "hobli": "Atanura"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Afzalpur",
+    "hobli": "Karajagi"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Aland",
+    "hobli": "Alanda"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Aland",
+    "hobli": "Khajuri"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Aland",
+    "hobli": "Madanahipparaga"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Aland",
+    "hobli": "Narona"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Aland",
+    "hobli": "Nimbarga"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chincholi",
+    "hobli": "Ainapura"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chincholi",
+    "hobli": "Chincholi"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chincholi",
+    "hobli": "Kodli"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chincholi",
+    "hobli": "Sulepeta"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chittapur",
+    "hobli": "Chittapura"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chittapur",
+    "hobli": "Gundagurti"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Chittapur",
+    "hobli": "Nalavara"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Jewargi",
+    "hobli": "Andola"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Jewargi",
+    "hobli": "Jevargi"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Jewargi",
+    "hobli": "Nelogi"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalaburgi",
+    "hobli": "Avarada B"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalaburgi",
+    "hobli": "Farahatabada"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalaburgi",
+    "hobli": "Gulabarga"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalaburgi",
+    "hobli": "Pattana"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalagi",
+    "hobli": "Kalagi"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kalagi",
+    "hobli": "Kodli"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kamalapur",
+    "hobli": "Kamalapura"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Kamalapur",
+    "hobli": "Mahaganva"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Sedam",
+    "hobli": "Adaki"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Sedam",
+    "hobli": "Kodla"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Sedam",
+    "hobli": "Mudola"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Sedam",
+    "hobli": "Sedam"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Shahabad",
+    "hobli": "Shahabada"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Yadrami",
+    "hobli": "Andola"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Yadrami",
+    "hobli": "Ijeri"
+  },
+  {
+    "district": "Kalaburgi",
+    "taluk": "Yadrami",
+    "hobli": "Yadrami"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Kushalnagar",
+    "hobli": "Kushalanagara"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Kushalnagar",
+    "hobli": "Suntikoppa"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Madikeri",
+    "hobli": "Bhagamandala"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Madikeri",
+    "hobli": "Madikeri"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Madikeri",
+    "hobli": "Napoklu"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Madikeri",
+    "hobli": "Sampaje"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Ponnampet",
+    "hobli": "Balele"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Ponnampet",
+    "hobli": "Hudikeri"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Ponnampet",
+    "hobli": "Ponnampete"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Ponnampet",
+    "hobli": "Shreemangala"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Somavarapete",
+    "hobli": "Kodlipete"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Somavarapete",
+    "hobli": "Shanivarasante"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Somavarapete",
+    "hobli": "Shantalli"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Somavarapete",
+    "hobli": "Somavarapete"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Virajpet",
+    "hobli": "Ammati"
+  },
+  {
+    "district": "Kodagu",
+    "taluk": "Virajpet",
+    "hobli": "Virajapete"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Bangarpet",
+    "hobli": "Budikote"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Bangarpet",
+    "hobli": "Kamasamudra"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Bangarpet",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Bangarpet",
+    "hobli": "Rabartasan Pete"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolar Gold Field",
+    "hobli": "Betamangala"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolar Gold Field",
+    "hobli": "Kyasamballi"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolar Gold Field",
+    "hobli": "Rabartasan Pete"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Holuru"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Hutturu"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Narasapura"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Sugaturu"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Vakkaleri"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Kolara",
+    "hobli": "Vemagallu"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Malur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Malur",
+    "hobli": "Lakkuru"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Malur",
+    "hobli": "Masti"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Malur",
+    "hobli": "Tekal"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Mulabagilu",
+    "hobli": "Avani"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Mulabagilu",
+    "hobli": "Bairakuru"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Mulabagilu",
+    "hobli": "Duggasandra"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Mulabagilu",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Mulabagilu",
+    "hobli": "Tayaluru"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Srinivaspura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Srinivaspura",
+    "hobli": "Nelavanki"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Srinivaspura",
+    "hobli": "Rayalpadu"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Srinivaspura",
+    "hobli": "Ronuru"
+  },
+  {
+    "district": "Kolara",
+    "taluk": "Srinivaspura",
+    "hobli": "Yelduru"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Gangavathi",
+    "hobli": "Gangavati"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Gangavathi",
+    "hobli": "Marali"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Gangavathi",
+    "hobli": "Venkatagiri"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kanakagiri",
+    "hobli": "Hulihaidara"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kanakagiri",
+    "hobli": "Kanakagiri"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kanakagiri",
+    "hobli": "Navali"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Karatagi",
+    "hobli": "Karatagi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Karatagi",
+    "hobli": "Siddapura"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Koppal",
+    "hobli": "Alavandi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Koppal",
+    "hobli": "Hitnala"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Koppal",
+    "hobli": "Irakallagada"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Koppal",
+    "hobli": "Koppala"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kukanoor",
+    "hobli": "Kukanura"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kukanoor",
+    "hobli": "Mangaluru"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kushtagi",
+    "hobli": "Hanamanala"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kushtagi",
+    "hobli": "Hanamasagara"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kushtagi",
+    "hobli": "Kushtagi"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Kushtagi",
+    "hobli": "Tavaragera"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Yelburga",
+    "hobli": "Hirevankalakunta"
+  },
+  {
+    "district": "Koppal",
+    "taluk": "Yelburga",
+    "hobli": "Yalaburga"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Akkihebbal"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Bukinakere"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Kikkeri"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Santebachahalli"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Krishnarajpet",
+    "hobli": "Sheelanere"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Ataguru"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Ch A Kere Ai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Ch A Kere Aiai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Ch A Kere Aiaiai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Kasaba 1 Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Kasaba Aiai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Koppa"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Koppa Ai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Koppa Aiai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Maddur",
+    "hobli": "Koppa Aiaiai Ne Valaya"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "B G Pura Ai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "B G Pura Aiai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Halaguru"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kasaba Ai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kasaba Aiai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kasaba Aiaiai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kirugavalu Ai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kirugavalu Aiai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Malavalli",
+    "hobli": "Kirugavalu Aiaiai"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Basaralu 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Basaralu 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Dudda 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Dudda 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Kasaba 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Keragodu 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Keragodu 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Kottatti 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Mandya",
+    "hobli": "Kottatti 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala",
+    "hobli": "Belluru"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala",
+    "hobli": "Bindiganavile"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala",
+    "hobli": "Devalapura"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala",
+    "hobli": "Honakere"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Nagamangala",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Pandavpura",
+    "hobli": "Chinakurali"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Pandavpura",
+    "hobli": "Kasaba 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Pandavpura",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Pandavpura",
+    "hobli": "Melukote"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna",
+    "hobli": "Arakere"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna",
+    "hobli": "Belagola"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna",
+    "hobli": "K Shettihalli 1"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna",
+    "hobli": "K Shettihalli 2"
+  },
+  {
+    "district": "Mandya",
+    "taluk": "Srirangapatna",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Heggadadevanakote",
+    "hobli": "Antarasante"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Heggadadevanakote",
+    "hobli": "Hampapura"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Heggadadevanakote",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Hunsur",
+    "hobli": "Bilikere"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Hunsur",
+    "hobli": "Gavadagere"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Hunsur",
+    "hobli": "Hanagodu"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Hunsur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "K.r.nagar",
+    "hobli": "Hebbalu"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "K.r.nagar",
+    "hobli": "Hosagrahara"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "K.r.nagar",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Mysuru",
+    "hobli": "Ilavala"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Mysuru",
+    "hobli": "Jayapura"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Mysuru",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Mysuru",
+    "hobli": "Varuna"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud",
+    "hobli": "Biligere"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud",
+    "hobli": "Chikkayyanachatra"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud",
+    "hobli": "Doddakowlande"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud",
+    "hobli": "Hullahalli"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Nanjangud",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Piriyapatna",
+    "hobli": "Bettadapura"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Piriyapatna",
+    "hobli": "Haranahalli"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Piriyapatna",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Piriyapatna",
+    "hobli": "Ravanduru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saligrama",
+    "hobli": "Chunchanakatte"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saligrama",
+    "hobli": "Mirle"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saligrama",
+    "hobli": "Saligrama"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saraguru",
+    "hobli": "Kandalike"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "Saraguru",
+    "hobli": "Saraguru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.narasipura",
+    "hobli": "Bannuru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.narasipura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.narasipura",
+    "hobli": "Muguru"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.narasipura",
+    "hobli": "Sosale"
+  },
+  {
+    "district": "Mysuru",
+    "taluk": "T.narasipura",
+    "hobli": "Talakadu"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Arakera",
+    "hobli": "Arakera"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Devdurga",
+    "hobli": "Devadurga"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Devdurga",
+    "hobli": "Gabburu"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Devdurga",
+    "hobli": "Jalahalli"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Lingasuguru",
+    "hobli": "Gurugunta"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Lingasuguru",
+    "hobli": "Lingasuguru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Lingasuguru",
+    "hobli": "Mudagal"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Manvi",
+    "hobli": "Hirekotnikala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Manvi",
+    "hobli": "Kurdi"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Manvi",
+    "hobli": "Manavi"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Balaganura"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Gudadura"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Gunjalli"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Halapura"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Lingasuguru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Maski"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Pamanakallura"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Maski",
+    "hobli": "Turvihala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Chandrabanda"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Devasuguru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Gillesuguru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Kalamala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Rayachuru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Raichur",
+    "hobli": "Yaragera"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Badarli"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Gorebala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Gunjalli"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Hedaginala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Huda"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Jalihala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Javalagera"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Kunnatagi"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Salgunda"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Sindhanura"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Turvihala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sindhanuru",
+    "hobli": "Valkandinni"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sirwar",
+    "hobli": "Kalluru"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sirwar",
+    "hobli": "Kavitala"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sirwar",
+    "hobli": "Mallata"
+  },
+  {
+    "district": "Raichur",
+    "taluk": "Sirwar",
+    "hobli": "Siravara"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Channapatna",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Channapatna",
+    "hobli": "Maluru"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Channapatna",
+    "hobli": "Virupakshipura"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Harohalli",
+    "hobli": "Harohalli"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Harohalli",
+    "hobli": "Maralavadi"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Kanakpura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Kanakpura",
+    "hobli": "Kodihalli"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Kanakpura",
+    "hobli": "Satanuru"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Kanakpura",
+    "hobli": "Uyyamballi"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi",
+    "hobli": "Kuduru"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi",
+    "hobli": "Madabal"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi",
+    "hobli": "Soluru"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Magadi",
+    "hobli": "Tippasandra"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Bidadi 1"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Bidadi 2"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Kailancha 1"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Kailancha 2"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Kasaba 1"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Kasaba 2"
+  },
+  {
+    "district": "Ramanagara",
+    "taluk": "Ramanagara",
+    "hobli": "Kutagala"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Holehonnuru Ai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Holehonnuru Aiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Holehonnuru Aiaiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Kasaba Ai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Kasaba Aiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Bhadravathi",
+    "hobli": "Kudligere"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Hosanagar",
+    "hobli": "Huncha"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Hosanagar",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Hosanagar",
+    "hobli": "Kerehalli"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Hosanagar",
+    "hobli": "Nagara"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Anandapura"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Avinahalli"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Barangi"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Karuru"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Sagara",
+    "hobli": "Talaguppa"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura",
+    "hobli": "Anjanapura"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura",
+    "hobli": "Hosuru"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura",
+    "hobli": "Talagunda"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shikaripura",
+    "hobli": "Udugani"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Ayanuru"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Haranahalli"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Holaluraaiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Holaluruai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Kasaba Ai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Kasaba Aiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Kunsi"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Nidige Ai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Shivamogga",
+    "hobli": "Nidige Aiai"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Anavatti"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Chandragutti"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Jade"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Kuppagadde"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Soraba",
+    "hobli": "Ulavi"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli",
+    "hobli": "Agrahara"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli",
+    "hobli": "Agumbe"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli",
+    "hobli": "Mandagadde"
+  },
+  {
+    "district": "Shivamogga",
+    "taluk": "Thirthahalli",
+    "hobli": "Mutturu"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli",
+    "hobli": "Handanakere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli",
+    "hobli": "Huliyaru"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli",
+    "hobli": "Kandikere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Chiknayakanahalli",
+    "hobli": "Shettikere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "C S Pura"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "Cheluru"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "Hagalavadi"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "Kadaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Gubbi",
+    "hobli": "Nitturu"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Koratagere",
+    "hobli": "Channarayanadurga"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Koratagere",
+    "hobli": "Holavanahalli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Koratagere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Koratagere",
+    "hobli": "Kolala"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Amrutturu"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Huliyuru Durga"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Hutridurga"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Kottagere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Kunigal",
+    "hobli": "Yadiyuru"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Ai D Halli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Dodderi"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Kodigenahalli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Midigeshi"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Madhugiri",
+    "hobli": "Puravara"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Pavagada",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Pavagada",
+    "hobli": "Nagalamadike"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Pavagada",
+    "hobli": "Nidagal"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Pavagada",
+    "hobli": "Y N Hosakote"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira",
+    "hobli": "Bukkapattana"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira",
+    "hobli": "Gowdagere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira",
+    "hobli": "Hulikunte"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira",
+    "hobli": "Kallambella"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Sira",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tiptur",
+    "hobli": "Honnavalli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tiptur",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tiptur",
+    "hobli": "Kibbanahalli"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tiptur",
+    "hobli": "Nonavinakere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Bellavi"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Guluru"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Hebburu"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Kasaba East"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Kasaba North"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Kasaba South"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Kasaba West"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Kora"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Tumakuru",
+    "hobli": "Urdigere"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Turuvekere",
+    "hobli": "Dabbeghatta"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Turuvekere",
+    "hobli": "Dandinashivara"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Turuvekere",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Tumakuru",
+    "taluk": "Turuvekere",
+    "hobli": "Mayasandra"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Bainduru",
+    "hobli": "Bainduru"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Brahmavara",
+    "hobli": "Brahmavara"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Brahmavara",
+    "hobli": "Kota"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Hebri",
+    "hobli": "Hebri"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Kapu",
+    "hobli": "Kapu"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Karkala",
+    "hobli": "Ajekaru"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Karkala",
+    "hobli": "Karkala"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Kundapura",
+    "hobli": "Kundapura"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Kundapura",
+    "hobli": "Vandse"
+  },
+  {
+    "district": "Udupi",
+    "taluk": "Udupi",
+    "hobli": "Udupi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Ankola",
+    "hobli": "Ankola"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Ankola",
+    "hobli": "Balale"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Ankola",
+    "hobli": "Basagoda"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Ankola",
+    "hobli": "Belekeri"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Bhatkal",
+    "hobli": "Mavalli"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Bhatkal",
+    "hobli": "Susagadi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Dandeli",
+    "hobli": "Dandeli"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Haliyal",
+    "hobli": "Haliyala"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Haliyal",
+    "hobli": "Murkavada"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Haliyal",
+    "hobli": "Sambrani"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Honnavar",
+    "hobli": "Honnavara"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Honnavar",
+    "hobli": "Manki"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Honnavar",
+    "hobli": "Mavinakurva"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Joida",
+    "hobli": "Kumbaravada"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Joida",
+    "hobli": "Kyasalarak"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Joida",
+    "hobli": "Supa"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Karwar",
+    "hobli": "Bada"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Karwar",
+    "hobli": "Ghadasayi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Karwar",
+    "hobli": "Kinnara"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Karwar",
+    "hobli": "Savantavada"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Kumta",
+    "hobli": "Gokarna"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Kumta",
+    "hobli": "Kujalli"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Kumta",
+    "hobli": "Kumata"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Kumta",
+    "hobli": "Mirjana"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Mundgod",
+    "hobli": "Mundagoda"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Mundgod",
+    "hobli": "Pala"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Siddapur",
+    "hobli": "Kodkani"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Siddapur",
+    "hobli": "Kondli"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Siddapur",
+    "hobli": "Umbalamane"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Sirsi",
+    "hobli": "Banavasi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Sirsi",
+    "hobli": "Hulekal"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Sirsi",
+    "hobli": "Sampakhanda"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Sirsi",
+    "hobli": "Shirasi"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Yellapur",
+    "hobli": "Manchikeri"
+  },
+  {
+    "district": "Uttara Kannada",
+    "taluk": "Yellapur",
+    "hobli": "Yallapura"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hadagali",
+    "hobli": "Hadagali"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hadagali",
+    "hobli": "Hirehadagali"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hadagali",
+    "hobli": "Ittigi"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hagaribommanahalli",
+    "hobli": "Hagaribommanahalli"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hagaribommanahalli",
+    "hobli": "Hampasagara"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hagaribommanahalli",
+    "hobli": "Tambrahalli"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Harapanahalli",
+    "hobli": "Arasikeri"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Harapanahalli",
+    "hobli": "Chigateri"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Harapanahalli",
+    "hobli": "Kasaba"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Harapanahalli",
+    "hobli": "Telagi"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hosapete",
+    "hobli": "Hosapete"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hosapete",
+    "hobli": "Kamalapura"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Hosapete",
+    "hobli": "Mariyammanahalli"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Kotturu",
+    "hobli": "Kogali"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Kotturu",
+    "hobli": "Kotturu"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Kudligi",
+    "hobli": "Gudekote"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Kudligi",
+    "hobli": "Hosahalli"
+  },
+  {
+    "district": "Vijayanagara",
+    "taluk": "Kudligi",
+    "hobli": "Kudligi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Almel",
+    "hobli": "Alamela"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Babaleshwar",
+    "hobli": "Babaleshvara"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Babaleshwar",
+    "hobli": "Mamadapura"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Basavanabagewadi",
+    "hobli": "Ba Bagevadi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Basavanabagewadi",
+    "hobli": "Ho Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Basavanabagewadi",
+    "hobli": "Managuli"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Chadchan",
+    "hobli": "Chadachana"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Devara Hipparagi",
+    "hobli": "Devara Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Devara Hipparagi",
+    "hobli": "Ho Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Indi",
+    "hobli": "Ballolli"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Indi",
+    "hobli": "Indi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Kolhar",
+    "hobli": "Kolhara"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Muddebihala",
+    "hobli": "Davalagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Muddebihala",
+    "hobli": "Muddebihala"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Muddebihala",
+    "hobli": "Nalatavada"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Nidagundi",
+    "hobli": "Nidagundi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Sindagi",
+    "hobli": "Sindagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Talikoti",
+    "hobli": "Davalagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Talikoti",
+    "hobli": "Devara Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Talikoti",
+    "hobli": "Ho Hipparagi"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Talikoti",
+    "hobli": "Talikoti"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Tikota",
+    "hobli": "Tikota"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Vijayapura",
+    "hobli": "Bijapura"
+  },
+  {
+    "district": "Vijayapura",
+    "taluk": "Vijayapura",
+    "hobli": "Nagatana"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Gurmitakal",
+    "hobli": "Balichakra"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Gurmitakal",
+    "hobli": "Gurumitakala"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Gurmitakal",
+    "hobli": "Konkala"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Gurmitakal",
+    "hobli": "Saidapora"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Hunasagi",
+    "hobli": "Hunasigi"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Hunasagi",
+    "hobli": "Kakkera"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Hunasagi",
+    "hobli": "Kodekal"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shahpur",
+    "hobli": "Doranalli"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shahpur",
+    "hobli": "Gogi"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shahpur",
+    "hobli": "Haiyyala B"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shahpur",
+    "hobli": "Shahapura"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shorapur",
+    "hobli": "Kakkera"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shorapur",
+    "hobli": "Kembhavi"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Shorapur",
+    "hobli": "Shorapura"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Wadagera",
+    "hobli": "Doranalli"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Wadagera",
+    "hobli": "Haiyyala B"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Wadagera",
+    "hobli": "Vadagera"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Yadgir",
+    "hobli": "Balichakra"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Yadgir",
+    "hobli": "Hattikuni"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Yadgir",
+    "hobli": "Saidapora"
+  },
+  {
+    "district": "Yadgir",
+    "taluk": "Yadgir",
+    "hobli": "Yadagiri"
+  }
+]

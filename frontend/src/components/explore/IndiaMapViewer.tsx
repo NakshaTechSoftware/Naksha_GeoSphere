@@ -690,12 +690,16 @@ const STATE_DISTRICTS_LABELS_SOURCE_ID = "state-districts-labels-data";
 const STATE_ASSEMBLY_SOURCE_ID = "state-assembly-data";
 const STATE_ASSEMBLY_FILL_LAYER_ID = "state-assembly-fill";
 const STATE_ASSEMBLY_LINE_LAYER_ID = "state-assembly-line";
+const STATE_ASSEMBLY_LABELS_SOURCE_ID = "state-assembly-labels-data";
+const STATE_ASSEMBLY_LABELS_LAYER_ID = "state-assembly-labels";
 
 // Source/layer ids for a selected state's parliamentary constituency boundaries, loaded on
 // demand from MinIO when the "Parliamentary Constituency Boundaries" filter option is active.
 const STATE_PARLIAMENT_SOURCE_ID = "state-parliament-data";
 const STATE_PARLIAMENT_FILL_LAYER_ID = "state-parliament-fill";
 const STATE_PARLIAMENT_LINE_LAYER_ID = "state-parliament-line";
+const STATE_PARLIAMENT_LABELS_SOURCE_ID = "state-parliament-labels-data";
+const STATE_PARLIAMENT_LABELS_LAYER_ID = "state-parliament-labels";
 
 // Statewide police-station jurisdiction boundaries loaded from MinIO.
 const STATE_POLICE_SOURCE_ID = "state-police-data";
@@ -794,13 +798,15 @@ const VILLAGE_CADASTRALS_LABELS_LAYER_ID = "village-cadastrals-labels";
 const CADASTRAL_COLORS = {
   satellite: {
     line: "#ffffff", lineWidth: 1.1, lineOpacity: 1, text: "#ffffff", halo: "#151a23", haloWidth: 2,
-    // Hover highlight: translucent white fill + thicker white border over the aerial backdrop.
-    fill: "#ffffff", hoverFill: "#ffffff", hoverOpacity: 0.35, hoverLineWidth: 2.4,
+    // Hover highlight: the parcel's border only thickens (no fill tint) so the interior
+    // of the box stays fully visible over the aerial backdrop.
+    fill: "#ffffff", hoverLineWidth: 4.5,
   },
   standard: {
     line: "#000080", lineWidth: 0.8, lineOpacity: 0.9, text: "#000080", halo: "#ffffff", haloWidth: 1.5,
-    // Hover highlight: translucent dark-navy fill + thicker border over the light OSM base.
-    fill: "#000080", hoverFill: "#000080", hoverOpacity: 0.35, hoverLineWidth: 1.8,
+    // Hover highlight: the parcel's border only thickens (no fill tint) over the light
+    // OSM base.
+    fill: "#000080", hoverLineWidth: 3.2,
   },
 } as const;
 
@@ -810,20 +816,10 @@ const CADASTRAL_COLORS = {
 function applyCadastralColors(map: MapLibreMap, satellite: boolean) {
   const c = CADASTRAL_COLORS[satellite ? "satellite" : "standard"];
   if (map.getLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID)) {
-    // The hit-test fill stays invisible unless a parcel is hovered, when it tints the
-    // whole parcel box with the mode-appropriate highlight color.
-    map.setPaintProperty(VILLAGE_CADASTRALS_FILL_LAYER_ID, "fill-color", [
-      "case",
-      ["boolean", ["feature-state", "hover"], false],
-      c.hoverFill,
-      c.fill,
-    ]);
-    map.setPaintProperty(VILLAGE_CADASTRALS_FILL_LAYER_ID, "fill-opacity", [
-      "case",
-      ["boolean", ["feature-state", "hover"], false],
-      c.hoverOpacity,
-      0,
-    ]);
+    // The hit-test fill stays permanently invisible - the highlight lives on the
+    // parcel's border line only (no fill tint over the basemap).
+    map.setPaintProperty(VILLAGE_CADASTRALS_FILL_LAYER_ID, "fill-color", c.fill);
+    map.setPaintProperty(VILLAGE_CADASTRALS_FILL_LAYER_ID, "fill-opacity", 0);
   }
   if (map.getLayer(VILLAGE_CADASTRALS_LINE_LAYER_ID)) {
     map.setPaintProperty(VILLAGE_CADASTRALS_LINE_LAYER_ID, "line-color", c.line);
@@ -1344,9 +1340,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (!map.getLayer(layerId)) return;
       const isStatesLayer = STATE_BOUNDARY_LAYER_IDS.includes(layerId);
       const isAssemblyLayer =
-        layerId === STATE_ASSEMBLY_FILL_LAYER_ID || layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
+        layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+        layerId === STATE_ASSEMBLY_LINE_LAYER_ID ||
+        layerId === STATE_ASSEMBLY_LABELS_LAYER_ID ||
+        layerId === `${STATE_ASSEMBLY_LABELS_LAYER_ID}-hover`;
       const isParliamentLayer =
-        layerId === STATE_PARLIAMENT_FILL_LAYER_ID || layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+        layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+        layerId === STATE_PARLIAMENT_LINE_LAYER_ID ||
+        layerId === STATE_PARLIAMENT_LABELS_LAYER_ID ||
+        layerId === `${STATE_PARLIAMENT_LABELS_LAYER_ID}-hover`;
       const isPoliceLayer =
         layerId === STATE_POLICE_FILL_LAYER_ID ||
         layerId === STATE_POLICE_LINE_LAYER_ID ||
@@ -1764,7 +1766,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const clearStateAssembly = (map: MapLibreMap) => {
     if (map.getLayer(STATE_ASSEMBLY_FILL_LAYER_ID)) map.removeLayer(STATE_ASSEMBLY_FILL_LAYER_ID);
     if (map.getLayer(STATE_ASSEMBLY_LINE_LAYER_ID)) map.removeLayer(STATE_ASSEMBLY_LINE_LAYER_ID);
+    removeLabelLayer(map, STATE_ASSEMBLY_LABELS_LAYER_ID);
     if (map.getSource(STATE_ASSEMBLY_SOURCE_ID)) map.removeSource(STATE_ASSEMBLY_SOURCE_ID);
+    if (map.getSource(STATE_ASSEMBLY_LABELS_SOURCE_ID)) map.removeSource(STATE_ASSEMBLY_LABELS_SOURCE_ID);
     loadedAssemblyStateRef.current = null;
     selectedAssemblyIdRef.current = null;
   };
@@ -1772,7 +1776,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const clearStateParliament = (map: MapLibreMap) => {
     if (map.getLayer(STATE_PARLIAMENT_FILL_LAYER_ID)) map.removeLayer(STATE_PARLIAMENT_FILL_LAYER_ID);
     if (map.getLayer(STATE_PARLIAMENT_LINE_LAYER_ID)) map.removeLayer(STATE_PARLIAMENT_LINE_LAYER_ID);
+    removeLabelLayer(map, STATE_PARLIAMENT_LABELS_LAYER_ID);
     if (map.getSource(STATE_PARLIAMENT_SOURCE_ID)) map.removeSource(STATE_PARLIAMENT_SOURCE_ID);
+    if (map.getSource(STATE_PARLIAMENT_LABELS_SOURCE_ID)) map.removeSource(STATE_PARLIAMENT_LABELS_SOURCE_ID);
     loadedParliamentStateRef.current = null;
     selectedParliamentIdRef.current = null;
   };
@@ -1924,17 +1930,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: STATE_DISTRICTS_SOURCE_ID,
         paint: {
           "fill-color": "#FF6600",
-          // Districts are lines-only: the base opacity is 0 (no orange wash over the
-          // basemap), hover still highlights unselected districts, and the selected
-          // district gets no fill either - only its boundary line thickens.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a district
+          // (not just on its border) triggers the highlight. It never paints anything -
+          // the highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -1943,13 +1942,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: STATE_DISTRICTS_SOURCE_ID,
         paint: {
-          // Vivid neon orange at full opacity with a slightly thicker stroke so district
-          // borders glow clearly against the satellite imagery.
+          // Vivid neon orange at full opacity. On hover/selection (feature-state) the
+          // border only thickens, the color stays orange - no fill, no color change
+          // (same highlight as the states layer, just with the district color).
           "line-color": "#FF6600",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             2,
           ],
           "line-opacity": 1,
@@ -2017,14 +2019,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: STATE_ASSEMBLY_SOURCE_ID,
         paint: {
           "fill-color": "#22c55e",
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0.4,
-            ["boolean", ["feature-state", "hover"], false],
-            0.25,
-            0.08,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a constituency
+          // (not just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -2033,16 +2031,52 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: STATE_ASSEMBLY_SOURCE_ID,
         paint: {
+          // Neon green at full opacity. On hover/selection (feature-state) the border only
+          // thickens, the color stays green - no fill, no color change (same highlight as
+          // the other boundary layers, just with the assembly color).
           "line-color": "#22c55e",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            2.5,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             1,
           ],
           "line-opacity": 0.9,
         },
       });
+
+      // Assembly constituency name labels - one anchor Point per constituency (see
+      // labelAnchorFeatures), reading the KML-derived "name" property (the only name
+      // property present in this dataset).
+      map.addSource(STATE_ASSEMBLY_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(assemblyData, ["name"]),
+        generateId: true,
+      });
+
+      const assemblyLabelLayer: any = {
+        id: STATE_ASSEMBLY_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: STATE_ASSEMBLY_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-anchor": "center",
+          "text-letter-spacing": 0.02,
+          "text-max-width": 8,
+        },
+        paint: {
+          "text-color": "#14532d",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      };
+      map.addLayer(assemblyLabelLayer);
+      map.addLayer(hoverLabelLayerSpec(assemblyLabelLayer));
+      attachLabelHoverGrow(map, STATE_ASSEMBLY_LABELS_LAYER_ID, `${STATE_ASSEMBLY_LABELS_LAYER_ID}-hover`);
 
       loadedAssemblyStateRef.current = normalized;
       applyBoundaryLayerVisibility(map);
@@ -2081,14 +2115,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: STATE_PARLIAMENT_SOURCE_ID,
         paint: {
           "fill-color": "#ec4899",
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0.4,
-            ["boolean", ["feature-state", "hover"], false],
-            0.25,
-            0.08,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a constituency
+          // (not just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -2097,16 +2127,52 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: STATE_PARLIAMENT_SOURCE_ID,
         paint: {
+          // Neon pink at full opacity. On hover/selection (feature-state) the border only
+          // thickens, the color stays pink - no fill, no color change (same highlight as
+          // the other boundary layers, just with the parliamentary color).
           "line-color": "#ec4899",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            2.5,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             1,
           ],
           "line-opacity": 0.9,
         },
       });
+
+      // Parliamentary constituency name labels - one anchor Point per constituency (see
+      // labelAnchorFeatures), reading the KML-derived "name" property (the only name
+      // property present in this dataset).
+      map.addSource(STATE_PARLIAMENT_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(parliamentData, ["name"]),
+        generateId: true,
+      });
+
+      const parliamentLabelLayer: any = {
+        id: STATE_PARLIAMENT_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: STATE_PARLIAMENT_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-anchor": "center",
+          "text-letter-spacing": 0.02,
+          "text-max-width": 8,
+        },
+        paint: {
+          "text-color": "#831843",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      };
+      map.addLayer(parliamentLabelLayer);
+      map.addLayer(hoverLabelLayerSpec(parliamentLabelLayer));
+      attachLabelHoverGrow(map, STATE_PARLIAMENT_LABELS_LAYER_ID, `${STATE_PARLIAMENT_LABELS_LAYER_ID}-hover`);
 
       loadedParliamentStateRef.current = normalized;
       applyBoundaryLayerVisibility(map);
@@ -2946,18 +3012,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: DISTRICT_TALUKS_SOURCE_ID,
         paint: {
           "fill-color": "#C084FC",
-          // Base and selected states stay fill-free (no purple wash over the satellite
-          // basemap), but hovering a taluk shows the same subtle highlight the district
-          // layer uses, so taluks read as hoverable. The invisible base fill still catches
-          // pointer events for hover/click.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a taluk (not
+          // just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -2966,14 +3024,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: DISTRICT_TALUKS_SOURCE_ID,
         paint: {
-          // Bright neon purple (matching the brightness treatment of the state and district
-          // borders) at full opacity with a slightly thicker stroke so taluk borders glow
-          // clearly against the satellite imagery.
+          // Bright neon purple at full opacity. On hover/selection (feature-state) the
+          // border only thickens, the color stays purple - no fill, no color change
+          // (same highlight as the states/districts layers, just with the taluk color).
           "line-color": "#C084FC",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             2,
           ],
           "line-opacity": 1,
@@ -3073,18 +3133,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: TALUK_HOBLIES_SOURCE_ID,
         paint: {
           "fill-color": "#ffff00",
-          // Base and selected states stay fill-free (no yellow wash over the satellite
-          // basemap), but hovering a hobli shows the same subtle highlight the district
-          // and taluk layers use, so hoblies read as hoverable. The invisible base fill
-          // still catches pointer events for hover/click.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a hobli (not
+          // just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -3093,13 +3145,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: TALUK_HOBLIES_SOURCE_ID,
         paint: {
-          // Bright neon yellow, fully opaque with a thicker stroke so hobli borders pop
-          // against both the beige default basemap and satellite terrain.
+          // Bright neon yellow at full opacity. On hover/selection (feature-state) the
+          // border only thickens, the color stays yellow - no fill, no color change
+          // (same highlight as the states/districts/taluks layers, just with the hobli
+          // color).
           "line-color": "#FFFF00",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             2,
           ],
           "line-opacity": 1,
@@ -3206,18 +3262,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: HOBLI_VILLAGES_SOURCE_ID,
         paint: {
           "fill-color": "#ff073a",
-          // Base and selected states stay fill-free (no red wash over the satellite basemap
-          // or the cadastral survey grid beneath), but hovering a village shows the same
-          // subtle highlight the other boundary layers use, so villages read as hoverable.
-          // The invisible base fill still catches pointer events for hover/click.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a village (not
+          // just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap and the cadastral
+          // survey grid stay fully visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -3226,11 +3275,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: HOBLI_VILLAGES_SOURCE_ID,
         paint: {
+          // Neon red at full opacity. On hover/selection (feature-state) the border only
+          // thickens, the color stays red - no fill, no color change (same highlight as
+          // the states/districts/taluks/hoblies layers, just with the village color).
           "line-color": "#ff073a",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3,
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            8,
             1.5,
           ],
           "line-opacity": 0.95,
@@ -3339,26 +3393,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       // Invisible hit-test fill: fill-opacity 0 keeps the satellite basemap visible while
       // still letting right-clicks (and the attribute popup's queryRenderedFeatures) hit
-      // any point inside a parcel box, not just the 0.8px border lines.
+      // any point inside a parcel box, not just the 0.8px border lines. It never paints -
+      // the hover highlight lives on the parcel's border line (see applyCadastralColors).
       map.addLayer({
         id: VILLAGE_CADASTRALS_FILL_LAYER_ID,
         type: "fill",
         source: VILLAGE_CADASTRALS_SOURCE_ID,
         paint: {
-          // Invisible until a parcel is hovered, then tints the parcel box (see
-          // applyCadastralColors for the mode-dependent highlight color).
-          "fill-color": [
-            "case",
-            ["boolean", ["feature-state", "hover"], false],
-            CADASTRAL_COLORS.standard.hoverFill,
-            CADASTRAL_COLORS.standard.fill,
-          ],
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "hover"], false],
-            CADASTRAL_COLORS.standard.hoverOpacity,
-            0,
-          ],
+          "fill-color": CADASTRAL_COLORS.standard.fill,
+          "fill-opacity": 0,
         },
       });
 
@@ -4163,25 +4206,20 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               generateId: true,
             });
 
-            // Visible national outline line. On hover (feature-state) the border thickens and
-            // brightens so only the boundary line itself highlights - never a fill over the
-            // country. The selected state also thickens it (kept for consistency, though the
-            // boundary hides once the states load).
+            // Visible national outline line. On hover (feature-state) the border only
+            // thickens - the color stays cyan so no white/flash highlight appears, and
+            // never a fill over the country. The selected state also thickens it (kept
+            // for consistency, though the boundary hides once the states load).
             map.addLayer({
               id: "india-boundary-line",
               type: "line",
               source: INDIA_BOUNDARY_SOURCE_ID,
               paint: {
-                "line-color": [
-                  "case",
-                  ["boolean", ["feature-state", "hover"], false],
-                  "#FFFFFF",
-                  "#00FFFF",
-                ],
+                "line-color": "#00FFFF",
                 "line-width": [
                   "case",
                   ["boolean", ["feature-state", "hover"], false],
-                  6,
+                  8,
                   ["boolean", ["feature-state", "selected"], false],
                   5,
                   2.5,
@@ -4318,29 +4356,24 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               generateId: true,
             });
 
-            // Invisible-by-default fill so hovering/clicking anywhere inside a state's
-            // boundary (not just on its border line) triggers the highlight. The selected
-            // state gets NO fill and also no hover highlight (checked first), so the
-            // satellite/OSM basemap stays fully visible - only its boundary line thickens.
+            // Fully transparent fill so hovering/clicking anywhere inside a state's
+            // boundary (not just on its border line) triggers the highlight. It never
+            // paints anything - the highlight lives on the boundary line below (matching
+            // the India nation boundary behavior), so the satellite/OSM basemap stays
+            // fully visible.
             map.addLayer({
               id: "states-fill-default",
               type: "fill",
               source: STATE_SOURCE_ID,
               paint: {
                 "fill-color": "#00FFFF",
-                "fill-opacity": [
-                  "case",
-                  ["boolean", ["feature-state", "selected"], false],
-                  0,
-                  ["boolean", ["feature-state", "hover"], false],
-                  0.18,
-                  0,
-                ],
+                "fill-opacity": 0,
               },
             });
 
-            // Add state boundary lines - pure neon cyan at full opacity and a slightly
-            // thicker stroke so the borders glow brightly against the satellite imagery.
+            // State boundary lines - pure neon cyan at full opacity. On hover/selection
+            // (feature-state) the border only thickens, the color stays cyan - no fill,
+            // no color change (same highlight as the India nation boundary).
             map.addLayer({
               id: "states-borders-default",
               type: "line",
@@ -4350,7 +4383,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 "line-width": [
                   "case",
                   ["boolean", ["feature-state", "selected"], false],
-                  3.5,
+                  5,
+                  ["boolean", ["feature-state", "hover"], false],
+                  8,
                   2,
                 ],
                 "line-opacity": 1,

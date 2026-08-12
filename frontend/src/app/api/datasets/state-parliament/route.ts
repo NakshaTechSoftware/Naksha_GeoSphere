@@ -13,7 +13,7 @@ const S3_BUCKET = 'geosphere-source-data';
 // key holding that state's parliamentary constituency boundaries. Only states with
 // parliamentary constituency data uploaded to MinIO are listed here.
 const STATE_PARLIAMENT_KEYS: Record<string, string> = {
-  karnataka: 'Administrative Boundaries/india/karnataka/KARNATAKA/KARNATAKA_parliament.geojson',
+  karnataka: 'Parliamentary Constituency Boundaries/India/Karnataka/Parliamentary_Constituency_Boundary_Karnataka.geojson',
 };
 
 export async function GET(request: NextRequest) {

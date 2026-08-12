@@ -13,7 +13,7 @@ const S3_BUCKET = 'geosphere-source-data';
 // key holding that state's assembly constituency boundaries. Only states with assembly
 // constituency data uploaded to MinIO are listed here.
 const STATE_ASSEMBLY_KEYS: Record<string, string> = {
-  karnataka: 'Administrative Boundaries/india/karnataka/KARNATAKA/KARNATAKA_ASSEMBLY.geojson',
+  karnataka: 'Assembly Constituency Boundaries/India/Karnataka/Assembly_Constituency_Boundary_Karnataka.geojson',
 };
 
 export async function GET(request: NextRequest) {

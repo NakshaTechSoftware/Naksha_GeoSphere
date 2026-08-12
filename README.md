@@ -249,4 +249,5 @@ This foundation intentionally excludes marketplace logic. Planned phases:
 
 For system design details see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 For geospatial conventions see [docs/GEOSPATIAL_STANDARDS.md](docs/GEOSPATIAL_STANDARDS.md).
+For running the app on a shared remote server when local machines can't run Docker/databases, see [docs/REMOTE_SERVER_RUNBOOK.md](docs/REMOTE_SERVER_RUNBOOK.md).
 For the full validation record of this foundation, see [SETUP_REPORT.md](SETUP_REPORT.md).

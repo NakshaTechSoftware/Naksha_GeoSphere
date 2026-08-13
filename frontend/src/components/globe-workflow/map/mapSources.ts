@@ -47,29 +47,31 @@ export function addSatelliteLayers(map: MapLibreMap): void {
     type: "raster",
     source: SOURCE_IDS.satellite,
     paint: {
-      // Hidden while the globe is on screen; fades in as the camera dives to the city.
-      "raster-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0, 7, 0.95, 9, 0.95],
+      // Real Earth colors on the globe from the first frame (zoom 0), staying fully
+      // visible through the dive to the local city.
+      "raster-opacity": ["interpolate", ["linear"], ["zoom"], 0, 0.92, 3, 0.96, 7, 0.98, 9, 0.98],
       // brightness must stay within [0, 1] or maplibre silently drops the layer.
       "raster-brightness-max": 1.0,
-      "raster-saturation": -0.15,
+      "raster-saturation": 0,
       "raster-contrast": 0.05,
     },
   };
 
-  // A soft pale-blue wash on top of the imagery keeps it in the approved light theme.
+  // Barely-there wash so the white UI panels stay readable over the imagery without
+  // washing out the actual satellite colors.
   const tintLayer: LayerSpecification = {
     id: "satellite-tint",
     type: "fill",
     source: SOURCE_IDS.ocean, // world-covering polygon already present
     paint: {
-      "fill-color": "rgba(214, 232, 250, 0.30)",
+      "fill-color": "rgba(214, 232, 250, 0.08)",
       "fill-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0, 7, 1],
     },
   };
 
-  // beforeId = first AOI overlay, so satellite renders below the AOI but above the
-  // globe ocean/geography that it replaces at city zoom.
-  const beforeId = GEO_LAYER_IDS.aoiFill;
+  // Insert BELOW the India/Karnataka highlight layers (so the demo's cobalt outlines
+  // stay visible on top of the imagery) but above the globe ocean/land base.
+  const beforeId = GEO_LAYER_IDS.indiaStatesFill;
   if (!map.getLayer(satelliteLayer.id)) map.addLayer(satelliteLayer, beforeId);
   if (!map.getLayer(tintLayer.id)) map.addLayer(tintLayer, beforeId);
 }
@@ -107,8 +109,10 @@ export function addGlobeLayers(map: MapLibreMap): void {
       type: "fill",
       source: SOURCE_IDS.ocean,
       paint: {
-        "fill-color": "#bcd8f5",
-        "fill-opacity": 0.9,
+        // Realistic deep-ocean blue, shown only where the satellite tiles haven't
+        // arrived yet (the imagery itself covers the sphere once loaded).
+        "fill-color": "#1e5f9e",
+        "fill-opacity": 0.92,
       },
     },
     {

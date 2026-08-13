@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { User, LogOut, Settings, HelpCircle } from "lucide-react";
+import { getSessionUser, signOutUser } from "@/lib/session";
 
 interface UserProfileProps {
+  /** Explicit overrides — when omitted, the signed-in session user is used. */
   userName?: string;
   userEmail?: string;
   /** Fired with the new open state whenever the avatar button toggles the dropdown. */
@@ -15,11 +17,17 @@ interface UserProfileProps {
  * Positioned in the top navigation bar
  */
 export function UserProfile({
-  userName = "Guest User",
-  userEmail = "guest@naksha.com",
+  userName,
+  userEmail,
   onMenuToggle,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const sessionUser = getSessionUser();
+
+  // Explicit props win; otherwise show the signed-in user; fall back to a
+  // generic guest label when no session exists.
+  const displayName = userName ?? sessionUser?.name ?? "Guest User";
+  const displayEmail = userEmail ?? sessionUser?.email ?? "guest@naksha.com";
 
   // Get initials from name
   const getInitials = (name: string) => {
@@ -31,7 +39,7 @@ export function UserProfile({
       .slice(0, 2);
   };
 
-  const initials = getInitials(userName);
+  const initials = getInitials(displayName);
 
   return (
     <div className="relative flex-shrink-0">
@@ -69,9 +77,9 @@ export function UserProfile({
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">
-                    {userName}
+                    {displayName}
                   </p>
-                  <p className="text-xs text-gray-600 truncate">{userEmail}</p>
+                  <p className="text-xs text-gray-600 truncate">{displayEmail}</p>
                 </div>
               </div>
             </div>
@@ -116,7 +124,8 @@ export function UserProfile({
               <button
                 onClick={() => {
                   setIsOpen(false);
-                  // Full-page navigation clears any in-memory session state and
+                  signOutUser();
+                  // Full-page navigation clears any in-memory state and
                   // sends the user back to the public welcome page.
                   window.location.href = "/welcome-page";
                 }}

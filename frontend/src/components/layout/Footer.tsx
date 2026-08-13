@@ -1,7 +1,9 @@
-export function Footer() {
+export function Footer({ compact = false }: { compact?: boolean }) {
   const currentYear = new Date().getFullYear();
   return (
-    <footer className="border-t border-[var(--color-border-subtle)] bg-polar-pearl py-8">
+    <footer
+      className={`border-t border-[var(--color-border-subtle)] bg-polar-pearl ${compact ? "py-4" : "py-8"}`}
+    >
       <div className="mx-auto max-w-content px-6 lg:px-16">
         <div className="flex flex-col items-center justify-between gap-4 text-sm sm:flex-row">
           <p className="text-[var(--color-text-secondary)]">

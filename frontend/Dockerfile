@@ -32,6 +32,14 @@ ARG NEXT_PUBLIC_APP_NAME
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_APP_NAME=${NEXT_PUBLIC_APP_NAME}
 
+# MSG91 OTP Widget client-side identifiers — safe to inline into the
+# browser bundle (they are NOT secrets; the server-side MSG91 Authkey is
+# never passed to this image).
+ARG NEXT_PUBLIC_MSG91_WIDGET_ID
+ARG NEXT_PUBLIC_MSG91_WIDGET_TOKEN
+ENV NEXT_PUBLIC_MSG91_WIDGET_ID=${NEXT_PUBLIC_MSG91_WIDGET_ID}
+ENV NEXT_PUBLIC_MSG91_WIDGET_TOKEN=${NEXT_PUBLIC_MSG91_WIDGET_TOKEN}
+
 RUN npm run build
 
 # Production runtime

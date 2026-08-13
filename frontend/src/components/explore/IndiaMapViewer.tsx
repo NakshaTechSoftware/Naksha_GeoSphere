@@ -7763,12 +7763,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       // The GBA authority boundary is the entry point into its own hierarchy (Authority ->
       // Corporation -> Zone -> Ward, drilled into by clicking, same as India -> States ->
-      // Districts). Load it once on first entering "gba" mode; applyBoundaryLayerVisibility
-      // above already handles showing/hiding whatever's currently loaded on every mode
-      // switch, so re-entering "gba" mode later doesn't need a reload or lose the user's
-      // drill-down position.
-      if (mode === "gba" && !loadedGbaBoundaryRef.current) {
-        void loadGbaBoundary(map);
+      // Districts). Every other mode fully tears down its drill-down on switching away
+      // (e.g. clearStateDistricts/clearDistrictTaluks above) rather than just hiding it, so
+      // GBA does the same for consistency - leaving "gba" mode clears every level, and
+      // re-entering it always starts fresh at the Authority boundary, not wherever the user
+      // last drilled down to.
+      if (mode === "gba") {
+        if (!loadedGbaBoundaryRef.current) void loadGbaBoundary(map);
+      } else {
+        clearGbaWards(map);
+        clearGbaZones(map);
+        clearGbaCorporations(map);
+        clearGbaBoundary(map);
       }
       applyBoundaryLayerVisibility(map);
     },

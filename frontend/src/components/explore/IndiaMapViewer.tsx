@@ -324,6 +324,29 @@ function withVillageHole(
 // this, states like Andaman & Nicobar (8 islands), Puducherry (4 enclaves) or a multi-part
 // district scatters duplicate labels. Each emitted feature carries the name under nameKeys[0],
 // which the label layer's text-field reads.
+// Zooms the map to fit every coordinate in a GeoJSON collection - used when loading a
+// boundary that's likely off-screen at the current zoom (e.g. the GBA authority boundary
+// is a small part of Karnataka, invisible at a whole-state/whole-India zoom level).
+async function fitBoundsToGeoJSON(map: MapLibreMap, data: GeoJSON.FeatureCollection): Promise<void> {
+  const maplibregl = await import("maplibre-gl");
+  const bounds = new maplibregl.LngLatBounds();
+  let hasBounds = false;
+  const extend = (coords: unknown): void => {
+    if (Array.isArray(coords) && typeof coords[0] === "number") {
+      bounds.extend(coords as [number, number]);
+      hasBounds = true;
+    } else if (Array.isArray(coords)) {
+      coords.forEach(extend);
+    }
+  };
+  for (const feature of data.features) {
+    if (feature.geometry && "coordinates" in feature.geometry) {
+      extend(feature.geometry.coordinates);
+    }
+  }
+  if (hasBounds) map.fitBounds(bounds, { padding: 50, duration: 1000 });
+}
+
 function labelAnchorFeatures(
   data: GeoJSON.FeatureCollection,
   nameKeys: string[]
@@ -705,7 +728,9 @@ export type BoundaryLayerMode =
   | "parliamentary"
   | "gram_panchayat"
   | "police_station"
-  | "civic_amenities";
+  | "civic_amenities"
+  | "gba";
+
 export type PoliceType =
   | "all" | "law_and_order" | "women_police" | "traffic_police"
   | "railway_police" | "railway_police_outpost" | "police_outpost"
@@ -770,6 +795,34 @@ const STATE_DISTRICTS_FILL_LAYER_ID = "state-districts-fill";
 const STATE_DISTRICTS_LINE_LAYER_ID = "state-districts-line";
 const STATE_DISTRICTS_LABELS_LAYER_ID = "state-districts-labels";
 const STATE_DISTRICTS_LABELS_SOURCE_ID = "state-districts-labels-data";
+
+// Source/layer ids for the GBA (Greater Bengaluru Authority) hierarchy: the single
+// authority boundary, then Corporation -> Zone -> Ward, each loaded on demand from the
+// dedicated gba-* API routes as the user drills down (mirrors the district/taluk pattern
+// above, just with GBA's own 4 levels instead of district/taluk/hobli/village).
+const GBA_BOUNDARY_SOURCE_ID = "gba-boundary-data";
+const GBA_BOUNDARY_FILL_LAYER_ID = "gba-boundary-fill";
+const GBA_BOUNDARY_LINE_LAYER_ID = "gba-boundary-line";
+const GBA_BOUNDARY_LABELS_LAYER_ID = "gba-boundary-labels";
+const GBA_BOUNDARY_LABELS_SOURCE_ID = "gba-boundary-labels-data";
+
+const GBA_CORPORATIONS_SOURCE_ID = "gba-corporations-data";
+const GBA_CORPORATIONS_FILL_LAYER_ID = "gba-corporations-fill";
+const GBA_CORPORATIONS_LINE_LAYER_ID = "gba-corporations-line";
+const GBA_CORPORATIONS_LABELS_LAYER_ID = "gba-corporations-labels";
+const GBA_CORPORATIONS_LABELS_SOURCE_ID = "gba-corporations-labels-data";
+
+const GBA_ZONES_SOURCE_ID = "gba-zones-data";
+const GBA_ZONES_FILL_LAYER_ID = "gba-zones-fill";
+const GBA_ZONES_LINE_LAYER_ID = "gba-zones-line";
+const GBA_ZONES_LABELS_LAYER_ID = "gba-zones-labels";
+const GBA_ZONES_LABELS_SOURCE_ID = "gba-zones-labels-data";
+
+const GBA_WARDS_SOURCE_ID = "gba-wards-data";
+const GBA_WARDS_FILL_LAYER_ID = "gba-wards-fill";
+const GBA_WARDS_LINE_LAYER_ID = "gba-wards-line";
+const GBA_WARDS_LABELS_LAYER_ID = "gba-wards-labels";
+const GBA_WARDS_LABELS_SOURCE_ID = "gba-wards-labels-data";
 
 // Source/layer ids for a selected state's assembly constituency boundaries, loaded on demand
 // from MinIO when the "Assembly Constituency Boundaries" filter option is active.
@@ -1107,6 +1160,18 @@ const BOUNDARY_LAYER_IDS = [
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
   VILLAGE_CADASTRALS_LABELS_LAYER_ID,
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_BOUNDARY_LINE_LAYER_ID,
+  GBA_BOUNDARY_LABELS_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_CORPORATIONS_LINE_LAYER_ID,
+  GBA_CORPORATIONS_LABELS_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_ZONES_LINE_LAYER_ID,
+  GBA_ZONES_LABELS_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
+  GBA_WARDS_LINE_LAYER_ID,
+  GBA_WARDS_LABELS_LAYER_ID,
 ];
 const BOUNDARY_SOURCE_IDS = [
   "kml-data",
@@ -1135,6 +1200,14 @@ const BOUNDARY_SOURCE_IDS = [
   HOBLI_VILLAGES_SOURCE_ID,
   HOBLI_VILLAGES_LABELS_SOURCE_ID,
   VILLAGE_CADASTRALS_SOURCE_ID,
+  GBA_BOUNDARY_SOURCE_ID,
+  GBA_BOUNDARY_LABELS_SOURCE_ID,
+  GBA_CORPORATIONS_SOURCE_ID,
+  GBA_CORPORATIONS_LABELS_SOURCE_ID,
+  GBA_ZONES_SOURCE_ID,
+  GBA_ZONES_LABELS_SOURCE_ID,
+  GBA_WARDS_SOURCE_ID,
+  GBA_WARDS_LABELS_SOURCE_ID,
 ];
 
 // Layer ids of the default india_states.geojson (neon-blue states) - shown both under the
@@ -1497,11 +1570,40 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     extraLayerKeysRef.current.forEach((key) => {
       const baseId = extraLayerIdFromKey(key);
+      // Manually-toggled Bengaluru files (via the file-tree UI) only show under
+      // "administrative" - the GBA hierarchy itself (Authority/Corporation/Zone/Ward) is
+      // a separate, dedicated set of layers below, not one of these "extra" files.
       if (map.getLayer(`${baseId}-fill`)) {
         map.setLayoutProperty(`${baseId}-fill`, "visibility", showAll ? "visible" : "none");
       }
       if (map.getLayer(`${baseId}-line`)) {
         map.setLayoutProperty(`${baseId}-line`, "visibility", showAll ? "visible" : "none");
+      }
+      if (map.getLayer(`${baseId}-label`)) {
+        map.setLayoutProperty(`${baseId}-label`, "visibility", showAll ? "visible" : "none");
+      }
+    });
+
+    // GBA hierarchy layers follow the "gba" mode directly, same pattern as the states/
+    // districts/etc. groups above - shown only in "gba" mode, hidden (not unloaded) in
+    // every other mode so switching modes and back doesn't lose the drill-down position.
+    const gbaVisible = mode === "gba";
+    [
+      GBA_BOUNDARY_FILL_LAYER_ID,
+      GBA_BOUNDARY_LINE_LAYER_ID,
+      GBA_BOUNDARY_LABELS_LAYER_ID,
+      GBA_CORPORATIONS_FILL_LAYER_ID,
+      GBA_CORPORATIONS_LINE_LAYER_ID,
+      GBA_CORPORATIONS_LABELS_LAYER_ID,
+      GBA_ZONES_FILL_LAYER_ID,
+      GBA_ZONES_LINE_LAYER_ID,
+      GBA_ZONES_LABELS_LAYER_ID,
+      GBA_WARDS_FILL_LAYER_ID,
+      GBA_WARDS_LINE_LAYER_ID,
+      GBA_WARDS_LABELS_LAYER_ID,
+    ].forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", gbaVisible ? "visible" : "none");
       }
     });
 
@@ -1971,6 +2073,35 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Currently-selected taluk name.
   const selectedTalukNameRef = useRef<string | null>(null);
 
+  // GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone -> Ward.
+  // Whether the (single) GBA authority boundary is currently loaded.
+  const loadedGbaBoundaryRef = useRef<boolean>(false);
+  // Whether the corporations layer (below the authority boundary) is currently loaded.
+  const loadedGbaCorporationsRef = useRef<boolean>(false);
+  // Currently-selected corporation feature id.
+  const selectedGbaCorporationIdRef = useRef<string | number | null>(null);
+  // Name of the corporation whose zones are currently loaded, if any.
+  const loadedGbaZonesCorporationRef = useRef<string | null>(null);
+  // Currently-selected zone feature id.
+  const selectedGbaZoneIdRef = useRef<string | number | null>(null);
+  // Name of the zone whose wards are currently loaded, if any (paired with its corporation,
+  // since zone names aren't necessarily unique across corporations).
+  const loadedGbaWardsZoneRef = useRef<{ corporation: string; zone: string } | null>(null);
+  // Currently-selected ward feature id.
+  const selectedGbaWardIdRef = useRef<string | number | null>(null);
+  // Set synchronously the instant each level's load starts, cleared when it settles - a
+  // fast double-click (or a stray duplicate event listener from dev-mode hot-reload) firing
+  // the same load function twice before the first call's fetch even resolves would
+  // otherwise both reach addSource, and the second one throws "Source already exists"
+  // (clearGba* at the top of each load function only cleans up a *previous, finished*
+  // load - it can't see another call still in flight).
+  const gbaLoadingRef = useRef<{ boundary: boolean; corporations: boolean; zones: boolean; wards: boolean }>({
+    boundary: false,
+    corporations: false,
+    zones: false,
+    wards: false,
+  });
+
   // Name of the taluk whose hoblies are currently loaded, if any.
   const loadedHobliesTalukRef = useRef<string | null>(null);
   // Currently-selected hobli feature id.
@@ -2024,6 +2155,322 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     loadedDistrictsStateRef.current = null;
     selectedDistrictIdRef.current = null;
     loadedDistrictsDataRef.current = null;
+  };
+
+  // --- GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone ->
+  // Ward. Each level's load function fetches its own dedicated gba-* API route (server-side
+  // filtered by the parent's name for Corporation/Zone/Ward) and adds a fill/line/label
+  // layer set styled consistently with the existing Bengaluru file-tree color coding
+  // (colorForBengaluruFileKey: corporation=orange, zone=blue, ward=green). Clear functions
+  // only ever remove their own level - cascading down to child levels is the caller's job
+  // (the click handlers below), matching how clearDistrictTaluks etc. work elsewhere.
+
+  const clearGbaWards = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_WARDS_FILL_LAYER_ID)) map.removeLayer(GBA_WARDS_FILL_LAYER_ID);
+    if (map.getLayer(GBA_WARDS_LINE_LAYER_ID)) map.removeLayer(GBA_WARDS_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_WARDS_LABELS_LAYER_ID);
+    if (map.getSource(GBA_WARDS_SOURCE_ID)) map.removeSource(GBA_WARDS_SOURCE_ID);
+    if (map.getSource(GBA_WARDS_LABELS_SOURCE_ID)) map.removeSource(GBA_WARDS_LABELS_SOURCE_ID);
+    loadedGbaWardsZoneRef.current = null;
+    selectedGbaWardIdRef.current = null;
+  };
+
+  const clearGbaZones = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_ZONES_FILL_LAYER_ID)) map.removeLayer(GBA_ZONES_FILL_LAYER_ID);
+    if (map.getLayer(GBA_ZONES_LINE_LAYER_ID)) map.removeLayer(GBA_ZONES_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_ZONES_LABELS_LAYER_ID);
+    if (map.getSource(GBA_ZONES_SOURCE_ID)) map.removeSource(GBA_ZONES_SOURCE_ID);
+    if (map.getSource(GBA_ZONES_LABELS_SOURCE_ID)) map.removeSource(GBA_ZONES_LABELS_SOURCE_ID);
+    loadedGbaZonesCorporationRef.current = null;
+    selectedGbaZoneIdRef.current = null;
+  };
+
+  const clearGbaCorporations = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_CORPORATIONS_FILL_LAYER_ID)) map.removeLayer(GBA_CORPORATIONS_FILL_LAYER_ID);
+    if (map.getLayer(GBA_CORPORATIONS_LINE_LAYER_ID)) map.removeLayer(GBA_CORPORATIONS_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_CORPORATIONS_LABELS_LAYER_ID);
+    if (map.getSource(GBA_CORPORATIONS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_SOURCE_ID);
+    if (map.getSource(GBA_CORPORATIONS_LABELS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_LABELS_SOURCE_ID);
+    loadedGbaCorporationsRef.current = false;
+    selectedGbaCorporationIdRef.current = null;
+  };
+
+  const clearGbaBoundary = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_BOUNDARY_FILL_LAYER_ID)) map.removeLayer(GBA_BOUNDARY_FILL_LAYER_ID);
+    if (map.getLayer(GBA_BOUNDARY_LINE_LAYER_ID)) map.removeLayer(GBA_BOUNDARY_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_BOUNDARY_LABELS_LAYER_ID);
+    if (map.getSource(GBA_BOUNDARY_SOURCE_ID)) map.removeSource(GBA_BOUNDARY_SOURCE_ID);
+    if (map.getSource(GBA_BOUNDARY_LABELS_SOURCE_ID)) map.removeSource(GBA_BOUNDARY_LABELS_SOURCE_ID);
+    loadedGbaBoundaryRef.current = false;
+  };
+
+  const loadGbaBoundary = async (map: MapLibreMap) => {
+    // Defends against a double-fire (a fast double-click, or a stray duplicate event
+    // listener left over from dev-mode hot-reload) calling this again before the first
+    // call's addSource has happened - see gbaLoadingRef's comment.
+    if (gbaLoadingRef.current.boundary) return;
+    gbaLoadingRef.current.boundary = true;
+    clearGbaBoundary(map);
+    try {
+      const response = await fetch("/api/datasets/gba-boundary");
+      if (!response.ok) throw new Error(`gba-boundary failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      // The source shapefile only carries an "id" field, no name - stamp one on so it can
+      // get a label like every other level, instead of showing up as an unlabeled outline.
+      const dataWithName: GeoJSON.FeatureCollection = {
+        ...data,
+        features: data.features.map((f) => ({
+          ...f,
+          properties: { ...f.properties, Name: "Greater Bengaluru Authority" },
+        })),
+      };
+
+      map.addSource(GBA_BOUNDARY_SOURCE_ID, { type: "geojson", data: dataWithName });
+      map.addSource(GBA_BOUNDARY_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(dataWithName, ["Name"]),
+      });
+      // The GBA authority boundary is a small part of Karnataka - zoom to it so it's
+      // actually visible, whatever the current view happens to be (whole-India, whole-
+      // Karnataka, etc.).
+      void fitBoundsToGeoJSON(map, dataWithName);
+      map.addLayer({
+        id: GBA_BOUNDARY_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_BOUNDARY_SOURCE_ID,
+        // Fully transparent - just a clickable hit-area, so hovering/clicking anywhere
+        // inside the boundary (not just on its border) works. Only the outline (line
+        // layer) carries the visible style - a bolder violet, distinct from every other
+        // GBA level's color (corporation=orange, zone=blue, ward=green) and from the
+        // state/district blue theme, so it doesn't blend into either on a satellite
+        // basemap.
+        paint: { "fill-color": "#7c3aed", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_BOUNDARY_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_BOUNDARY_SOURCE_ID,
+        paint: { "line-color": "#7c3aed", "line-width": 4 },
+      });
+      const boundaryLabelLayer: any = {
+        id: GBA_BOUNDARY_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_BOUNDARY_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under whichever key was passed as
+          // nameKeys[0] - here "Name" - not a normalized "name".
+          "text-field": ["get", "Name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 14,
+          // There's only one authority label, but it sits at the same anchor as some
+          // corporations' labels below - without this it can lose the collision fight
+          // and simply not render, same reasoning as the other 3 GBA label layers.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#5b21b6", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(boundaryLabelLayer);
+      loadedGbaBoundaryRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load GBA authority boundary:", error);
+    } finally {
+      gbaLoadingRef.current.boundary = false;
+    }
+  };
+
+  const loadGbaCorporations = async (map: MapLibreMap) => {
+    if (gbaLoadingRef.current.corporations) return;
+    gbaLoadingRef.current.corporations = true;
+    clearGbaCorporations(map);
+    try {
+      const response = await fetch("/api/datasets/gba-corporations");
+      if (!response.ok) throw new Error(`gba-corporations failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_CORPORATIONS_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_CORPORATIONS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["Name"]),
+      });
+      map.addLayer({
+        id: GBA_CORPORATIONS_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_CORPORATIONS_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        // Still a real fill layer so hovering/clicking anywhere inside a corporation (not
+        // just on its border) works, same technique used throughout this file.
+        paint: { "fill-color": "#f59e0b", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_CORPORATIONS_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_CORPORATIONS_SOURCE_ID,
+        paint: {
+          "line-color": "#f59e0b",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            4,
+            1.5,
+          ],
+        },
+      });
+      const corpLabelLayer: any = {
+        id: GBA_CORPORATIONS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_CORPORATIONS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "Name" here.
+          "text-field": ["get", "Name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 13,
+          // With 5 corporations packed close together (plus the authority label overlapping
+          // the center one), MapLibre's default collision detection silently drops whichever
+          // labels lose - force every one of them to render regardless.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#92400e", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(corpLabelLayer);
+      loadedGbaCorporationsRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load GBA corporations:", error);
+    } finally {
+      gbaLoadingRef.current.corporations = false;
+    }
+  };
+
+  const loadGbaZones = async (map: MapLibreMap, corporation: string) => {
+    if (gbaLoadingRef.current.zones) return;
+    gbaLoadingRef.current.zones = true;
+    clearGbaZones(map);
+    try {
+      const response = await fetch(`/api/datasets/gba-zones?corporation=${encodeURIComponent(corporation)}`);
+      if (!response.ok) throw new Error(`gba-zones failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_ZONES_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_ZONES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["zone_name", "Name"]),
+      });
+      map.addLayer({
+        id: GBA_ZONES_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_ZONES_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        paint: { "fill-color": "#3563e9", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_ZONES_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_ZONES_SOURCE_ID,
+        paint: {
+          "line-color": "#3563e9",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            4,
+            1.5,
+          ],
+        },
+      });
+      const zoneLabelLayer: any = {
+        id: GBA_ZONES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_ZONES_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "zone_name" here.
+          "text-field": ["get", "zone_name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 12,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#1d4ed8", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(zoneLabelLayer);
+      loadedGbaZonesCorporationRef.current = corporation.trim().toLowerCase();
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load GBA zones for corporation "${corporation}":`, error);
+    } finally {
+      gbaLoadingRef.current.zones = false;
+    }
+  };
+
+  const loadGbaWards = async (map: MapLibreMap, corporation: string, zone: string) => {
+    if (gbaLoadingRef.current.wards) return;
+    gbaLoadingRef.current.wards = true;
+    clearGbaWards(map);
+    try {
+      const response = await fetch(
+        `/api/datasets/gba-wards?corporation=${encodeURIComponent(corporation)}&zone=${encodeURIComponent(zone)}`
+      );
+      if (!response.ok) throw new Error(`gba-wards failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_WARDS_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_WARDS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["ward_name", "Name"]),
+      });
+      map.addLayer({
+        id: GBA_WARDS_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_WARDS_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        paint: { "fill-color": "#10b981", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_WARDS_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_WARDS_SOURCE_ID,
+        paint: {
+          "line-color": "#10b981",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            4,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const wardLabelLayer: any = {
+        id: GBA_WARDS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_WARDS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "ward_name" here.
+          "text-field": ["get", "ward_name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#047857", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(wardLabelLayer);
+      loadedGbaWardsZoneRef.current = { corporation: corporation.trim().toLowerCase(), zone: zone.trim().toLowerCase() };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load GBA wards for zone "${zone}":`, error);
+    } finally {
+      gbaLoadingRef.current.wards = false;
+    }
   };
 
   const clearStateAssembly = (map: MapLibreMap) => {
@@ -5619,6 +6066,186 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
 
+            // --- GBA (Greater Bengaluru Authority) hierarchy click-through:
+            // Authority -> Corporation -> Zone -> Ward. Each level's click loads the next
+            // level down (clearing any previously-loaded deeper levels first) and toggles
+            // off (clearing that deeper level) if the same feature is clicked again -
+            // mirrors the district/taluk click handlers' selected/toggle behavior below.
+            map.on("click", GBA_BOUNDARY_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              if (!e.features?.[0]) return;
+              // MapLibre fires every layer's click handler independently for one click,
+              // not just the topmost - a click on a corporation (which sits inside this
+              // boundary too) would otherwise also reach this handler and immediately
+              // toggle the corporations layer back off right after selecting it.
+              if (
+                map.getLayer(GBA_CORPORATIONS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_CORPORATIONS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              if (loadedGbaCorporationsRef.current) {
+                clearGbaZones(map);
+                clearGbaWards(map);
+                clearGbaCorporations(map);
+              } else {
+                // Immediate feedback that the click registered - the fetch itself is
+                // fast (cached after the first load), but with none of this the UI can
+                // feel unresponsive for however long it takes.
+                map.getCanvas().style.cursor = "wait";
+                void loadGbaCorporations(map).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              }
+            });
+
+            let hoveredGbaCorporationId: string | number | null = null;
+            map.on("mousemove", GBA_CORPORATIONS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaCorporationId !== null && hoveredGbaCorporationId !== feature.id) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+              }
+              hoveredGbaCorporationId = feature.id;
+              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_CORPORATIONS_FILL_LAYER_ID, () => {
+              if (hoveredGbaCorporationId !== null) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+              }
+              hoveredGbaCorporationId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_CORPORATIONS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a zone (inside this corporation) would otherwise also reach this
+              // handler and immediately toggle the zones layer back off - same sibling-
+              // layer issue as the boundary handler above.
+              if (
+                map.getLayer(GBA_ZONES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_ZONES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const corporationName = (feature.properties?.Name as string | undefined)?.trim();
+              if (!corporationName) return;
+
+              if (
+                selectedGbaCorporationIdRef.current === feature.id &&
+                loadedGbaZonesCorporationRef.current === corporationName.toLowerCase()
+              ) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedGbaCorporationIdRef.current = null;
+                clearGbaZones(map);
+                clearGbaWards(map);
+                return;
+              }
+
+              if (selectedGbaCorporationIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: selectedGbaCorporationIdRef.current }, { selected: false });
+              }
+              selectedGbaCorporationIdRef.current = feature.id;
+              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: true });
+              clearGbaZones(map);
+              clearGbaWards(map);
+              map.getCanvas().style.cursor = "wait";
+              void loadGbaZones(map, corporationName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredGbaZoneId: string | number | null = null;
+            map.on("mousemove", GBA_ZONES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaZoneId !== null && hoveredGbaZoneId !== feature.id) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+              }
+              hoveredGbaZoneId = feature.id;
+              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_ZONES_FILL_LAYER_ID, () => {
+              if (hoveredGbaZoneId !== null) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+              }
+              hoveredGbaZoneId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_ZONES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a ward (inside this zone) would otherwise also reach this
+              // handler and immediately toggle the wards layer back off - same sibling-
+              // layer issue as the boundary/corporation handlers above.
+              if (
+                map.getLayer(GBA_WARDS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_WARDS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const zoneName = ((feature.properties?.zone_name ?? feature.properties?.Name) as string | undefined)?.trim();
+              const corporation = loadedGbaZonesCorporationRef.current;
+              if (!zoneName || !corporation) return;
+
+              if (
+                selectedGbaZoneIdRef.current === feature.id &&
+                loadedGbaWardsZoneRef.current?.zone === zoneName.toLowerCase()
+              ) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedGbaZoneIdRef.current = null;
+                clearGbaWards(map);
+                return;
+              }
+
+              if (selectedGbaZoneIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: selectedGbaZoneIdRef.current }, { selected: false });
+              }
+              selectedGbaZoneIdRef.current = feature.id;
+              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: true });
+              clearGbaWards(map);
+              map.getCanvas().style.cursor = "wait";
+              void loadGbaWards(map, corporation, zoneName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredGbaWardId: string | number | null = null;
+            map.on("mousemove", GBA_WARDS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaWardId !== null && hoveredGbaWardId !== feature.id) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+              }
+              hoveredGbaWardId = feature.id;
+              map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_WARDS_FILL_LAYER_ID, () => {
+              if (hoveredGbaWardId !== null) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+              }
+              hoveredGbaWardId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_WARDS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (selectedGbaWardIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: selectedGbaWardIdRef.current }, { selected: false });
+              }
+              const isSame = selectedGbaWardIdRef.current === feature.id;
+              selectedGbaWardIdRef.current = isSame ? null : feature.id;
+              if (!isSame) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: feature.id }, { selected: true });
+              }
+            });
+
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               console.log("=== DISTRICT CLICK EVENT ===");
@@ -6646,6 +7273,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       const baseId = extraLayerIdFromKey(key);
       if (map.getLayer(`${baseId}-fill`)) map.removeLayer(`${baseId}-fill`);
       if (map.getLayer(`${baseId}-line`)) map.removeLayer(`${baseId}-line`);
+      if (map.getLayer(`${baseId}-label`)) map.removeLayer(`${baseId}-label`);
       if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
     });
     extraLayerKeysRef.current.clear();
@@ -6664,6 +7292,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     loadedCadastralsVillageRef.current = null;
     loadedCadastralsDataRef.current = null;
     selectedVillageNameRef.current = null;
+    // The GBA layers are already swept by the generic BOUNDARY_LAYER_IDS/SOURCE_IDS pass
+    // above, but call the dedicated clear functions too so their ref state resets the same
+    // way every other level's does - keeps this one path the single source of truth for
+    // "what does the GBA hierarchy look like right now" instead of splitting it in two.
+    clearGbaWards(map);
+    clearGbaZones(map);
+    clearGbaCorporations(map);
+    clearGbaBoundary(map);
+    selectedGbaWardIdRef.current = null;
     // The states source survives the boundary wipe (it's not in BOUNDARY_SOURCE_IDS), so
     // undo any village cutout that was punched into it.
     restoreAncestorFills(map);
@@ -6808,6 +7445,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const baseId = extraLayerIdFromKey(key);
     if (map.getLayer(`${baseId}-fill`)) map.removeLayer(`${baseId}-fill`);
     if (map.getLayer(`${baseId}-line`)) map.removeLayer(`${baseId}-line`);
+    if (map.getLayer(`${baseId}-label`)) map.removeLayer(`${baseId}-label`);
     if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
     extraLayerKeysRef.current.delete(key);
 
@@ -6836,6 +7474,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       source: `${baseId}-data`,
       filter: ["==", "$type", "Polygon"],
       paint: { "line-color": color, "line-width": 1.5 },
+    });
+    // Named labels so each individual polygon (e.g. a GBA zone's sub-area, a ward, an
+    // assembly constituency) can actually be identified on the map, not just its outline -
+    // parseNamedPolygonsFromKML already carries the KML Placemark's <name> as this property.
+    map.addLayer({
+      id: `${baseId}-label`,
+      type: "symbol",
+      source: `${baseId}-data`,
+      filter: ["==", "$type", "Polygon"],
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 11,
+        "text-anchor": "center",
+      },
+      paint: {
+        "text-color": color,
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.5,
+      },
     });
     extraLayerKeysRef.current.add(key);
     applyBoundaryLayerVisibility(map);
@@ -7071,13 +7729,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         mode === "parliamentary" ||
         mode === "gram_panchayat" ||
         mode === "police_station" ||
-        mode === "civic_amenities"
+        mode === "civic_amenities" ||
+        mode === "gba"
       ) {
         clearStateDistricts(map);
         clearDistrictTaluks(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
-        if (mode === "gram_panchayat" || mode === "civic_amenities") {
+        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba") {
           clearStateAssembly(map);
           clearStateParliament(map);
         } else if (mode === "assembly") {
@@ -7092,12 +7751,30 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           const selectedState = selectedStateNameRef.current;
           if (selectedState) void loadStatePolice(map, selectedState);
         }
+        if (mode === "gba") {
+          clearStatePolice(map);
+        }
       } else if (mode === "administrative") {
         clearStateAssembly(map);
         clearStateParliament(map);
         clearStatePolice(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
+      }
+      // The GBA authority boundary is the entry point into its own hierarchy (Authority ->
+      // Corporation -> Zone -> Ward, drilled into by clicking, same as India -> States ->
+      // Districts). Every other mode fully tears down its drill-down on switching away
+      // (e.g. clearStateDistricts/clearDistrictTaluks above) rather than just hiding it, so
+      // GBA does the same for consistency - leaving "gba" mode clears every level, and
+      // re-entering it always starts fresh at the Authority boundary, not wherever the user
+      // last drilled down to.
+      if (mode === "gba") {
+        if (!loadedGbaBoundaryRef.current) void loadGbaBoundary(map);
+      } else {
+        clearGbaWards(map);
+        clearGbaZones(map);
+        clearGbaCorporations(map);
+        clearGbaBoundary(map);
       }
       applyBoundaryLayerVisibility(map);
     },

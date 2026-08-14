@@ -2,7 +2,7 @@
 
 The API only *produces* this task; `services/worker` owns the actual
 implementation (`worker.tasks.notifications.send_verification_email`).
-Never log `verification_url` — it contains the raw, single-use token.
+Never log `code` — it's the raw, single-use OTP.
 """
 
 from __future__ import annotations
@@ -29,14 +29,14 @@ def _celery_producer() -> Celery:
     )
 
 
-def queue_verification_email(*, to_email: str, full_name: str, verification_url: str) -> None:
+def queue_verification_email(*, to_email: str, full_name: str, code: str) -> None:
     try:
         _celery_producer().send_task(
             TASK_NAME,
             kwargs={
                 "to_email": to_email,
                 "full_name": full_name,
-                "verification_url": verification_url,
+                "code": code,
             },
             queue="notifications",
         )

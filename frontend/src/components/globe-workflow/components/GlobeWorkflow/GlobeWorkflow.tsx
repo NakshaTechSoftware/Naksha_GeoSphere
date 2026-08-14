@@ -127,7 +127,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
         sub.call(() => {
           setIntroVisible(true);
           const map = mapHandleRef.current;
-          map?.setProjection("globe");
+          map?.setProjection("mercator");
           // Open on the full globe with all continents visible, then let it spin slowly.
           map?.flyTo(GLOBE_START, 0);
           map?.easeTo(GLOBE_SPIN_TARGET, reducedMotion ? 0 : 1650);
@@ -446,7 +446,7 @@ export function GlobeWorkflow(props: GlobeWorkflowProps) {
           const map = mapHandleRef.current;
           map?.clearAOI();
           map?.resetGeography();
-          map?.setProjection("globe");
+          map?.setProjection("mercator");
           map?.flyTo(GLOBE_START, reducedMotion ? 0 : 700);
           cursorRef.current?.hide();
         }, [], 0.6);

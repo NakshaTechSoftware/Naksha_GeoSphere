@@ -1012,8 +1012,8 @@ export function ExplorePage() {
             )}
           </div>
 
-          {/* User Profile Icon */}
-          <UserProfile userName="John Doe" userEmail="john.doe@example.com" />
+          {/* User Profile Icon — reads the signed-in user from the session */}
+          <UserProfile />
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the

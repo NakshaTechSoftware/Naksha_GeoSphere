@@ -52,6 +52,10 @@ class WorkerSettings(BaseSettings):
     smtp_password: str = ""
     smtp_from_email: str = "no-reply@nakshageosphere.local"
     smtp_use_tls: bool = False
+    # Mirrors services/api/app/core/config.py's `email_verification_expiry_minutes`
+    # (the pending registration's Redis TTL) so the emailed code's stated
+    # expiry always matches how long it's actually valid for.
+    email_verification_expiry_minutes: int = 30
 
 
 @lru_cache

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">N-MAPS</string>
+    <string name="title_activity_main">N-MAPS</string>
+    <string name="package_name">com.naksha.nmaps</string>
+    <string name="custom_url_scheme">com.naksha.nmaps</string>
+</resources>

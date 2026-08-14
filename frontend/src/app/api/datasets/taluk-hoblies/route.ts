@@ -45,7 +45,7 @@ function writeDiskCache(path: string, data: GeoJSON.FeatureCollection) {
 }
 
 const client = new S3Client({
-  endpoint: 'http://192.168.10.81:9010',
+  endpoint: `http://${process.env.MINIO_ENDPOINT ?? '192.168.10.81:9010'}`,
   region: 'geosphere',
   credentials: {
     accessKeyId: 'geosphere_storage',

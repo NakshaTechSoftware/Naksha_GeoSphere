@@ -14,8 +14,11 @@ export function SignupPage() {
         <SignupMapBackground />
         <div className="relative mx-auto max-w-content px-6 py-16 lg:px-16 lg:py-20">
           <div className="grid gap-16 lg:grid-cols-[45%_55%] lg:items-start">
-            {/* Left: Benefits */}
-            <SignupBenefits />
+            {/* Left: Benefits. Hidden on mobile (common phone resolutions) so the
+                signup form gets the full width. */}
+            <div className="hidden lg:block">
+              <SignupBenefits />
+            </div>
 
             {/* Right: Form */}
             <SignupForm />

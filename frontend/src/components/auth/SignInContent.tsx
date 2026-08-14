@@ -129,8 +129,11 @@ export function SignInContent() {
   return (
     <div className="mx-auto w-full max-w-content px-6 py-12 lg:px-16">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
-        {/* Left Column - Welcome Back Section */}
-        <SignInBenefits />
+        {/* Left Column - Welcome Back Section. Hidden on mobile (common phone
+            resolutions) so the sign-in form gets the full width. */}
+        <div className="hidden lg:block">
+          <SignInBenefits />
+        </div>
 
         {/* Right Column - Sign In Form */}
         <div className="flex items-start justify-center lg:pt-8">

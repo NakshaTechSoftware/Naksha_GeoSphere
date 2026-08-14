@@ -20,6 +20,9 @@ Docker stack (PostgreSQL/PostGIS, Redis, MinIO, Mailpit), and the isolated
 | **pnpm** | **9.x** (repo pins `pnpm@9.15.4`) | Monorepo package manager. Enable via Corepack: `corepack enable pnpm`. |
 | Python 3.10+ | optional | Only needed to run the API/worker tooling *outside* Docker (not required for the normal flow). |
 | Browser | Chrome / Edge / Firefox | Open the app / e2e tests. |
+| **JDK 17 (Temurin)** | 17.x | **Only for building the mobile app (N-MAPS, Android).** On this machine: `E:\Java\jdk-17`. |
+| **Android Studio** (bundles the Android SDK) | latest | **Only for building the mobile app.** SDK packages needed: `platform-tools`, `platforms;android-35` + `platforms;android-36`, `build-tools;35.0.0`. On this machine the SDK lives at `E:\Android-Sdk` (kept off the full C: drive). |
+| Android phone (testing) | — | Optional: developer options + USB debugging for live reload; or install the APK directly (allow "unknown sources"). |
 
 Check what you have:
 
@@ -241,7 +244,57 @@ See `3D components/geosphere-globe-workflow/REQUIREMENTS.md` for full details.
 
 ---
 
-## 9. Troubleshooting
+## 9. Mobile app (N-MAPS) — Android build & run
+
+The mobile app is the **same frontend app** wrapped in a Capacitor shell — no separate
+codebase. The shell lives in `frontend/` (`capacitor.config.ts`, plus generated
+`frontend/android/` and `frontend/ios/` projects). App name **N-MAPS**, package id
+`com.naksha.nmaps`.
+
+### Prerequisites (Windows)
+
+- JDK 17 (`JAVA_HOME` → e.g. `E:\Java\jdk-17`)
+- Android SDK (`ANDROID_HOME` → e.g. `E:\Android-Sdk`) with `platform-tools`,
+  `platforms;android-35`, `platforms;android-36`, `build-tools;35.0.0`
+- `GRADLE_USER_HOME` → e.g. `E:\.gradle` (Gradle distribution + dependency cache —
+  keep it off C:; **C: is full on the dev machine and Gradle fails with
+  "not enough space on the disk" when it tries to extract there**)
+- `frontend/android/local.properties` → `sdk.dir=E:/Android-Sdk` (this is already in
+the repo)
+
+### Build the debug APK
+
+```bash
+cd frontend
+npm install            # includes @capacitor/*
+npx cap sync android   # copies config/native assets into android/
+cd android
+gradle.bat assembleDebug   # (or: ./gradlew assembleDebug)
+```
+
+The APK lands at `frontend/android/app/build/outputs/apk/debug/app-debug.apk`.
+Install it on the phone (transfer the file, tap it, allow "unknown sources").
+
+### Dev: live reload on a phone
+
+The shell loads the running dev server, so every code change appears on the phone:
+
+1. `frontend/capacitor.config.ts` → set `server.url` to **your machine's LAN IP**
+   (e.g. `http://192.168.10.67:3000`; `cleartext: true` is already set for HTTP).
+2. Start the dev server reachable on the LAN:
+   `NEXT_PUBLIC_API_URL=http://<LAN-IP>:8000 npm run dev` (the phone can't reach
+   `localhost`, so the API base must be the LAN IP too).
+3. Phone must be on the **same Wi-Fi** as the machine. Open the link in the phone's
+   browser to verify, then re-sync/rebuild the APK if needed.
+
+### iOS (later)
+
+Building the iPhone app requires **macOS + Xcode** (Apple restriction) — not possible
+on Windows. Android is unaffected.
+
+---
+
+## 10. Troubleshooting
 
 | Problem | Fix |
 | --- | --- |
@@ -256,7 +309,7 @@ See `3D components/geosphere-globe-workflow/REQUIREMENTS.md` for full details.
 
 ---
 
-## 10. Reference docs
+## 11. Reference docs
 
 | File | Covers |
 | --- | --- |

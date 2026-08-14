@@ -10,6 +10,10 @@ interface UserProfileProps {
   userEmail?: string;
   /** Fired with the new open state whenever the avatar button toggles the dropdown. */
   onMenuToggle?: (open: boolean) => void;
+  /** Overrides the dropdown's vertical offset class (default `"top-12"`). Use this when
+      the avatar sits inside another element (e.g. the mobile search pill) so the menu
+      clears it with a small gap instead of overlapping it. */
+  menuPositionClassName?: string;
 }
 
 /**
@@ -20,6 +24,7 @@ export function UserProfile({
   userName,
   userEmail,
   onMenuToggle,
+  menuPositionClassName,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
   // The session lives in sessionStorage, which only exists on the client - reading it
@@ -74,8 +79,14 @@ export function UserProfile({
             onClick={() => setIsOpen(false)}
           />
 
-          {/* Menu Content */}
-          <div className="absolute right-0 top-12 z-20 w-64 rounded-xl bg-white shadow-xl border border-gray-200 overflow-hidden">
+          {/* Menu Content. On mobile (common phone resolutions) the menu becomes a
+              fixed overlay with the same bounds as the search bar (left-4/right-4 +
+              an 8px gap below it), so it always lines up with the pill exactly. */}
+          <div
+            className={`absolute right-0 z-20 w-64 rounded-xl bg-white shadow-xl border border-gray-200 overflow-hidden max-md:fixed max-md:left-4 max-md:right-4 max-md:top-[84px] max-md:w-auto ${
+              menuPositionClassName ?? "top-12"
+            }`}
+          >
             {/* User Info Section */}
             <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-200">
               <div className="flex items-center gap-3">

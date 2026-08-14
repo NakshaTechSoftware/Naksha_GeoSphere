@@ -31,12 +31,16 @@ class UserRepository:
         *,
         full_name: str,
         email: str,
-        organization_name: str,
-        role_or_use_case: str,
+        organization_name: str | None,
+        role_or_use_case: str | None,
         password_hash: str,
         terms_accepted_at: datetime,
         terms_version: str,
         privacy_version: str,
+        status: UserStatus = UserStatus.PENDING_VERIFICATION,
+        email_verified_at: datetime | None = None,
+        phone_number: str | None = None,
+        phone_verified_at: datetime | None = None,
     ) -> User:
         user = User(
             full_name=full_name,
@@ -44,14 +48,13 @@ class UserRepository:
             organization_name=organization_name,
             role_or_use_case=role_or_use_case,
             password_hash=password_hash,
-            status=UserStatus.PENDING_VERIFICATION,
+            status=status,
             terms_accepted_at=terms_accepted_at,
             terms_version=terms_version,
             privacy_version=privacy_version,
+            email_verified_at=email_verified_at,
+            phone_number=phone_number,
+            phone_verified_at=phone_verified_at,
         )
         self._session.add(user)
         return user
-
-    def mark_verified(self, user: User, *, verified_at: datetime) -> None:
-        user.status = UserStatus.ACTIVE
-        user.email_verified_at = verified_at

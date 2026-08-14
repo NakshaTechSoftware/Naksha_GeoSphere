@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
+import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
 import { LayersControl, type MapLayer } from "./LayersControl";
 import * as turf from "@turf/turf";
@@ -38,6 +40,8 @@ export function InteractiveMap({
         const maplibregl = await import("maplibre-gl");
 
         if (cancelled || !containerRef.current) return;
+
+        configureMaplibreWorker();
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {

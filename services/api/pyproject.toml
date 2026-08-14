@@ -20,6 +20,8 @@ dependencies = [
   "email-validator==2.2.0",
   "geoalchemy2==0.15.2",
   "aioboto3>=14.0.0",
+  # Used by the async test client (httpx.AsyncClient + ASGITransport).
+  "httpx==0.28.1",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ import type {
   GeoJSONFeature,
   GeoJSONSource,
   MapLayerMouseEvent,
+  MapMouseEvent,
   PointLike,
   QueryRenderedFeaturesOptions,
   FilterSpecification,
@@ -16,6 +17,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
+import { STATE_FACTS } from "../../data/state-facts";
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -1004,6 +1006,16 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   GP_DISTRICTS_FILL_LAYER_ID,
   CIVIC_DISTRICTS_FILL_LAYER_ID,
   CIVIC_PINCODES_FILL_LAYER_ID,
+  // The India national boundary (visible until the states are loaded by clicking it) is
+  // clickable like every other administrative level - the transparent fill covers the
+  // whole country, and the cyan outline line is the visible edge.
+  "india-boundary-fill",
+  "india-boundary-line",
+  // GBA hierarchy levels, so the panel opens on them too.
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
   "states-fill-default",
 ];
 
@@ -1021,6 +1033,12 @@ const ATTRIBUTE_POPUP_ADMIN_LEVEL: Record<string, AdminLevel> = {
 
 // Friendly boundary-type names for the popup's badge, keyed by layer id.
 const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
+  "india-boundary-fill": "Country",
+  "india-boundary-line": "Country",
+  [GBA_BOUNDARY_FILL_LAYER_ID]: "GBA Boundary",
+  [GBA_CORPORATIONS_FILL_LAYER_ID]: "Corporation",
+  [GBA_ZONES_FILL_LAYER_ID]: "Zone",
+  [GBA_WARDS_FILL_LAYER_ID]: "Ward",
   "states-fill-default": "State",
   [STATE_DISTRICTS_FILL_LAYER_ID]: "District",
   [GP_DISTRICTS_FILL_LAYER_ID]: "District",
@@ -1065,6 +1083,17 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   taluk_panchayat: "Taluk Panchayat",
   no_of_villages: "No. of Villages",
   source_file: "Source File",
+  state: "State",
+  lok_sabha: "Lok Sabha (PC)",
+  mla: "Current MLA",
+  party: "Party",
+  election_year: "Election Year",
+  total_voters: "Total Voters",
+  polling_stations: "Polling Stations",
+  voter_turnout: "Voter Turnout",
+  districts: "Districts",
+  assembly_segments: "Assembly Segments",
+  mp: "Current MP",
 };
 
 // "st_nm" -> "St Nm" is wrong for display; keys without a known label get a sensible split:
@@ -5072,38 +5101,34 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           });
         });
 
-        map.on("contextmenu", (e) => {
-          // While an AOI drawing tool is armed, right-click cancels the in-progress shape.
-          if (drawingToolRef.current) {
-            if (drawSessionRef.current) {
-              e.preventDefault();
-              cancelDrawing(map);
-            }
-            return;
-          }
-
-          // Otherwise: report the attribute info of the deepest boundary feature under the
-          // cursor (state / district / taluk / hobli / village / cadastral parcel) so the
-          // caller's side panel can render it. The native browser context menu is suppressed
-          // only when a feature was actually hit.
-          attributeInfoOpenRef.current = false;
-
+        // Reports the attribute info of the deepest boundary feature under the cursor
+        // (country / state / district / taluk / hobli / village / cadastral parcel / GBA
+        // level / Bengaluru overlay) so the caller's side panel can render it. Returns
+        // true when a feature was hit and reported. Opened on LEFT click - alongside the
+        // layer's own drill-down action - so the panel appears everywhere without needing
+        // a right-click (the right-click now only cancels in-progress AOI drawings).
+        const reportAttributeInfo = (e: MapMouseEvent): boolean => {
           // queryRenderedFeatures throws if any listed layer doesn't exist yet - and most
           // drill-down layers (districts/taluks/hoblies/villages/cadastrals) only appear
-          // once loaded - so query only the layers currently on the map.
-          const layers = ATTRIBUTE_POPUP_LAYER_IDS.filter((id) => map.getLayer(id));
+          // once loaded - so query only the layers currently on the map. The
+          // manually-toggled Bengaluru KML/KMZ overlays use dynamic layer ids, so their
+          // fill layers are appended alongside the static list.
+          const extraLayerIds = Array.from(extraLayerKeysRef.current).map(
+            (key) => `${extraLayerIdFromKey(key)}-fill`
+          );
+          const layers = [...ATTRIBUTE_POPUP_LAYER_IDS, ...extraLayerIds].filter((id) =>
+            map.getLayer(id)
+          );
           const features = layers.length > 0
             ? queryRenderedFeaturesSafe(map, e.point, { layers })
             : [];
           const feature = features[0];
-          if (!feature || !feature.properties) {
-            onAttributeInfoRef.current?.(null);
-            return;
-          }
-          e.preventDefault();
+          if (!feature || !feature.properties) return false;
 
           const layerId = feature.layer?.id ?? "";
-          const typeLabel = ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ?? "Feature";
+          const typeLabel =
+            ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ??
+            (extraLayerIds.includes(layerId) ? "Boundary" : "Feature");
           const props = feature.properties;
 
           // Display title: the first known name-key property, else the boundary type.
@@ -5118,6 +5143,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "KGISVillageName",
             "village_name",
             "vill_nm",
+            // GBA levels carry their names under these keys ("Name" for the authority
+            // and corporations, zone_name/ward_name for the deeper two levels).
+            "Name",
+            "zone_name",
+            "ward_name",
             "name",
           ];
           const title =
@@ -5147,10 +5177,56 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "district",
             "no_of_villages",
           ];
+          // Assembly/parliamentary constituency files are KML-derived and carry
+          // Google-Earth noise properties - a giant HTML "description" blob,
+          // "extrude" and "altitudeMode" - that add nothing to the panel, so drop
+          // them for both KML-based layers.
+          const isKmlBoundaryLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const KML_DROPPED_KEYS = ["description", "extrude", "altitudeMode"];
+          // Assembly constituency features carry their 2023 election facts merged in
+          // by the state-assembly API route - present them in the canonical order
+          // (state, district, Lok Sabha, MLA, party, then the election stats).
+          const isAssemblyLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
+          const ASSEMBLY_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "district",
+            "lok_sabha",
+            "mla",
+            "party",
+            "election_year",
+            "total_voters",
+            "polling_stations",
+            "voter_turnout",
+          ];
+          // Parliamentary constituency features carry their 2024 election facts merged in
+          // by the state-parliament API route - present them in the canonical order
+          // (state, districts, assembly segments, MP, party, then the election stats).
+          const isParliamentLayer =
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const PARLIAMENT_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "districts",
+            "assembly_segments",
+            "mp",
+            "party",
+            "election_year",
+            "total_voters",
+            "voter_turnout",
+          ];
           const rows: AttributeRow[] = Object.entries(props)
             .filter(
               ([k, v]) =>
                 !(isGpBoundary && k === "source_file") &&
+                !(isKmlBoundaryLayer && KML_DROPPED_KEYS.includes(k)) &&
                 v !== null &&
                 v !== undefined &&
                 String(v).trim() !== ""
@@ -5158,7 +5234,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             .sort(([a], [b]) => {
               const order = isGpBoundary
                 ? GP_ATTRIBUTE_ROW_ORDER
-                : ATTRIBUTE_ROW_ORDER;
+                : isAssemblyLayer
+                  ? ASSEMBLY_ATTRIBUTE_ROW_ORDER
+                  : isParliamentLayer
+                    ? PARLIAMENT_ATTRIBUTE_ROW_ORDER
+                    : ATTRIBUTE_ROW_ORDER;
               const ia = order.indexOf(a);
               const ib = order.indexOf(b);
               if (ia === -1 && ib === -1) return 0;
@@ -5171,6 +5251,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               value: String(v),
             }));
 
+          // The states file's features carry a redundant "layer" property (e.g.
+          // "state") that just duplicates the panel's badge - drop that row for
+          // state features.
+          if (layerId === "states-fill-default") {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if (rows[i]!.label === "Layer") rows.splice(i, 1);
+            }
+          }
+
           // Karnataka's on-platform hierarchy counts, cross-checked against the remote MinIO
           // bucket (see scripts/count-karnataka-hierarchy.mjs). Shown only for the state
           // feature itself, as extra read-only rows below its native attributes.
@@ -5180,11 +5269,63 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             { label: "Hoblis", value: "852", bold: true },
             { label: "Villages", value: "30,335", bold: true },
           ];
-          const isKarnatakaState =
-            layerId === "states-fill-default" &&
-            typeof props.st_nm === "string" &&
-            props.st_nm.trim().toLowerCase() === "karnataka";
-          if (isKarnatakaState) rows.push(...KARNATAKA_HIERARCHY);
+          const isStateLayer = layerId === "states-fill-default";
+          const stateName =
+            typeof props.st_nm === "string" ? props.st_nm.trim() : "";
+          if (isStateLayer && stateName.toLowerCase() === "karnataka") {
+            rows.push(...KARNATAKA_HIERARCHY);
+          }
+
+          // Per-state / UT reference facts (revenue divisions, assembly seats, area,
+          // population, density, literacy) appended below each state feature's native
+          // attributes - see STATE_FACTS in src/data/state-facts.ts.
+          const stateFacts = isStateLayer ? STATE_FACTS[stateName] : undefined;
+          if (stateFacts) {
+            rows.push(
+              {
+                label: "Revenue Divisions",
+                value: stateFacts.revenueDivisions,
+                bold: true,
+              },
+              {
+                label: "Assembly Seats",
+                value: stateFacts.assemblySeats,
+                bold: true,
+              },
+              { label: "Total Area", value: stateFacts.totalArea, bold: true },
+              { label: "Population", value: stateFacts.population, bold: true },
+              { label: "Density", value: stateFacts.density, bold: true },
+              {
+                label: "Literacy Rate",
+                value: stateFacts.literacy,
+                bold: true,
+              },
+            );
+          }
+
+          // The India national boundary's properties carry data-provenance metadata
+          // (source / note) that's noise in the attribute panel - drop those rows, and
+          // report the country's admin composition (28 states + 8 union territories, the
+          // 36 LGD state/UT polygons the boundary was dissolved from) instead, shown right
+          // below Country Code.
+          const isIndiaBoundaryLayer =
+            layerId === "india-boundary-fill" || layerId === "india-boundary-line";
+          if (isIndiaBoundaryLayer) {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              const label = rows[i]!.label;
+              if (label === "Source" || label === "Note") rows.splice(i, 1);
+            }
+            rows.push(
+              { label: "States", value: "28" },
+              { label: "Union Territories", value: "8" },
+              { label: "Capital", value: "New Delhi" },
+              { label: "Population", value: "~1.44 Billion" },
+              { label: "Total Area", value: "3,287,263 sq km" },
+              { label: "Region", value: "South Asia" },
+              { label: "Time Zone", value: "IST (UTC +5:30)" },
+              { label: "Calling Code", value: "+91" },
+            );
+          }
 
           // Cadastral parcels carry no owner names - those come from Bhoomi, keyed by the
           // parcel's administrative chain plus survey/surnoc/hissa. Hand that key to the
@@ -5243,6 +5384,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             properties: props,
             hierarchy,
           });
+          return true;
+        };
+
+        // Right-click keeps only its AOI-drawing role: while a drawing tool is armed it
+        // cancels the in-progress shape. (The attribute-info panel itself now opens on
+        // left click, see the map-level click handler below.)
+        map.on("contextmenu", (e) => {
+          if (drawingToolRef.current && drawSessionRef.current) {
+            e.preventDefault();
+            cancelDrawing(map);
+          }
+        });
+
+        // Left-click opens the attribute-info panel for the deepest boundary feature under
+        // the cursor, in addition to whatever the layer's own click handler does (clicking
+        // India still loads the states AND shows the country panel; clicking a district
+        // still drills into its taluks AND shows the district panel). A click on empty map
+        // leaves an open panel untouched - Escape or the panel's X button dismiss it.
+        map.on("click", (e) => {
+          if (drawingToolRef.current) return;
+          reportAttributeInfo(e);
         });
 
         // Distance scale bar
@@ -5973,6 +6135,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
+
+              // MapLibre invokes every layer's click handler independently for a single
+              // click (it doesn't stop at the topmost layer) - a click on a loaded gram
+              // panchayat boundary, which sits geometrically inside this taluk's polygon
+              // too, would otherwise also reach this handler and toggle the taluk's GP
+              // boundaries off right as the user inspects the panchayat's attribute info.
+              // If the click actually landed on a GP boundary, let the attribute-info
+              // panel handle it and leave the loaded boundaries untouched.
+              if (
+                map.getLayer(GP_BOUNDARIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, {
+                  layers: [GP_BOUNDARIES_FILL_LAYER_ID],
+                }).length > 0
+              ) {
+                return;
+              }
 
               const talukName =
                 (feature.properties?.kgis_civil_taluk_name as string | undefined) ??

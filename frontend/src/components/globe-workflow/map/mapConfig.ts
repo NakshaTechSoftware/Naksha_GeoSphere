@@ -1,6 +1,6 @@
 import type { StyleSpecification } from "maplibre-gl";
 
-export const MAP_PROJECTION = "globe" as const;
+export const MAP_PROJECTION = "mercator" as const;
 
 /** Optional demo raster style from env - NOT the commercial basemap. */
 export function envMapStyleUrl(): string | undefined {
@@ -19,7 +19,7 @@ export function envMapStyleUrl(): string | undefined {
  */
 export const GLOBE_STYLE: StyleSpecification = {
   version: 8,
-  projection: { type: "globe" },
+  projection: { type: "mercator" },
   sources: {},
   layers: [
     {

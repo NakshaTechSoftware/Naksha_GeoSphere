@@ -225,6 +225,12 @@ export async function GET(request: NextRequest) {
         return namesMatch(cleanFolderName(folderName), districtFolderName);
       });
 
+      // Village counts + names per pincode feature index, accumulated across every
+      // hobli's village file in the taluk and written back once all lookups finish.
+      // Both fields come from the same per-village pass, so "No. of Villages" and
+      // "Villages" can never disagree.
+      const villageDataOf: Record<number, { count: number; names: string[] }> = {};
+
       await Promise.all(
         Array.from(pincodesByTaluk.entries()).map(async ([talukName, indexes]) => {
           // Gram panchayat of each pincode (from the taluk's GP boundaries file).
@@ -265,7 +271,7 @@ export async function GET(request: NextRequest) {
                 const villageKey = `${adminDistrictFolder.Prefix}SubDistricts/${talukName}/Hoblis/${hobliName}/${hobliName}_village_boundary.geojson`;
                 try {
                   const villageGeo = (await fetchJson(s3Client, villageKey)) as {
-                    features: Array<{ geometry?: unknown }>;
+                    features: Array<{ geometry?: unknown; properties?: Record<string, unknown> }>;
                   };
                   const villageFeatures = villageGeo.features ?? [];
                   for (const index of indexes) {
@@ -274,6 +280,47 @@ export async function GET(request: NextRequest) {
                     if (points.length === 0) continue;
                     if (featureContainingPoints(villageFeatures, points)) {
                       features[index]!.properties!['hobli'] = hobliName;
+                    }
+                  }
+
+                  // Count + list the villages of this hobli that lie inside each pincode
+                  // polygon in this taluk. Village boundary features carry their name
+                  // under KGISVillageName (the key the map's village labels read); a
+                  // fallback chain tolerates the odd non-KGIS file. A village belongs to
+                  // exactly one pincode - the first whose polygon contains any of its
+                  // candidate points (centroid or ring starts).
+                  for (const village of villageFeatures) {
+                    const villageName = String(
+                      village.properties?.KGISVillageName ??
+                        village.properties?.village_name ??
+                        village.properties?.Village_Name ??
+                        village.properties?.vill_nm ??
+                        village.properties?.name ??
+                        ''
+                    ).trim();
+                    const villagePoints = candidatePoints(village);
+                    if (villagePoints.length === 0) continue;
+                    for (const index of indexes) {
+                      const pincodeGeometry = features[index]?.geometry;
+                      if (!pincodeGeometry) continue;
+                      let inside = false;
+                      for (const pt of villagePoints) {
+                        try {
+                          if (booleanPointInPolygon(pt, pincodeGeometry as never)) {
+                            inside = true;
+                            break;
+                          }
+                        } catch {
+                          // skip malformed pincode geometries
+                        }
+                      }
+                      if (inside) {
+                        const entry = villageDataOf[index] ?? { count: 0, names: [] };
+                        entry.count += 1;
+                        if (villageName) entry.names.push(villageName);
+                        villageDataOf[index] = entry;
+                        break;
+                      }
                     }
                   }
                 } catch (e) {
@@ -292,6 +339,15 @@ export async function GET(request: NextRequest) {
         if (talukName && features[Number(index)]?.properties) {
           features[Number(index)]!.properties!['taluk'] = talukName;
         }
+      });
+
+      // 4b) Attach the per-pincode village count + comma-separated village names
+      //     (accumulated from the same village features, so they always match).
+      Object.entries(villageDataOf).forEach(([index, data]) => {
+        const props = features[Number(index)]?.properties;
+        if (!props) return;
+        props['no_of_villages'] = data.count;
+        props['villages'] = data.names.join(', ');
       });
     } catch (e) {
       // Enrichment is best-effort: if any part of the join fails, still serve the plain

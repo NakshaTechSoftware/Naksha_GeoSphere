@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { User, LogOut, Settings, HelpCircle } from "lucide-react";
+import { getSessionUser, signOutUser, type SessionUser } from "@/lib/session";
 
 interface UserProfileProps {
+  /** Explicit overrides — when omitted, the signed-in session user is used. */
   userName?: string;
   userEmail?: string;
   /** Fired with the new open state whenever the avatar button toggles the dropdown. */
@@ -15,11 +17,26 @@ interface UserProfileProps {
  * Positioned in the top navigation bar
  */
 export function UserProfile({
-  userName = "Guest User",
-  userEmail = "guest@naksha.com",
+  userName,
+  userEmail,
   onMenuToggle,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // The session lives in sessionStorage, which only exists on the client - reading it
+  // synchronously during render would make the server HTML ("Guest User") differ from
+  // the client's first paint (the signed-in user), tripping React's hydration check and
+  // throwing the whole page into the client-render fallback. So the session user is
+  // loaded after mount instead: both server and client render the guest fallback first,
+  // then this effect swaps in the real signed-in user.
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  useEffect(() => {
+    setSessionUser(getSessionUser());
+  }, []);
+
+  // Explicit props win; otherwise show the signed-in user; fall back to a
+  // generic guest label when no session exists.
+  const displayName = userName ?? sessionUser?.name ?? "Guest User";
+  const displayEmail = userEmail ?? sessionUser?.email ?? "guest@naksha.com";
 
   // Get initials from name
   const getInitials = (name: string) => {
@@ -31,7 +48,7 @@ export function UserProfile({
       .slice(0, 2);
   };
 
-  const initials = getInitials(userName);
+  const initials = getInitials(displayName);
 
   return (
     <div className="relative flex-shrink-0">
@@ -69,9 +86,9 @@ export function UserProfile({
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">
-                    {userName}
+                    {displayName}
                   </p>
-                  <p className="text-xs text-gray-600 truncate">{userEmail}</p>
+                  <p className="text-xs text-gray-600 truncate">{displayEmail}</p>
                 </div>
               </div>
             </div>
@@ -116,7 +133,8 @@ export function UserProfile({
               <button
                 onClick={() => {
                   setIsOpen(false);
-                  // Full-page navigation clears any in-memory session state and
+                  signOutUser();
+                  // Full-page navigation clears any in-memory state and
                   // sends the user back to the public welcome page.
                   window.location.href = "/welcome-page";
                 }}

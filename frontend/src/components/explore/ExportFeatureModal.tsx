@@ -204,16 +204,16 @@ export function ExportFeatureModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={handleClose} />
       <div className="relative z-10 w-[22rem] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4">
+        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-blue-600 to-blue-700 px-5 py-4">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-100">Export</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-100">Export</p>
             <h3 className="truncate text-sm font-semibold text-white">{title}</h3>
           </div>
           <button
             type="button"
             onClick={handleClose}
             aria-label="Close export dialog"
-            className="flex-shrink-0 rounded-full p-1 text-indigo-100 transition-colors hover:bg-white/15 hover:text-white"
+            className="flex-shrink-0 rounded-full p-1 text-blue-100 transition-colors hover:bg-white/15 hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
@@ -221,7 +221,7 @@ export function ExportFeatureModal({
 
         {isLoading ? (
           <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
-            <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
             <div className="space-y-1">
               <p className="text-sm font-medium text-slate-900">{progress?.message ?? "Exporting…"}</p>
               <p className="text-xs text-slate-400">This can take a moment for larger areas.</p>
@@ -229,7 +229,7 @@ export function ExportFeatureModal({
             {progressPct !== undefined && (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                 <div
-                  className="h-full rounded-full bg-indigo-600 transition-all duration-300"
+                  className="h-full rounded-full bg-blue-600 transition-all duration-300"
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
@@ -252,13 +252,13 @@ export function ExportFeatureModal({
                         onClick={() => toggleLevel(level)}
                         className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                           checked
-                            ? "border-indigo-500 bg-indigo-50"
+                            ? "border-blue-500 bg-blue-50"
                             : "border-gray-200 hover:bg-gray-50"
                         }`}
                       >
                         <span className="flex items-center gap-2 font-medium text-slate-900">
                           {level === hierarchy?.level && (
-                            <ChevronRight className="h-3.5 w-3.5 text-indigo-500" />
+                            <ChevronRight className="h-3.5 w-3.5 text-blue-500" />
                           )}
                           {LEVEL_LABEL[level]}
                           {level === hierarchy?.level && (
@@ -266,7 +266,7 @@ export function ExportFeatureModal({
                           )}
                         </span>
                         {checked ? (
-                          <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                          <CheckCircle2 className="h-4 w-4 text-blue-600" />
                         ) : (
                           <span className="h-4 w-4 rounded-full border border-gray-300" />
                         )}
@@ -286,7 +286,7 @@ export function ExportFeatureModal({
                   onClick={() => setFormat(option.id)}
                   className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors ${
                     format === option.id
-                      ? "border-indigo-500 bg-indigo-50"
+                      ? "border-blue-500 bg-blue-50"
                       : "border-gray-200 hover:bg-gray-50"
                   }`}
                 >
@@ -306,7 +306,7 @@ export function ExportFeatureModal({
               type="button"
               onClick={handleExport}
               disabled={levels.length > 0 && selectedLevels.size === 0}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="h-4 w-4" />
               Export

@@ -31,7 +31,7 @@ export function LandingHeader() {
   };
 
   return (
-    <header className="border-[var(--color-text-on-dark)]/10 sticky top-0 z-50 w-full border-b bg-obsidian-graphite">
+    <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-obsidian-graphite">
       <div className="mx-auto flex h-[70px] max-w-content items-center justify-between px-6 lg:px-16">
         {/* Logo and Brand */}
         <a href="/welcome-page" className="flex items-center gap-3">

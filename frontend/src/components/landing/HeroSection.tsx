@@ -5,8 +5,10 @@ import { GlobeWorkflowPreview } from "./GlobeWorkflowPreview";
 export function HeroSection() {
   return (
     <section className="relative overflow-hidden">
-      {/* Full-width 3D workflow cover, flush against the header. */}
-      <div className="relative w-full px-0">
+      {/* Full-width 3D workflow cover, flush against the header. Hidden on mobile
+          (common phone resolutions) - the 3D demo is desktop-only; phones get the
+          badge + headline directly. */}
+      <div className="relative hidden w-full px-0 md:block">
         <GlobeWorkflowPreview />
       </div>
 
@@ -23,7 +25,7 @@ export function HeroSection() {
 
       {/* Badge straddles the cover/background boundary: negative margin pulls it up so
           its top half overlaps the cover and its bottom half sits on the page. */}
-      <div className="relative z-10 mx-auto -mt-6 max-w-content px-6 lg:pl-20 lg:pr-8">
+      <div className="relative z-10 mx-auto mt-6 max-w-content px-6 lg:pl-20 lg:pr-8 md:-mt-6">
         <span className="inline-flex items-center rounded-full border border-atlas-cobalt/20 bg-white px-5 py-3 text-sm font-semibold uppercase tracking-wide text-atlas-cobalt shadow-md">
           Global Coverage. Premium Quality.
         </span>

@@ -220,7 +220,7 @@ function pcCodeFromFeature(
 }
 
 // Remote MinIO configuration
-const MINIO_ENDPOINT = '192.168.10.81:9010';
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT ?? '192.168.10.81:9010';
 const MINIO_ACCESS_KEY = 'geosphere_storage';
 const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
 const S3_REGION = 'geosphere';
@@ -321,7 +321,7 @@ export async function GET(request: NextRequest) {
       {
         error: 'Failed to load parliamentary constituency boundaries',
         message: error instanceof Error ? error.message : 'Unknown error',
-        details: 'Check if MinIO storage at 192.168.10.81:9010 is accessible',
+        details: `Check if MinIO storage at ${MINIO_ENDPOINT} is accessible`,
       },
       { status: 500 }
     );

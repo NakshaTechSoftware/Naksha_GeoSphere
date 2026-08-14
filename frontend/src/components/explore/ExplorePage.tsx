@@ -16,7 +16,7 @@ import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Search, Menu, Info, X } from "lucide-react";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -273,6 +273,17 @@ export function ExplorePage() {
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+  // Whether the attribute panel itself is visible. On mobile (common phone resolutions) a
+  // new feature selection only shows an info chip, and the panel opens when the chip is
+  // tapped; on desktop the panel opens immediately.
+  const [attributePanelOpen, setAttributePanelOpen] = useState(true);
+
+  useEffect(() => {
+    if (!attributeInfo) return;
+    // Each new selection starts in the default state for the current screen size:
+    // open on desktop (md and up), closed (chip-only) on mobile.
+    setAttributePanelOpen(window.matchMedia("(min-width: 768px)").matches);
+  }, [attributeInfo]);
 
   // Whether the export-format picker (opened from the attribute panel's "Export" action) is
   // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
@@ -805,12 +816,25 @@ export function ExplorePage() {
 
         {/* Floating search bar */}
         <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
-          {/* Search Bar */}
-          <div ref={searchWrapperRef} className="relative max-w-md flex-1">
-            <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 shadow-md">
+          {/* Search Bar - takes the full width on mobile (common phone resolutions) where
+              the Draw AOI and User Profile controls are hidden. */}
+          {/* min-w-0 is critical: without it the wrapper's min-width defaults to auto,
+              so if the input ever fails to shrink (Android WebView quirk) the wrapper
+              grows with the input's intrinsic width and the bar visibly widens while
+              typing. min-w-0 lets the wrapper stay put and clip inside instead. */}
+          <div ref={searchWrapperRef} className="relative min-w-0 max-w-md flex-1">
+            {/* Taller on mobile (common phone resolutions) for easier touch; the
+                compact desktop size is restored at md and up. On mobile the profile
+                avatar is absolutely positioned over the pill's right edge (and space
+                reserved via pr-14) so it never participates in the flex layout - this
+                keeps the pill width constant no matter what the user types, even on
+                Android WebViews that refuse to shrink the input. */}
+            {/* overflow-hidden guarantees the pill never visually grows even if some
+                engine refuses to shrink the input - content clips at the pill edge. */}
+            <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-14 shadow-md md:py-1 md:pr-2">
               <button
                 onClick={() => setShowFilters((prev) => !prev)}
-                className={`flex-shrink-0 rounded-full p-2 transition-colors ${
+                className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
                   showFilters
                     ? "bg-gray-100 text-obsidian-graphite"
                     : "text-gray-500 hover:bg-gray-100"
@@ -818,10 +842,15 @@ export function ExplorePage() {
                 aria-label="Toggle filters"
                 aria-pressed={showFilters}
               >
-                <Menu className="h-4 w-4" />
+                <Menu className="h-5 w-5 md:h-4 md:w-4" />
               </button>
               <input
                 type="text"
+                // size={1} collapses the input's intrinsic min-content width (the
+                // default size=20 is what Android WebViews fall back to when they
+                // ignore min-width:0, inflating the bar). flex-1 + min-w-0 then grow
+                // it to fill the remaining space normally.
+                size={1}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -849,15 +878,15 @@ export function ExplorePage() {
                 aria-expanded={showSuggestions}
                 aria-autocomplete="list"
                 aria-controls="search-suggestions-listbox"
-                className="min-w-0 flex-1 bg-transparent py-1 text-sm focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-base md:py-1 md:text-sm focus:outline-none"
               />
               {searchQuery && (
                 <button
                   onClick={clearSearch}
-                  className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                  className="flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:p-2"
                   aria-label="Clear search"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-5 w-5 md:h-4 md:w-4" />
                 </button>
               )}
               <button
@@ -865,11 +894,24 @@ export function ExplorePage() {
                   setShowSuggestions(false);
                   mapViewerRef.current?.search(searchQuery);
                 }}
-                className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                className="hidden flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:flex md:p-2"
                 aria-label="Search"
               >
-                <Search className="h-4 w-4" />
+                <Search className="h-5 w-5 md:h-4 md:w-4" />
               </button>
+              {/* User Profile replaces the search icon on mobile (common phone
+                  resolutions); desktop keeps the search icon in the pill. Absolutely
+                  positioned over the pill's right edge (outside the flex flow) so the
+                  pill's width can't change while typing. The menu is a fixed overlay
+                  that matches the search bar's bounds. Opening the profile menu closes
+                  the Filters panel so the two fixed overlays never stack. */}
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 md:hidden">
+                <UserProfile
+                  onMenuToggle={(open) => {
+                    if (open) setShowFilters(false);
+                  }}
+                />
+              </div>
             </div>
 
             {/* Suggestions dropdown */}
@@ -920,11 +962,11 @@ export function ExplorePage() {
             )}
           </div>
 
-          {/* Spacer to push items to the right */}
-          <div className="flex-1" />
+          {/* Spacer to push items to the right (hidden on mobile) */}
+          <div className="hidden flex-1 md:block" />
 
-          {/* Draw AOI Button */}
-          <div ref={aoiMenuRef} className="relative">
+          {/* Draw AOI Button - hidden on mobile (common phone resolutions) */}
+          <div ref={aoiMenuRef} className="relative hidden md:block">
             {/* Pill container: a "open menu" button plus, while a tool is active, a separate
                 close button to deselect it - kept as siblings so no button nests inside a
                 button (valid HTML, and clicking the X never toggles the menu). */}
@@ -1013,14 +1055,18 @@ export function ExplorePage() {
             )}
           </div>
 
-          {/* User Profile Icon — reads the signed-in user from the session */}
-          <UserProfile />
+          {/* User Profile Icon - reads the signed-in user from the session; hidden on
+              mobile (common phone resolutions) so only the search bar stays at the top. */}
+          <div className="hidden md:block">
+            <UserProfile />
+          </div>
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
             right side, when the user right-clicks a boundary feature on the map. No height
-            limit: all attribute rows are shown in full. */}
-        {attributeInfo && (
+            limit: all attribute rows are shown in full. On mobile the panel only opens
+            after tapping the "View Details" chip. */}
+        {attributeInfo && attributePanelOpen && (
           <aside className="attr-panel-in scrollbar-hide absolute right-4 top-20 z-20 max-h-[calc(100vh-120px)] w-80 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl">
             <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
               <div className="flex min-w-0 items-center gap-2">
@@ -1131,6 +1177,24 @@ export function ExplorePage() {
           </aside>
         )}
 
+        {/* Info chip - on mobile (common phone resolutions) the attribute panel is hidden
+            behind this chip; tapping it opens the panel. Hidden on desktop, where the
+            panel opens directly on selection. */}
+        {attributeInfo && !attributePanelOpen && (
+          <button
+            type="button"
+            onClick={() => setAttributePanelOpen(true)}
+            className={`absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2.5 shadow-lg transition-colors hover:bg-gray-50 md:hidden ${
+              activeAOITool || aoiInfo ? "bottom-20" : "bottom-6"
+            }`}
+          >
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600">
+              <Info className="h-4 w-4 text-white" />
+            </span>
+            <span className="text-sm font-medium text-obsidian-graphite">View Details</span>
+          </button>
+        )}
+
         {exportModalOpen && attributeInfo && (
           <ExportFeatureModal
             title={attributeInfo.title}
@@ -1143,24 +1207,28 @@ export function ExplorePage() {
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}
         {showFilters && (
-          <aside className="scrollbar-hide absolute left-4 top-20 z-10 max-h-[calc(100vh-200px)] w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+          /* On mobile the search pill is taller, so push the panel down the extra few
+             pixels to keep the same ~8px gap as the profile menu below it. */
+          <aside className="scrollbar-hide absolute left-4 right-4 top-[84px] z-10 max-h-[calc(100vh-200px)] flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg md:right-auto md:top-20 md:w-64">
+            {/* Text sizes are a step larger on mobile (common phone resolutions) to
+                suit the wider panel; desktop sizes are restored at md and up. */}
             <div className="p-4">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
-                <button className="text-sm text-atlas-cobalt hover:underline">Reset all</button>
+                <h2 className="text-lg font-semibold text-obsidian-graphite md:text-base">Filters</h2>
+                <button className="text-base text-atlas-cobalt hover:underline md:text-sm">Reset all</button>
               </div>
 
               {/* Boundary Layers Filter */}
               <div className="mb-4 border-b border-gray-200 pb-4">
                 <button
                   onClick={() => toggleFilter("type")}
-                  className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-obsidian-graphite"
+                  className="mb-2 flex w-full items-center justify-between text-base font-semibold text-obsidian-graphite md:text-sm"
                 >
                   Boundary Layers
                   {expandedFilters.type ? (
-                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                    <ChevronUp className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
                   ) : (
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                    <ChevronDown className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
                   )}
                 </button>
                 {expandedFilters.type && (
@@ -1172,7 +1240,7 @@ export function ExplorePage() {
                       yet (no extra layers). */}
                     {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
                       <div key={id}>
-                      <label className="flex items-center text-sm text-gray-600">
+                      <label className="flex items-center text-base text-gray-600 md:text-sm">
                         <input
                           type="checkbox"
                           className="mr-2 accent-atlas-cobalt"
@@ -1187,7 +1255,7 @@ export function ExplorePage() {
                       {id === "police_station" && selectedBoundaryLayer === "police_station" && (
                         <div>
                         <select
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
                           value={selectedPoliceType}
                           onChange={(event) => {
                             const type = event.target.value as PoliceType;
@@ -1201,7 +1269,7 @@ export function ExplorePage() {
                         </select>
                         <select
                           aria-label="Police district"
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
                           value={selectedPoliceDistrict}
                           onChange={(event) => {
                             setSelectedPoliceDistrict(event.target.value);

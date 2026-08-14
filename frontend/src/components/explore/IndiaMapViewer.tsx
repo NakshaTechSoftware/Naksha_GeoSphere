@@ -749,6 +749,15 @@ export interface IndiaMapViewerHandle {
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
   setPoliceType: (type: PoliceType) => void;
   setPoliceDistrict: (district: string) => void;
+  /** Sets what a district click does in Roads mode: "none" (default) is boundaries only -
+   * fast, no highway fetch, matching the taluk/hobli/village levels' own lightweight click
+   * behavior (double-click still loads that district's highways on demand). "district" is
+   * the heavier opt-in behavior - a single click also fetches and shows that district's own
+   * full highways + local roads immediately. "state" loads every district's highways + the
+   * statewide local road network combined instead, since districts tile the whole state with
+   * no separate clickable "state" area. Set via the "State"/"District" buttons next to the
+   * Roads filter option - pass "none" to turn either back off. */
+  setRoadsClickScope: (scope: "none" | "district" | "state") => void;
   /** Loads the Karnataka or Bengaluru boundary when the query matches (case-insensitive). */
   search: (query: string) => void;
   /** Lists every Bengaluru boundary file, grouped by region subfolder (Central, East, ...). */
@@ -797,6 +806,17 @@ const STATE_DISTRICTS_FILL_LAYER_ID = "state-districts-fill";
 const STATE_DISTRICTS_LINE_LAYER_ID = "state-districts-line";
 const STATE_DISTRICTS_LABELS_LAYER_ID = "state-districts-labels";
 const STATE_DISTRICTS_LABELS_SOURCE_ID = "state-districts-labels-data";
+
+// Karnataka's own outline - the shared entry point for both "gba" and "roads" modes (both
+// only ever cover Karnataka, but still start with a state-level click like every other mode
+// does, rather than jumping straight to their data). Filtered client-side out of the same
+// india_states.geojson the default India -> States flow uses (see loadKarnatakaStateBoundary),
+// not a dedicated fetch.
+const KARNATAKA_STATE_SOURCE_ID = "karnataka-state-data";
+const KARNATAKA_STATE_FILL_LAYER_ID = "karnataka-state-fill";
+const KARNATAKA_STATE_LINE_LAYER_ID = "karnataka-state-line";
+const KARNATAKA_STATE_LABELS_LAYER_ID = "karnataka-state-labels";
+const KARNATAKA_STATE_LABELS_SOURCE_ID = "karnataka-state-labels-data";
 
 // Source/layer ids for the GBA (Greater Bengaluru Authority) hierarchy: the single
 // authority boundary, then Corporation -> Zone -> Ward, each loaded on demand from the
@@ -1215,6 +1235,9 @@ const BOUNDARY_LAYER_IDS = [
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
   VILLAGE_CADASTRALS_LABELS_LAYER_ID,
+  KARNATAKA_STATE_FILL_LAYER_ID,
+  KARNATAKA_STATE_LINE_LAYER_ID,
+  KARNATAKA_STATE_LABELS_LAYER_ID,
   GBA_BOUNDARY_FILL_LAYER_ID,
   GBA_BOUNDARY_LINE_LAYER_ID,
   GBA_BOUNDARY_LABELS_LAYER_ID,
@@ -1274,6 +1297,8 @@ const BOUNDARY_SOURCE_IDS = [
   HOBLI_VILLAGES_SOURCE_ID,
   HOBLI_VILLAGES_LABELS_SOURCE_ID,
   VILLAGE_CADASTRALS_SOURCE_ID,
+  KARNATAKA_STATE_SOURCE_ID,
+  KARNATAKA_STATE_LABELS_SOURCE_ID,
   GBA_BOUNDARY_SOURCE_ID,
   GBA_BOUNDARY_LABELS_SOURCE_ID,
   GBA_CORPORATIONS_SOURCE_ID,
@@ -1437,6 +1462,21 @@ function registerSatelliteProtocol(
 
     return { data: await response.arrayBuffer() };
   });
+}
+
+let pmtilesProtocolRegistered = false;
+
+// Registers the "pmtiles://" protocol (idempotent, same reasoning as the satellite protocol
+// above) used by the Roads hierarchy's "State" click-scope local-road-network layer - a
+// vector tile archive covering the whole state, so MapLibre only ever fetches whatever tiles
+// the current viewport/zoom actually needs, giving proper zoom-dependent detail (thinned out
+// zoomed out, full detail zoomed in) the way a single flat GeoJSON file can't.
+async function registerPmtilesProtocol(maplibregl: typeof import("maplibre-gl")) {
+  if (pmtilesProtocolRegistered) return;
+  pmtilesProtocolRegistered = true;
+  const { Protocol } = await import("pmtiles");
+  const protocol = new Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
 }
 
 // Which LayersControl base layer the explore map opens on. "satellite" keeps the default
@@ -1669,6 +1709,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.setLayoutProperty(`${baseId}-label`, "visibility", showAll ? "visible" : "none");
       }
     });
+
+    // Karnataka's own outline (shared entry point for "gba" and "roads") follows either
+    // mode, same pattern as the India boundary hiding once states load below.
+    const karnatakaStateVisible = mode === "gba" || mode === "roads";
+    [KARNATAKA_STATE_FILL_LAYER_ID, KARNATAKA_STATE_LINE_LAYER_ID, KARNATAKA_STATE_LABELS_LAYER_ID].forEach(
+      (layerId) => {
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, "visibility", karnatakaStateVisible ? "visible" : "none");
+        }
+      }
+    );
 
     // GBA hierarchy layers follow the "gba" mode directly, same pattern as the states/
     // districts/etc. groups above - shown only in "gba" mode, hidden (not unloaded) in
@@ -2187,6 +2238,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Currently-selected taluk name.
   const selectedTalukNameRef = useRef<string | null>(null);
 
+  // Whether Karnataka's own outline (the shared entry point for "gba" and "roads" modes) is
+  // currently loaded.
+  const loadedKarnatakaStateRef = useRef<boolean>(false);
+
   // GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone -> Ward.
   // Whether the (single) GBA authority boundary is currently loaded.
   const loadedGbaBoundaryRef = useRef<boolean>(false);
@@ -2227,6 +2282,20 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // duplicate-source race, "loaded" refs track drill-down position, "selected" refs track
   // which feature is highlighted.
   const loadedRoadsDistrictsRef = useRef<boolean>(false);
+  // The loaded Karnataka districts GeoJSON, kept so the "State" button can enumerate every
+  // district name to fetch for the statewide combined view, without a separate list call.
+  const roadsDistrictsDataRef = useRef<GeoJSON.FeatureCollection | null>(null);
+  // "none" (default - neither button pressed): a district click is the lightweight original
+  // behavior, boundaries only - select the district and show its taluks, no highway fetch at
+  // all, so ordinary browsing (and the taluk/hobli/village click-through below it) stays fast.
+  // Double-clicking a district still loads its own highways on demand (see the dblclick
+  // handler). "district": the heavier, opt-in behavior - a single click also fetches and
+  // shows that district's full highways + local roads immediately. "state": a click instead
+  // loads every district's highways + the statewide local road network combined (see
+  // loadRoadsStatewide). Set via the "State"/"District" buttons next to the Roads filter
+  // option (clicking the active one again returns to "none") - since districts tile the
+  // whole state with no separate area to click as "the state" itself.
+  const roadsClickScopeRef = useRef<"none" | "district" | "state">("none");
   const selectedRoadsDistrictIdRef = useRef<string | number | null>(null);
   // Original-case name of the currently-selected district (District_Road/etc API calls and
   // the taluks fetch need the real spelling, not the lowercased comparison key below).
@@ -2236,9 +2305,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Original-case name of the currently-selected taluk (the hobli-villages fetch needs the
   // real spelling, not loadedRoadsTaluksDistrictRef which holds the *district* name).
   const selectedRoadsTalukNameRef = useRef<string | null>(null);
-  // Which admin unit's highway layers are currently loaded - "district" or "taluk" level,
-  // plus the names needed to refetch/identify them.
-  const loadedRoadsHighwaysRef = useRef<{ level: "district" | "taluk"; district: string; taluk?: string } | null>(
+  // Which admin unit's highway layers are currently loaded - "state" (every district
+  // combined), "district", or "taluk" level - plus the names needed to refetch/identify them.
+  const loadedRoadsHighwaysRef = useRef<{ level: "state" | "district" | "taluk"; district: string; taluk?: string } | null>(
     null
   );
   const roadsLoadingRef = useRef<{ districts: boolean; taluks: boolean; highways: boolean }>({
@@ -2256,6 +2325,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // knows which geometry to re-apply, rather than falling all the way back to "no filter".
   const selectedRoadsTalukGeometryRef = useRef<GeoJSON.Geometry | null>(null);
   const selectedRoadsHobliGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  // Bumped on every district/taluk/hobli/village click or dblclick. A dblclick handler's
+  // async chain (ensureRoadsLoadedForTaluk -> applyRoadsBoundaryFilter) captures this at the
+  // start and checks it again before applying the filter - if the user has since clicked
+  // something else, the generation has moved on and the stale result is dropped instead of
+  // clobbering whatever's now selected. Without this, double-clicking village B shortly after
+  // double-clicking village A could have A's filter land *after* B's (whichever fetch/promise
+  // happens to resolve last wins), which looked like "clicking the village shows the whole
+  // taluk's roads" - a real, if intermittent, bug.
+  const roadsSelectionGenerationRef = useRef(0);
   // Roads hierarchy hoblies/villages - same shape as the taluk/hobli refs above, kept
   // separate so switching to/from "administrative" mode never touches this drill position.
   const loadedRoadsHobliesTalukRef = useRef<string | null>(null);
@@ -2354,6 +2432,89 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getSource(GBA_CORPORATIONS_LABELS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_LABELS_SOURCE_ID);
     loadedGbaCorporationsRef.current = false;
     selectedGbaCorporationIdRef.current = null;
+  };
+
+  const clearKarnatakaStateBoundary = (map: MapLibreMap) => {
+    if (map.getLayer(KARNATAKA_STATE_FILL_LAYER_ID)) map.removeLayer(KARNATAKA_STATE_FILL_LAYER_ID);
+    if (map.getLayer(KARNATAKA_STATE_LINE_LAYER_ID)) map.removeLayer(KARNATAKA_STATE_LINE_LAYER_ID);
+    removeLabelLayer(map, KARNATAKA_STATE_LABELS_LAYER_ID);
+    if (map.getSource(KARNATAKA_STATE_SOURCE_ID)) map.removeSource(KARNATAKA_STATE_SOURCE_ID);
+    if (map.getSource(KARNATAKA_STATE_LABELS_SOURCE_ID)) map.removeSource(KARNATAKA_STATE_LABELS_SOURCE_ID);
+    loadedKarnatakaStateRef.current = false;
+  };
+
+  // Shared entry point for "gba" and "roads" modes - both cover only Karnataka, but still
+  // start with a click on the state's own outline like every other mode does, instead of
+  // jumping straight to GBA's boundary / the districts. Reuses the same india_states.geojson
+  // the default India -> States flow fetches, filtered down to just Karnataka's feature,
+  // rather than a dedicated statewide-boundary file.
+  const loadKarnatakaStateBoundary = async (map: MapLibreMap) => {
+    if (loadedKarnatakaStateRef.current) return;
+    clearKarnatakaStateBoundary(map);
+    try {
+      let statesResponse: Response;
+      try {
+        statesResponse = await fetch("/api/datasets/india-boundary?file=states");
+      } catch {
+        statesResponse = await fetch("/geodata/india-states.geojson");
+      }
+      if (!statesResponse.ok) statesResponse = await fetch("/geodata/india-states.geojson");
+      const statesData = (await statesResponse.json()) as GeoJSON.FeatureCollection;
+      const karnatakaData: GeoJSON.FeatureCollection = {
+        ...statesData,
+        features: statesData.features.filter(
+          (f) => (f.properties?.st_nm as string | undefined)?.trim().toLowerCase() === "karnataka"
+        ),
+      };
+
+      map.addSource(KARNATAKA_STATE_SOURCE_ID, { type: "geojson", data: karnatakaData, generateId: true });
+      map.addSource(KARNATAKA_STATE_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(karnatakaData, ["st_nm"]),
+      });
+      void fitBoundsToGeoJSON(map, karnatakaData);
+      map.addLayer({
+        id: KARNATAKA_STATE_FILL_LAYER_ID,
+        type: "fill",
+        source: KARNATAKA_STATE_SOURCE_ID,
+        // Fully transparent - border-only hit-area, matching every other boundary layer.
+        paint: { "fill-color": "#0891b2", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: KARNATAKA_STATE_LINE_LAYER_ID,
+        type: "line",
+        source: KARNATAKA_STATE_SOURCE_ID,
+        paint: {
+          "line-color": "#0891b2",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            3,
+            ["boolean", ["feature-state", "hover"], false],
+            3.5,
+            2,
+          ],
+        },
+      });
+      const stateLabelLayer: any = {
+        id: KARNATAKA_STATE_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: KARNATAKA_STATE_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", "st_nm"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 14,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#164e63", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(stateLabelLayer);
+      loadedKarnatakaStateRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load Karnataka state boundary:", error);
+    }
   };
 
   const clearGbaBoundary = (map: MapLibreMap) => {
@@ -2701,6 +2862,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getSource(ROADS_DISTRICTS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_SOURCE_ID);
     if (map.getSource(ROADS_DISTRICTS_LABELS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_LABELS_SOURCE_ID);
     loadedRoadsDistrictsRef.current = false;
+    roadsDistrictsDataRef.current = null;
     selectedRoadsDistrictIdRef.current = null;
     selectedRoadsDistrictNameRef.current = null;
   };
@@ -2775,34 +2937,152 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         });
       });
 
-      // The full local street network (Road Center Line) is only served pre-split down to
-      // taluk granularity - the district-level files are still 100-300MB+ raw, too large for
-      // the browser - so it only shows once a taluk is actually selected, same scoping the
-      // GBA hierarchy uses for its own deepest level.
+      // The full local street network (Road Center Line) is only served pre-split - and
+      // pre-simplified down to a few MB each - at TALUK granularity; there's no district- or
+      // state-level file. A single taluk fetches directly; a whole district merges every one
+      // of its taluks' files client-side (still a reasonable ~20-40MB for a district's worth
+      // of taluks). Statewide would mean merging all 240 taluks (~825MB combined) - too much
+      // for a browser to fetch and render in one shot, so the "State" click-scope skips this
+      // and shows only the National/State/District Road highways.
+      let localRoadsFeatures: GeoJSON.Feature[] = [];
       if (level === "taluk" && taluk) {
         const params = new URLSearchParams({ district, taluk, category: "local_roads" });
         const response = await fetch(`/api/datasets/roads?${params.toString()}`);
-        const localRoadsData: GeoJSON.FeatureCollection = response.ok
-          ? await response.json()
-          : { type: "FeatureCollection", features: [] };
-        roadsUnfilteredDataRef.current[ROADS_LOCAL_ROADS_SOURCE_ID] = localRoadsData;
-        map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, { type: "geojson", data: localRoadsData });
-        map.addLayer({
-          id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
-          type: "line",
-          source: ROADS_LOCAL_ROADS_SOURCE_ID,
-          // Bright cyan - the original dark slate blended into the satellite basemap's own
-          // dark urban texture and became unreadable once zoomed into a dense city taluk.
-          // Distinct from the district/taluk boundary blue and the red/amber/olive highway
-          // colors, so it reads clearly at any zoom without being confused for either.
-          paint: { "line-color": "#22d3ee", "line-width": 1, "line-opacity": 0.9 },
-        });
+        if (response.ok) {
+          const data = (await response.json()) as GeoJSON.FeatureCollection;
+          localRoadsFeatures = data.features;
+        }
+      } else if (level === "district") {
+        const talukListResponse = await fetch(
+          `/api/datasets/district-taluks?district=${encodeURIComponent(district)}&state=Karnataka`
+        );
+        if (talukListResponse.ok) {
+          const talukListData = (await talukListResponse.json()) as GeoJSON.FeatureCollection;
+          const talukNames = talukListData.features
+            .map((f) => (f.properties?.KGISTalukName as string | undefined)?.trim())
+            .filter((name): name is string => Boolean(name));
+          const perTaluk = await Promise.all(
+            talukNames.map(async (t) => {
+              const params = new URLSearchParams({ district, taluk: t, category: "local_roads" });
+              const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+              if (!response.ok) return [] as GeoJSON.Feature[];
+              const data = (await response.json()) as GeoJSON.FeatureCollection;
+              return data.features;
+            })
+          );
+          localRoadsFeatures = perTaluk.flat();
+        }
       }
+
+      const localRoadsData: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: localRoadsFeatures };
+      roadsUnfilteredDataRef.current[ROADS_LOCAL_ROADS_SOURCE_ID] = localRoadsData;
+      map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, { type: "geojson", data: localRoadsData });
+      map.addLayer({
+        id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_LOCAL_ROADS_SOURCE_ID,
+        // Bright cyan - the original dark slate blended into the satellite basemap's own
+        // dark urban texture and became unreadable once zoomed into a dense city taluk.
+        // Distinct from the district/taluk boundary blue and the red/amber/olive highway
+        // colors, so it reads clearly at any zoom without being confused for either.
+        paint: { "line-color": "#22d3ee", "line-width": 1, "line-opacity": 0.9 },
+      });
 
       loadedRoadsHighwaysRef.current = { level, district, taluk };
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load ${level}-level highways for "${taluk ?? district}":`, error);
+    } finally {
+      roadsLoadingRef.current.highways = false;
+    }
+  };
+
+  // Double-clicking a hobli or village needs the taluk-level highway/local-road data loaded
+  // first before it can filter it down (see applyRoadsBoundaryFilter) - but it may already be
+  // loaded (the user double-clicked the taluk on the way down), so this only fetches if it
+  // isn't. Lets every level's double-click "just show me the roads" work on its own, without
+  // requiring the taluk to have been double-clicked first.
+  const ensureRoadsLoadedForTaluk = async (map: MapLibreMap, district: string, taluk: string) => {
+    const alreadyLoaded =
+      loadedRoadsHighwaysRef.current?.level === "taluk" &&
+      loadedRoadsHighwaysRef.current?.taluk?.toLowerCase() === taluk.toLowerCase();
+    if (alreadyLoaded) return;
+    await loadRoadsHighways(map, "taluk", district, taluk);
+  };
+
+  // Fetches every district's National/State/District Road highways (merged into one
+  // statewide view) and adds the statewide local road network as a PMTiles vector tile layer
+  // - triggered by the "State" button next to the Roads filter option (not a map click -
+  // districts tile the whole state with no separate area to click as "the state" itself).
+  // The local road network is a separate, offline-built vector tile archive (see
+  // /api/datasets/roads-statewide-local and registerPmtilesProtocol) rather than a flat
+  // GeoJSON merge of the 240 per-taluk files (~788MB raw) - MapLibre only fetches whatever
+  // tiles the current viewport/zoom needs, so it's thinned out zoomed out and fully detailed
+  // zoomed in, not one huge fetch with a single fixed level of detail everywhere.
+  const loadRoadsStatewide = async (map: MapLibreMap) => {
+    if (roadsLoadingRef.current.highways) return;
+    const districtNames = (roadsDistrictsDataRef.current?.features ?? [])
+      .map((f) => (f.properties?.dtname as string | undefined)?.trim())
+      .filter((name): name is string => Boolean(name));
+    if (districtNames.length === 0) return;
+
+    roadsLoadingRef.current.highways = true;
+    clearRoadsHighways(map);
+    try {
+      const results = await Promise.all(
+        ROADS_HIGHWAY_CATEGORIES.map(async ({ category }) => {
+          const perDistrict = await Promise.all(
+            districtNames.map(async (district) => {
+              const params = new URLSearchParams({ district, category });
+              const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+              if (!response.ok) return [] as GeoJSON.Feature[];
+              const data = (await response.json()) as GeoJSON.FeatureCollection;
+              return data.features;
+            })
+          );
+          return { type: "FeatureCollection", features: perDistrict.flat() } as GeoJSON.FeatureCollection;
+        })
+      );
+
+      ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
+        const data = results[i]!;
+        roadsUnfilteredDataRef.current[sourceId] = data;
+        map.addSource(sourceId, { type: "geojson", data });
+        map.addLayer({
+          id: fillLayerId,
+          type: "fill",
+          source: sourceId,
+          paint: { "fill-color": color, "fill-opacity": 0 },
+        });
+        map.addLayer({
+          id: lineLayerId,
+          type: "line",
+          source: sourceId,
+          // Thinner than the district/taluk-level line-width (2) - at statewide zoom, every
+          // district's highways drawn at full width turns into visual clutter.
+          paint: { "line-color": color, "line-width": 1 },
+        });
+      });
+
+      // Not added to roadsUnfilteredDataRef - it's a vector tile source (no .setData()), and
+      // applyRoadsBoundaryFilter is never reached while level is "state" anyway (taluk/hobli/
+      // village aren't selectable without a district first, which "state" scope bypasses).
+      map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, {
+        type: "vector",
+        url: "pmtiles:///api/datasets/roads-statewide-local",
+      });
+      map.addLayer({
+        id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_LOCAL_ROADS_SOURCE_ID,
+        "source-layer": "local_roads",
+        paint: { "line-color": "#22d3ee", "line-width": 0.6, "line-opacity": 0.75 },
+      });
+
+      loadedRoadsHighwaysRef.current = { level: "state", district: "Karnataka" };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load statewide highways:", error);
     } finally {
       roadsLoadingRef.current.highways = false;
     }
@@ -2837,6 +3117,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
+  // True only when the currently-loaded highways are a *taluk's own* clipped view (i.e. that
+  // taluk was double-clicked, or a hobli/village below it was). District-wide ("district"
+  // click-scope) and statewide ("state" click-scope) views are intentionally NOT clipped by
+  // drilling through taluk/hobli/village boundaries with a plain single click - those clicks
+  // are boundaries-only by spec, and re-clipping or clearing the highways on every such click
+  // would otherwise silently narrow (or wipe out) a district/state view the user explicitly
+  // asked to see in full. Taluk/hobli/village select/deselect handlers gate their
+  // clearRoadsHighways()/applyRoadsBoundaryFilter() calls on this so they only ever touch an
+  // already taluk-scoped view, never a wider one.
+  const isRoadsHighwaysTalukScoped = () => loadedRoadsHighwaysRef.current?.level === "taluk";
+
   // Fetches and renders Karnataka's district boundaries as the entry point into the Roads
   // hierarchy, reusing /api/datasets/state-districts but into dedicated layers so this mode
   // never collides with "administrative" mode's own district layer.
@@ -2848,6 +3139,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       const response = await fetch(`/api/datasets/state-districts?state=Karnataka`);
       if (!response.ok) throw new Error(`state-districts failed (${response.status})`);
       const data = (await response.json()) as GeoJSON.FeatureCollection;
+      roadsDistrictsDataRef.current = data;
 
       map.addSource(ROADS_DISTRICTS_SOURCE_ID, { type: "geojson", data, generateId: true });
       map.addSource(ROADS_DISTRICTS_LABELS_SOURCE_ID, {
@@ -5493,6 +5785,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (cancelled || !containerRef.current) return;
 
         registerSatelliteProtocol(maplibregl, () => mapRef.current);
+        await registerPmtilesProtocol(maplibregl);
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {
@@ -6693,6 +6986,69 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
 
+            // Karnataka's own outline - the shared entry point for "gba" and "roads" modes
+            // (see loadKarnatakaStateBoundary). A click reveals whichever mode is currently
+            // active is actually after: GBA's own boundary, or the Roads districts.
+            let hoveredKarnatakaStateId: string | number | null = null;
+            map.on("mousemove", KARNATAKA_STATE_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredKarnatakaStateId !== null && hoveredKarnatakaStateId !== feature.id) {
+                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+              }
+              hoveredKarnatakaStateId = feature.id;
+              map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", KARNATAKA_STATE_FILL_LAYER_ID, () => {
+              if (hoveredKarnatakaStateId !== null) {
+                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+              }
+              hoveredKarnatakaStateId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", KARNATAKA_STATE_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              if (!e.features?.[0]) return;
+              const mode = boundaryLayerModeRef.current;
+              if (mode === "gba") {
+                // A click on the GBA boundary (inside Karnataka) would otherwise also reach
+                // this handler and immediately toggle it back off.
+                if (
+                  map.getLayer(GBA_BOUNDARY_FILL_LAYER_ID) &&
+                  queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_BOUNDARY_FILL_LAYER_ID] }).length > 0
+                ) {
+                  return;
+                }
+                if (loadedGbaBoundaryRef.current) {
+                  clearGbaWards(map);
+                  clearGbaZones(map);
+                  clearGbaCorporations(map);
+                  clearGbaBoundary(map);
+                } else {
+                  map.getCanvas().style.cursor = "wait";
+                  void loadGbaBoundary(map).finally(() => {
+                    if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                  });
+                }
+              } else if (mode === "roads") {
+                if (
+                  map.getLayer(ROADS_DISTRICTS_FILL_LAYER_ID) &&
+                  queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_DISTRICTS_FILL_LAYER_ID] }).length > 0
+                ) {
+                  return;
+                }
+                if (loadedRoadsDistrictsRef.current) {
+                  clearRoadsDistricts(map);
+                } else {
+                  map.getCanvas().style.cursor = "wait";
+                  void loadRoadsDistricts(map).finally(() => {
+                    if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                  });
+                }
+              }
+            });
+
             // --- GBA (Greater Bengaluru Authority) hierarchy click-through:
             // Authority -> Corporation -> Zone -> Ward. Each level's click loads the next
             // level down (clearing any previously-loaded deeper levels first) and toggles
@@ -6895,10 +7251,28 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               hoveredRoadsDistrictId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
+            // Behavior depends on roadsClickScopeRef (the "State"/"District" buttons):
+            // "state" - any click loads the statewide combined view, nothing else, districts
+            // aren't individually selectable. "district" - a click selects the district and
+            // shows its taluks + its own full highways together, immediately. "none"
+            // (default) - a click is boundaries-only (fast, no highway fetch); the district's
+            // highways load on double-click instead (see the dblclick handler below), the
+            // same lightweight behavior ordinary browsing and the taluk/hobli/village levels
+            // already have. A real double-click always fires click, click, dblclick in
+            // sequence, so by the time dblclick lands the district is already selected via
+            // this handler - the two aren't racing each other.
             map.on("click", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              if (roadsClickScopeRef.current === "state") {
+                roadsSelectionGenerationRef.current++;
+                map.getCanvas().style.cursor = "wait";
+                void loadRoadsStatewide(map).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+                return;
+              }
               // A click on a taluk (inside this district) would otherwise also reach this
-              // handler and immediately toggle the taluks/highways back off.
+              // handler and immediately toggle the taluks back off.
               if (
                 map.getLayer(ROADS_TALUKS_FILL_LAYER_ID) &&
                 queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_TALUKS_FILL_LAYER_ID] }).length > 0
@@ -6910,6 +7284,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const districtName = (feature.properties?.dtname as string | undefined)?.trim();
               if (!districtName) return;
               const normalized = districtName.toLowerCase();
+              roadsSelectionGenerationRef.current++;
 
               if (
                 selectedRoadsDistrictIdRef.current === feature.id &&
@@ -6918,7 +7293,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsDistrictIdRef.current = null;
                 selectedRoadsDistrictNameRef.current = null;
-                clearRoadsTaluks(map);
+                clearRoadsTaluks(map); // cascades into clearRoadsHighways too
                 return;
               }
 
@@ -6929,10 +7304,45 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedRoadsDistrictNameRef.current = districtName;
               map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: true });
               map.getCanvas().style.cursor = "wait";
-              void Promise.all([
-                loadRoadsTaluks(map, districtName),
-                loadRoadsHighways(map, "district", districtName),
-              ]).finally(() => {
+              if (roadsClickScopeRef.current === "district") {
+                // Opt-in heavier behavior - fetch this district's full highways right away
+                // together with its taluk boundaries.
+                void Promise.all([
+                  loadRoadsTaluks(map, districtName),
+                  loadRoadsHighways(map, "district", districtName),
+                ]).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              } else {
+                // Default "none" scope - boundaries only, no highway fetch.
+                void loadRoadsTaluks(map, districtName).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              }
+            });
+            map.on("dblclick", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // Only meaningful in the default "none" scope - "district" scope already loads
+              // highways on single click, and "state" scope's click means something else
+              // entirely, so a double-click there would just repeat the same click handler
+              // twice (harmless, but this avoids the redundant fetch and the zoom it'd cause
+              // if preventDefault() below didn't run for it).
+              if (roadsClickScopeRef.current !== "none") return;
+              // Cancels MapLibre's built-in double-click-to-zoom for this interaction -
+              // otherwise the map would zoom in at the same time as loading the roads.
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_TALUKS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_TALUKS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const districtName = (feature?.properties?.dtname as string | undefined)?.trim() ?? selectedRoadsDistrictNameRef.current;
+              if (!districtName) return;
+              roadsSelectionGenerationRef.current++;
+              map.getCanvas().style.cursor = "wait";
+              void loadRoadsHighways(map, "district", districtName).finally(() => {
                 if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
               });
             });
@@ -6955,6 +7365,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               hoveredRoadsTalukId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
+            // Single click: select the taluk and show its hobli boundaries only - no road
+            // data (the district-wide highways stay however they were, if the district was
+            // ever double-clicked). Double click: show this taluk's own highways + local
+            // road network, clipped to its polygon (see the dblclick handler below).
             map.on("click", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               // A click on a hobli (inside this taluk) would otherwise also reach this
@@ -6970,25 +7384,21 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const talukName = (feature.properties?.KGISTalukName as string | undefined)?.trim();
               const districtName = selectedRoadsDistrictNameRef.current;
               if (!talukName || !districtName) return;
+              roadsSelectionGenerationRef.current++;
 
-              const alreadySelected =
-                selectedRoadsTalukIdRef.current === feature.id &&
-                loadedRoadsHighwaysRef.current?.level === "taluk" &&
-                loadedRoadsHighwaysRef.current?.taluk?.toLowerCase() === talukName.toLowerCase();
-
-              if (alreadySelected) {
-                // Toggle off - deselect the taluk and fall back to showing the district's
-                // own highways (the district itself is still selected).
+              if (selectedRoadsTalukIdRef.current === feature.id) {
+                // Toggle off - deselect the taluk and drop back to just the district's
+                // taluk list (the district itself is still selected). Only clear the
+                // highways if they were this taluk's own clipped view (double-clicked) - a
+                // district-wide ("District" click-scope) or statewide view should stay put,
+                // this is a boundaries-only click.
                 map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsTalukIdRef.current = null;
                 selectedRoadsTalukNameRef.current = null;
                 selectedRoadsTalukGeometryRef.current = null;
                 selectedRoadsHobliGeometryRef.current = null;
                 clearRoadsHoblies(map);
-                map.getCanvas().style.cursor = "wait";
-                void loadRoadsHighways(map, "district", districtName).finally(() => {
-                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
-                });
+                if (isRoadsHighwaysTalukScoped()) clearRoadsHighways(map);
                 return;
               }
 
@@ -7000,19 +7410,45 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedRoadsTalukGeometryRef.current = feature.geometry;
               selectedRoadsHobliGeometryRef.current = null;
               map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
+              // A different taluk's roads may still be showing from a previous double-click -
+              // drop them now that a new taluk is selected, so they don't linger clipped to
+              // the wrong polygon. Only when they were taluk-scoped to begin with - a
+              // district-wide/statewide view is untouched by this boundaries-only click.
+              if (isRoadsHighwaysTalukScoped()) clearRoadsHighways(map);
               map.getCanvas().style.cursor = "wait";
-              void Promise.all([
-                // Clip the highway/local-road layers down to this taluk's own polygon once
-                // they've loaded - the taluk-level file's road geometries aren't necessarily
-                // clipped exactly to the administrative boundary (a road can run slightly
-                // past it), same reasoning as the hobli/village clips below.
-                loadRoadsHighways(map, "taluk", districtName, talukName).then(() => {
-                  applyRoadsBoundaryFilter(map, feature.geometry);
-                }),
-                loadRoadsHoblies(map, talukName, districtName),
-              ]).finally(() => {
+              void loadRoadsHoblies(map, talukName, districtName).finally(() => {
                 if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
               });
+            });
+            map.on("dblclick", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_HOBLIES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const talukName = (feature?.properties?.KGISTalukName as string | undefined)?.trim() ?? selectedRoadsTalukNameRef.current;
+              const talukGeometry = feature?.geometry ?? selectedRoadsTalukGeometryRef.current;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              if (!talukName || !districtName || !talukGeometry) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              // Clip to this taluk's own polygon once loaded - the taluk-level file's road
+              // geometries aren't necessarily clipped exactly to the administrative boundary
+              // (a road can run slightly past it), same reasoning as the hobli/village clips.
+              void loadRoadsHighways(map, "taluk", districtName, talukName)
+                .then(() => {
+                  // The user may have clicked something else while this was in flight - a
+                  // stale filter landing now would clobber whatever's actually selected.
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, talukGeometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
             });
 
             let hoveredRoadsHobliId: string | number | null = null;
@@ -7033,6 +7469,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               hoveredRoadsHobliId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
+            // Single click: select the hobli and show its village boundaries only. Double
+            // click: clip the highway/local-road layers to this hobli's own polygon (loading
+            // the taluk's road data first if it hasn't been double-clicked yet - see
+            // ensureRoadsLoadedForTaluk).
             map.on("click", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               // A click on a village (inside this hobli) would otherwise also reach this
@@ -7049,19 +7489,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const districtName = selectedRoadsDistrictNameRef.current;
               const talukName = selectedRoadsTalukNameRef.current;
               if (!hobliName || !districtName || !talukName) return;
+              roadsSelectionGenerationRef.current++;
 
-              const alreadySelected =
-                selectedRoadsHobliIdRef.current === feature.id &&
-                loadedRoadsVillagesHobliRef.current === hobliName.toLowerCase();
-
-              if (alreadySelected) {
-                // Toggle off - deselect the hobli and fall back to the taluk's own clip
-                // (the taluk itself is still selected).
+              if (selectedRoadsHobliIdRef.current === feature.id) {
+                // Toggle off - deselect the hobli and fall back to the taluk's own clip (or
+                // no roads at all, if the taluk was never double-clicked). Only touches the
+                // highways if they're already taluk-scoped - a district-wide/statewide view
+                // is untouched by this boundaries-only click.
                 map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsHobliIdRef.current = null;
                 selectedRoadsHobliGeometryRef.current = null;
                 clearRoadsVillages(map);
-                applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
+                if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
                 return;
               }
 
@@ -7071,13 +7510,39 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedRoadsHobliIdRef.current = feature.id;
               selectedRoadsHobliGeometryRef.current = feature.geometry;
               map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
-              // Clip the highway/local-road layers down to this hobli's own polygon - the
-              // road data already loaded (for the parent taluk) so this is instant, no fetch.
-              applyRoadsBoundaryFilter(map, feature.geometry);
+              // A different hobli's clip may still be active from a previous double-click -
+              // fall back to the taluk's (or no filter) until this hobli is double-clicked.
+              // Only when the highways are already taluk-scoped - see isRoadsHighwaysTalukScoped.
+              if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
               map.getCanvas().style.cursor = "wait";
               void loadRoadsVillages(map, hobliName, talukName, districtName).finally(() => {
                 if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
               });
+            });
+            map.on("dblclick", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_VILLAGES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const hobliGeometry = feature?.geometry ?? selectedRoadsHobliGeometryRef.current;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!hobliGeometry || !districtName || !talukName) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              void ensureRoadsLoadedForTaluk(map, districtName, talukName)
+                .then(() => {
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, hobliGeometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
             });
 
             let hoveredRoadsVillageId: string | number | null = null;
@@ -7098,6 +7563,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               hoveredRoadsVillageId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
+            // Single click: just select/highlight the village (it's the leaf level, nothing
+            // loads below it) and fall back to the hobli's own clip if a different village's
+            // roads were showing. Double click: clip the highway/local-road layers to this
+            // village's own polygon.
             map.on("click", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               const feature = e.features?.[0];
@@ -7110,10 +7579,29 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!isSame) {
                 map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
               }
-              // Narrow the highway/local-road layers to just this village, or - on deselect -
-              // fall back to the parent hobli's own clip (the hobli itself is still
-              // selected), not all the way back to the full taluk view.
-              applyRoadsBoundaryFilter(map, isSame ? selectedRoadsHobliGeometryRef.current : feature.geometry);
+              roadsSelectionGenerationRef.current++;
+              // Only touches the highways if they're already taluk-scoped - a district-wide/
+              // statewide view is untouched by this boundaries-only click.
+              if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsHobliGeometryRef.current);
+            });
+            map.on("dblclick", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              const feature = e.features?.[0];
+              if (!feature) return;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!districtName || !talukName) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              void ensureRoadsLoadedForTaluk(map, districtName, talukName)
+                .then(() => {
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, feature.geometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
             });
 
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
@@ -7977,63 +8465,38 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const style = map.getStyle();
     const currentLayers = style.layers;
     
-    // Identify custom layers we want to keep
+    // Identify custom layers we want to keep. Reuses the same BOUNDARY_LAYER_IDS/
+    // STATE_BOUNDARY_LAYER_IDS lists every mode's own load/clear functions are already kept
+    // in sync with, instead of a separate hand-maintained list here - that list had drifted
+    // out of date (missing the entire GBA, Roads, Gram Panchayat and Civic Amenities
+    // hierarchies, plus the new Karnataka state layer), so switching the base map (satellite/
+    // default/terrain) was silently deleting whichever of those was currently loaded.
     const customLayerIds = currentLayers
-      .filter((l) => 
-        l.id === "states-fill-default" ||
-        l.id === "states-borders-default" ||
-        l.id === "states-labels-default" ||
-        l.id === STATE_DISTRICTS_FILL_LAYER_ID ||
-        l.id === STATE_DISTRICTS_LINE_LAYER_ID ||
-        l.id === STATE_DISTRICTS_LABELS_LAYER_ID ||
-        l.id === STATE_ASSEMBLY_FILL_LAYER_ID ||
-        l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
-        l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
-        l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
-        l.id === STATE_POLICE_FILL_LAYER_ID ||
-        l.id === STATE_POLICE_LINE_LAYER_ID ||
-        l.id === STATE_POLICE_LABEL_LAYER_ID ||
-        l.id === STATE_POLICE_POINT_LABEL_LAYER_ID ||
-        l.id.startsWith("police-") ||
-        l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
-        l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
-        l.id === DISTRICT_TALUKS_LABELS_LAYER_ID ||
-        l.id === TALUK_HOBLIES_FILL_LAYER_ID ||
-        l.id === TALUK_HOBLIES_LINE_LAYER_ID ||
-        l.id === TALUK_HOBLIES_LABELS_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_FILL_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_LINE_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_LABELS_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID ||
-        l.id.startsWith("kml-") ||
-        l.id.startsWith("bengaluru-") ||
-        l.id.startsWith("extra-") ||
-        AOI_LAYER_IDS.includes(l.id)
+      .filter(
+        (l) =>
+          STATE_BOUNDARY_LAYER_IDS.includes(l.id) ||
+          BOUNDARY_LAYER_IDS.includes(l.id) ||
+          l.id.endsWith("-hover") ||
+          l.id === STATE_POLICE_POINT_LAYER_ID ||
+          l.id === STATE_POLICE_POINT_HALO_LAYER_ID ||
+          l.id === STATE_POLICE_POINT_LABEL_LAYER_ID ||
+          l.id.startsWith("police-") ||
+          l.id.startsWith("kml-") ||
+          l.id.startsWith("bengaluru-") ||
+          l.id.startsWith("extra-") ||
+          AOI_LAYER_IDS.includes(l.id)
       )
       .map((l) => l.id);
 
-    // Identify custom sources we want to keep
+    // Identify custom sources we want to keep - same reasoning as customLayerIds above.
     const customSourceIds = Object.keys(style.sources).filter(
       (sourceId) =>
         sourceId === STATE_SOURCE_ID ||
         sourceId === STATE_LABELS_SOURCE_ID ||
-        sourceId === STATE_DISTRICTS_SOURCE_ID ||
-        sourceId === STATE_DISTRICTS_LABELS_SOURCE_ID ||
-        sourceId === STATE_ASSEMBLY_SOURCE_ID ||
-        sourceId === STATE_PARLIAMENT_SOURCE_ID ||
-        sourceId === STATE_POLICE_SOURCE_ID ||
+        BOUNDARY_SOURCE_IDS.includes(sourceId) ||
         sourceId.startsWith("police-") ||
-        sourceId === DISTRICT_TALUKS_SOURCE_ID ||
-        sourceId === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
-        sourceId === TALUK_HOBLIES_SOURCE_ID ||
-        sourceId === TALUK_HOBLIES_LABELS_SOURCE_ID ||
-        sourceId === HOBLI_VILLAGES_SOURCE_ID ||
-        sourceId === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
-        sourceId === VILLAGE_CADASTRALS_SOURCE_ID ||
-        sourceId === "kml-data" ||
-        sourceId === "bengaluru-data" ||
+        sourceId.startsWith("kml-") ||
+        sourceId.startsWith("bengaluru-") ||
         sourceId.startsWith("extra-") ||
         sourceId === AOI_SOURCE_ID ||
         sourceId === AOI_VERTICES_SOURCE_ID
@@ -8168,6 +8631,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // above, but call the dedicated clear functions too so their ref state resets the same
     // way every other level's does - keeps this one path the single source of truth for
     // "what does the GBA hierarchy look like right now" instead of splitting it in two.
+    clearKarnatakaStateBoundary(map);
     clearGbaWards(map);
     clearGbaZones(map);
     clearGbaCorporations(map);
@@ -8637,31 +9101,29 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearGpDistricts(map);
         clearCivicDistricts(map);
       }
-      // The GBA authority boundary is the entry point into its own hierarchy (Authority ->
-      // Corporation -> Zone -> Ward, drilled into by clicking, same as India -> States ->
-      // Districts). Every other mode fully tears down its drill-down on switching away
-      // (e.g. clearStateDistricts/clearDistrictTaluks above) rather than just hiding it, so
-      // GBA does the same for consistency - leaving "gba" mode clears every level, and
-      // re-entering it always starts fresh at the Authority boundary, not wherever the user
-      // last drilled down to.
-      if (mode === "gba") {
-        if (!loadedGbaBoundaryRef.current) void loadGbaBoundary(map);
+      // Both "gba" and "roads" share Karnataka's own outline as their entry point (see
+      // loadKarnatakaStateBoundary) - a click on it reveals GBA's boundary or the districts,
+      // same as India -> States -> Districts does elsewhere. Every other mode fully tears
+      // down its drill-down on switching away (e.g. clearStateDistricts/clearDistrictTaluks
+      // above) rather than just hiding it, so these two do the same for consistency - leaving
+      // either mode clears every level, and re-entering it always starts fresh at Karnataka's
+      // outline, not wherever the user last drilled down to.
+      if (mode === "gba" || mode === "roads") {
+        if (!loadedKarnatakaStateRef.current) void loadKarnatakaStateBoundary(map);
       } else {
+        clearKarnatakaStateBoundary(map);
+      }
+      if (mode !== "gba") {
         clearGbaWards(map);
         clearGbaZones(map);
         clearGbaCorporations(map);
         clearGbaBoundary(map);
       }
-      // Roads mode's entry point is the district layer itself (the data only covers
-      // Karnataka, so there's no separate "authority boundary" step like GBA) - leaving
-      // "roads" mode fully tears down the drill-down, same reasoning as GBA above, so
-      // re-entering it always starts fresh at the district list.
-      if (mode === "roads") {
-        if (!loadedRoadsDistrictsRef.current) void loadRoadsDistricts(map);
-      } else {
+      if (mode !== "roads") {
         clearRoadsHighways(map);
         clearRoadsTaluks(map);
         clearRoadsDistricts(map);
+        roadsClickScopeRef.current = "none";
       }
       applyBoundaryLayerVisibility(map);
     },
@@ -8680,6 +9142,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (!map || !selectedState || boundaryLayerModeRef.current !== "police_station") return;
       clearStatePolice(map);
       void loadStatePolice(map, selectedState, policeTypeRef.current, district);
+    },
+    setRoadsClickScope: (scope: "none" | "district" | "state") => {
+      const map = mapRef.current;
+      if (roadsClickScopeRef.current === scope) return;
+      roadsClickScopeRef.current = scope;
+      // Whatever was selected/loaded under the old scope (a district + its taluks, or the
+      // statewide view) doesn't necessarily make sense under the new one - clear it so the
+      // next click starts fresh instead of leaving a stale mix on the map (e.g. a
+      // district's own highways still showing after switching to "State" scope).
+      if (map && boundaryLayerModeRef.current === "roads") {
+        clearRoadsDistricts(map); // cascades into clearRoadsTaluks/clearRoadsHighways too
+      }
     },
     setDrawingTool: (tool: AOITool | null) => {
       const map = mapRef.current;

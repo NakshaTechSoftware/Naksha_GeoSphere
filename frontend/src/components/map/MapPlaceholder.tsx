@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
+import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 
 /**
  * Minimal MapLibre GL JS bootstrap used only to prove the map engine is
@@ -26,6 +28,7 @@ export function MapPlaceholder() {
 
         if (cancelled || !containerRef.current) return;
 
+        configureMaplibreWorker();
         mapRef.current = new maplibregl.Map({
           container: containerRef.current,
           style: "https://demotiles.maplibre.org/style.json",

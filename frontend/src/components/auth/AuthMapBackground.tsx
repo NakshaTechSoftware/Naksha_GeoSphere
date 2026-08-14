@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
+// This decorative raster-only map still needs it: maplibre spawns its worker pool at map
+// construction, and if that happens with the default (Next.js-broken) worker URL, every
+// later GeoJSON map in the same page session - e.g. the Explore page reached by a
+// client-side navigation from this sign-in screen - silently fails to load its layers.
+import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 
 export interface MapBackdropLocation {
   center: [number, number];
@@ -41,6 +47,7 @@ export function AuthMapBackground({ locations, filterId }: AuthMapBackgroundProp
       const maplibregl = await import("maplibre-gl");
       if (cancelled || !containerRef.current) return;
 
+      configureMaplibreWorker();
       const map = new maplibregl.Map({
         container: containerRef.current,
         style: {

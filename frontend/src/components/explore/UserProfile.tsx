@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { User, LogOut, Settings, HelpCircle } from "lucide-react";
-import { getSessionUser, signOutUser } from "@/lib/session";
+import { getSessionUser, signOutUser, type SessionUser } from "@/lib/session";
 
 interface UserProfileProps {
   /** Explicit overrides — when omitted, the signed-in session user is used. */
@@ -22,7 +22,16 @@ export function UserProfile({
   onMenuToggle,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const sessionUser = getSessionUser();
+  // The session lives in sessionStorage, which only exists on the client - reading it
+  // synchronously during render would make the server HTML ("Guest User") differ from
+  // the client's first paint (the signed-in user), tripping React's hydration check and
+  // throwing the whole page into the client-render fallback. So the session user is
+  // loaded after mount instead: both server and client render the guest fallback first,
+  // then this effect swaps in the real signed-in user.
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  useEffect(() => {
+    setSessionUser(getSessionUser());
+  }, []);
 
   // Explicit props win; otherwise show the signed-in user; fall back to a
   // generic guest label when no session exists.

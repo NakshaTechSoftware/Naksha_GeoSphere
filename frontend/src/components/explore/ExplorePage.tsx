@@ -12,6 +12,12 @@ import {
   type AttributeInfo,
 } from "./IndiaMapViewer";
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
+import { LocationEnvironmentPanel } from "@/components/environment/LocationEnvironmentPanel";
+import {
+  formatStoredLocationLabel,
+  getStoredUserSession,
+  type StoredUserSession,
+} from "@/lib/userSession";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
@@ -250,6 +256,8 @@ export function ExplorePage() {
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+  const [storedUser, setStoredUser] = useState<StoredUserSession | null>(null);
+  const [showLocationEnvironment, setShowLocationEnvironment] = useState(false);
 
   // Whether the export-format picker (opened from the attribute panel's "Export" action) is
   // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
@@ -266,6 +274,13 @@ export function ExplorePage() {
   >({ status: "loading" });
 
   const parcel = attributeInfo?.parcel;
+  const storedLocation = storedUser?.preferredLocation ?? null;
+  const storedLocationLabel = formatStoredLocationLabel(storedLocation);
+
+  useEffect(() => {
+    setStoredUser(getStoredUserSession());
+  }, []);
+
   useEffect(() => {
     if (!parcel) return;
     const controller = new AbortController();
@@ -308,7 +323,7 @@ export function ExplorePage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/data/india_states.geojson");
+        const res = await fetch("/geodata/india-states.geojson");
         if (res.ok) {
           const geo = await res.json();
           const names = Array.from(
@@ -671,6 +686,21 @@ export function ExplorePage() {
           {/* Spacer to push items to the right */}
           <div className="flex-1" />
 
+          {storedLocation && (
+            <button
+              type="button"
+              onClick={() => setShowLocationEnvironment((prev) => !prev)}
+              className={`flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium shadow-md transition-colors ${
+                showLocationEnvironment
+                  ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <MapPin className="h-4 w-4" />
+              My Environment
+            </button>
+          )}
+
           {/* Draw AOI Button */}
           <div ref={aoiMenuRef} className="relative">
             {/* Pill container: a "open menu" button plus, while a tool is active, a separate
@@ -762,7 +792,11 @@ export function ExplorePage() {
           </div>
 
           {/* User Profile Icon */}
-          <UserProfile userName="John Doe" userEmail="john.doe@example.com" />
+          <UserProfile
+            userName={storedUser?.name ?? "John Doe"}
+            userEmail={storedUser?.email ?? "john.doe@example.com"}
+            userLocationLabel={storedLocationLabel}
+          />
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
@@ -887,6 +921,17 @@ export function ExplorePage() {
             hierarchy={attributeInfo.hierarchy}
             onClose={() => setExportModalOpen(false)}
           />
+        )}
+
+        {showLocationEnvironment && storedLocation && (
+          <aside className="absolute bottom-6 right-4 z-20 w-[min(28rem,calc(100vw-2rem))]">
+            <LocationEnvironmentPanel
+              latitude={storedLocation.latitude}
+              longitude={storedLocation.longitude}
+              locationLabel={`Saved location${storedLocationLabel ? ` · ${storedLocationLabel}` : ""}`}
+              onClose={() => setShowLocationEnvironment(false)}
+            />
+          </aside>
         )}
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}

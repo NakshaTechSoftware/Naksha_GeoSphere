@@ -1,12 +1,13 @@
-"use client";
+﻿"use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type {
   Map as MapLibreMap,
   MapGeoJSONFeature,
   GeoJSONFeature,
   GeoJSONSource,
   MapLayerMouseEvent,
+  MapMouseEvent,
   PointLike,
   QueryRenderedFeaturesOptions,
 } from "maplibre-gl";
@@ -15,6 +16,46 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
+import { ChevronDown, CloudRain, CloudSun, Droplets, Gauge, Leaf, Thermometer, Wind } from "lucide-react";
+import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
+import {
+  ApiRequestError,
+  ApiUnavailableError,
+  fetchAqiGrid,
+  fetchCurrentEnvironment,
+  fetchDailyForecast,
+  fetchGfsWeatherFieldFrame,
+  fetchGfsWindFrame,
+  fetchNationalAqiStationsGeoJson,
+} from "@/lib/api-client";
+import { formatIstTime, formatMetric } from "@/lib/environmentFormat";
+import { GfsWindCanvasAnimator } from "@/lib/weather/gfsWindCanvas";
+import {
+  AqiGridCanvasRenderer,
+  fieldLegendStops,
+  fieldUnit,
+  renderFieldToImageSource,
+} from "@/lib/weather/gfsFieldRenderer";
+import {
+  buildRainViewerTileUrl,
+  fetchRainViewerWeatherMaps,
+  formatRadarTimeIST,
+  RAINVIEWER_FRAME_INTERVAL_MS,
+  RAINVIEWER_REFRESH_INTERVAL_MS,
+  type RainViewerRadarFrame,
+} from "@/lib/weather/rainViewerProvider";
+
+import type {
+  AqiGridResponse,
+  CurrentEnvironmentResponse,
+  DailyForecastResponse,
+  GeoJsonFeatureCollection,
+  GfsWeatherFieldFrameResponse,
+  GfsWindFrameResponse,
+} from "@/types/environment";
+
+// A single active all-India weather-map field. Exactly one is shown at a time.
+type WeatherMapMode = "none" | "temperature" | "rain" | "wind" | "clouds" | "air-quality";
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -49,7 +90,7 @@ const isBengaluruFeature = (feature: MapGeoJSONFeature) =>
 
 const CITY_LABEL_LAYERS = ["label_city", "label_city_capital", "label_town"];
 
-// Approximate geodesic area (m²) of a GeoJSON polygon, via an equirectangular projection
+// Approximate geodesic area (mÂ²) of a GeoJSON polygon, via an equirectangular projection
 // centered on the polygon's mean latitude. Accurate to well under 1% at city/ward scale.
 function calculatePolygonAreaSqm(geometry: GeoJSON.Geometry): number {
   const EARTH_RADIUS = 6378137; // meters (WGS84 equatorial radius)
@@ -353,7 +394,7 @@ function labelAnchorFeatures(
 
   for (const [name, polygons] of polygonsByName) {
     // Pick the largest polygon by area - the boundary's main body. A sliver's area is
-    // ~0 km², so it never wins even when it appears first in the data.
+    // ~0 kmÂ², so it never wins even when it appears first in the data.
     let largestOuterRing: GeoJSON.Position[] | null = null;
     let largestPolygon: GeoJSON.Position[][] | null = null;
     let largestArea = -1;
@@ -439,14 +480,14 @@ function labelAnchorFeatures(
 // text-size (like every other symbol layout property) can't be driven by a feature-state
 // expression - MapLibre only allows feature-state in paint properties. So "grow the label
 // under the cursor" instead uses two physical layers per label type: the normal-size base
-// layer, and a second "-hover" layer on the SAME source, sized hoverScale× bigger, whose
+// layer, and a second "-hover" layer on the SAME source, sized hoverScaleÃ— bigger, whose
 // filter normally matches nothing and is imperatively pointed at whichever single feature id
 // is currently hovered (see attachLabelHoverGrow). NO_HOVER_FILTER is that "matches nothing"
 // filter - generateId ids are never negative, so -1 never collides with a real feature.
 const NO_HOVER_FILTER: any = ["==", ["id"], -1];
 
 // Builds the "-hover" duplicate of a label layer's addLayer spec: same source/text-field/
-// font/paint as the base layer, but hoverScale× the text size, starts filtered to nothing,
+// font/paint as the base layer, but hoverScaleÃ— the text size, starts filtered to nothing,
 // and ignores MapLibre's usual collision/overlap culling (text-allow-overlap/ignore-placement)
 // so it isn't suppressed for occupying the same spot as the base label it's covering.
 function hoverLabelLayerSpec(
@@ -508,7 +549,7 @@ function removeLabelLayer(map: MapLibreMap, layerId: string) {
   if (map.getLayer(`${layerId}-hover`)) map.removeLayer(`${layerId}-hover`);
 }
 
-const WARD_RATE_PER_SQM = 0.25; // ₹ per square meter, KML/KMZ ward boundaries only
+const WARD_RATE_PER_SQM = 0.25; // â‚¹ per square meter, KML/KMZ ward boundaries only
 
 export interface WardSelection {
   name: string;
@@ -667,7 +708,7 @@ export interface IndiaMapViewerProps {
   /** Called when a search resolves to a specific region+file (e.g.
    * "Bengaluru, Central, Ward Boundary"), so callers can sync their own checkbox UI. */
   onExtraFileToggled?: (key: string, visible: boolean) => void;
-  /** Called when a drawn AOI is completed (with its geodesic area in km²) or cleared (null). */
+  /** Called when a drawn AOI is completed (with its geodesic area in kmÂ²) or cleared (null). */
   onAOIChange?: (aoi: AOIResult | null) => void;
   /** Called when the armed AOI drawing tool changes (e.g. Escape disarms it), so callers can
    * sync their own button UI. */
@@ -960,7 +1001,7 @@ const AOI_LAYER_IDS = [
 
 
 // Every layer/source id ever added by a boundary-loading flow (Karnataka, manual KML/KMZ
-// upload, Bengaluru zones, or a state's districts) — cleared together when the user presses
+// upload, Bengaluru zones, or a state's districts) â€” cleared together when the user presses
 // Escape.
 const BOUNDARY_LAYER_IDS = [
   "kml-fill",
@@ -1234,7 +1275,7 @@ function addDefaultBaseLayers(
       type: "raster",
       tiles: OSM_NOLABELS_TILES,
       tileSize: 256,
-      attribution: "© CARTO, © OpenStreetMap contributors",
+      attribution: "Â© CARTO, Â© OpenStreetMap contributors",
     });
   }
   if (!map.getLayer(OSM_NOLABELS_LAYER_ID)) {
@@ -1245,7 +1286,7 @@ function addDefaultBaseLayers(
       type: "raster",
       tiles: OSM_LABELED_TILES,
       tileSize: 256,
-      attribution: "© OpenStreetMap contributors",
+      attribution: "Â© OpenStreetMap contributors",
     });
   }
   if (!map.getLayer(OSM_LABELED_LAYER_ID)) {
@@ -1285,6 +1326,186 @@ function updateBaseLabelVisibility(map: MapLibreMap, boundariesVisible = true) {
   }
 }
 
+// --- Weather click panel ---------------------------------------------------
+//
+// Left-side icon -> checklist dropdown. Once at least one metric is enabled,
+// drill-down clicks are paused and a normal left-click on the map fetches
+// current conditions + a 5-day forecast for that exact coordinate into a
+// fixed right-side panel. "AQI" here is Open-Meteo's modeled US AQI
+// (available anywhere in India), not an official CPCB station reading.
+type WeatherMetricKey = "temperature" | "humidity" | "pressure" | "rain" | "wind" | "aqi";
+
+const RAINVIEWER_RADAR_SOURCE_ID = "rainviewer-radar-source";
+const RAINVIEWER_RADAR_LAYER_ID = "rainviewer-radar-layer";
+const GFS_WIND_SOURCE_ID = "gfs-wind-canary-source";
+const GFS_WIND_LAYER_ID = "gfs-wind-canary-layer";
+const GFS_FIELD_SOURCE_ID = "gfs-weather-field-source";
+const GFS_FIELD_LAYER_ID = "gfs-weather-field-layer";
+
+// Topographic basemap shown automatically when any weather overlay is active.
+// Uses Maps-For-Free relief tiles (CC0) – standard XYZ, z0-z11, global land 60°N-56°S.
+const TOPO_BASE_SOURCE_ID = "weather-topographic-source";
+const TOPO_BASE_LAYER_ID = "weather-topographic-layer";
+const TOPO_MAX_ZOOM = 9; // Maps-For-Free has real terrain data up to z11, but z9 is a safe cap
+const TOPO_TILES = ["https://maps-for-free.com/layer/relief/z{z}/row{y}/{z}_{x}-{y}.jpg"];
+
+// Air Quality weather-map mode sources/layers: official CPCB stations (points
+// with clustering) + modeled AQ surface (gridded canvas).
+const AQI_STATIONS_SOURCE_ID = "aqi-stations-source";
+const AQI_STATIONS_CLUSTER_SOURCE_ID = "aqi-stations-cluster-source";
+const AQI_STATIONS_POINTS_LAYER_ID = "aqi-stations-points";
+const AQI_STATIONS_CLUSTER_LAYER_ID = "aqi-stations-cluster";
+const AQI_STATIONS_CLUSTER_COUNT_LAYER_ID = "aqi-stations-cluster-count";
+const AQI_GRID_SOURCE_ID = "aqi-grid-source";
+const AQI_GRID_LAYER_ID = "aqi-grid-layer";
+
+const WEATHER_METRICS: { key: WeatherMetricKey; label: string; Icon: typeof CloudSun }[] = [
+  { key: "temperature", label: "Temperature", Icon: Thermometer },
+  { key: "humidity", label: "Humidity", Icon: Droplets },
+  { key: "pressure", label: "Pressure", Icon: Gauge },
+  { key: "rain", label: "Rain", Icon: CloudRain },
+  { key: "wind", label: "Wind", Icon: Wind },
+  { key: "aqi", label: "AQI", Icon: Leaf },
+];
+
+type WeatherPanelState =
+  | { status: "idle" }
+  | { status: "loading"; latitude: number; longitude: number }
+  | {
+      status: "loaded";
+      latitude: number;
+      longitude: number;
+      current: CurrentEnvironmentResponse | null;
+      daily: DailyForecastResponse | null;
+    }
+  | { status: "unavailable"; latitude: number; longitude: number };
+
+interface WeatherHoverCardData {
+  status: "loading" | "loaded" | "unavailable";
+  data: CurrentEnvironmentResponse | null;
+  left: number;
+  top: number;
+}
+
+function getRadarInsertBeforeId(map: MapLibreMap): string | undefined {
+  const preferredOrder = [
+    "india-boundary-line",
+    "india-boundary-fill",
+    "india-boundary-label",
+    "states-fill-default",
+    "states-borders-default",
+    "states-labels-default",
+  ];
+
+  for (const layerId of preferredOrder) {
+    if (map.getLayer(layerId)) return layerId;
+  }
+  return undefined;
+}
+
+function getGfsWindCoordinates(bounds: GfsWindFrameResponse["bounds"]) {
+  return [
+    [bounds.west, bounds.north],
+    [bounds.east, bounds.north],
+    [bounds.east, bounds.south],
+    [bounds.west, bounds.south],
+  ] as const;
+}
+
+function formatIstShortDateTime(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-IN", {
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "Asia/Kolkata",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function formatForecastDate(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "Asia/Kolkata",
+    }).format(new Date(`${value}T00:00:00+05:30`));
+  } catch {
+    return value;
+  }
+}
+
+function weatherCodeLabel(code: number | null): string {
+  if (code === null || code === undefined) return "Conditions unavailable";
+  if (code === 0) return "Clear sky";
+  if (code >= 1 && code <= 3) return "Cloudy";
+  if (code === 45 || code === 48) return "Fog";
+  if (code >= 51 && code <= 57) return "Drizzle";
+  if (code >= 61 && code <= 67) return "Rain";
+  if (code >= 71 && code <= 77) return "Snow";
+  if (code >= 80 && code <= 86) return "Showers";
+  if (code >= 95) return "Thunderstorm";
+  return `WMO ${code}`;
+}
+
+function formatCoordinate(value: number): string {
+  return value.toFixed(4);
+}
+
+function temperatureBarStyle(
+  min: number | null,
+  max: number | null,
+  rangeMin: number,
+  rangeMax: number
+) {
+  if (min === null || max === null || rangeMax <= rangeMin) {
+    return { left: "0%", width: "0%" };
+  }
+
+  const left = ((min - rangeMin) / (rangeMax - rangeMin)) * 100;
+  const width = ((max - min) / (rangeMax - rangeMin)) * 100;
+  return {
+    left: `${Math.max(0, Math.min(100, left))}%`,
+    width: `${Math.max(8, Math.min(100, width))}%`,
+  };
+}
+
+function WeatherRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-slate-500">{label}</span>
+      <span className="truncate text-right font-medium text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+// Horizontal color ramp legend for a scalar forecast field (temperature / rain / clouds).
+function WeatherFieldLegend({ mode }: { mode: "temperature" | "rain" | "clouds" }) {
+  const variable = mode === "rain" ? "precipitation" : mode;
+  const stops = fieldLegendStops(variable);
+  const unit = fieldUnit(variable);
+  const gradient = `linear-gradient(to right, ${stops
+    .map((s, i) => `${s.color} ${Math.round((i / (stops.length - 1)) * 100)}%`)
+    .join(", ")})`;
+  const visibleStops = stops.filter((s) => s.alpha > 8);
+  return (
+    <div className="mt-1">
+      <div className="mb-1 text-xs text-slate-500">Legend ({unit})</div>
+      <div className="h-2.5 w-full rounded-full" style={{ background: gradient }} />
+      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+        <span>{visibleStops[0]?.value}</span>
+        <span>{visibleStops[Math.floor(visibleStops.length / 2)]?.value}</span>
+        <span>{visibleStops[visibleStops.length - 1]?.value}</span>
+      </div>
+    </div>
+  );
+}
+
 export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerProps>(
   function IndiaMapViewer(
     {
@@ -1302,6 +1523,98 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Small non-blocking toast for drill-down layers that fail to load (e.g. no
+  // boundary data uploaded yet for a state/place) â€” surfaces what was
+  // previously only a console.warn/console.error, without blocking the map.
+  const [layerNotice, setLayerNotice] = useState<string | null>(null);
+  const layerNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showLayerNotice = useCallback((message: string) => {
+    setLayerNotice(message);
+    if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
+    layerNoticeTimeoutRef.current = setTimeout(() => setLayerNotice(null), 4500);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
+    };
+  }, []);
+
+  // Weather click panel (left-side icon + dropdown + fixed right-side panel).
+  // selectedWeatherMetricsRef mirrors the state into the map's click-handler
+  // closures, which are only set up once on mount.
+  const [showWeatherMenu, setShowWeatherMenu] = useState(false);
+  const [selectedWeatherMetrics, setSelectedWeatherMetrics] = useState<Set<WeatherMetricKey>>(
+    new Set()
+  );
+  const [isRadarEnabled, setIsRadarEnabled] = useState(false);
+  const [radarOpacity, setRadarOpacity] = useState(0.6);
+  const [radarStatus, setRadarStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  // RainViewer composite: the fetched frame list + tile host, the active
+  // frame index, and playback state for the pastâ†’now animation.
+  const [radarFrames, setRadarFrames] = useState<RainViewerRadarFrame[]>([]);
+  const [radarHost, setRadarHost] = useState<string>("");
+  const [radarFrameIndex, setRadarFrameIndex] = useState(0);
+  const [isRadarPlaying, setIsRadarPlaying] = useState(false);
+
+  // Unified all-India weather map: exactly one field is active at a time.
+  const [weatherMode, setWeatherMode] = useState<WeatherMapMode>("none");
+  const [isWindEnabled, setIsWindEnabled] = useState(false);
+  const [windOpacity, setWindOpacity] = useState(0.8);
+  const [windDensity, setWindDensity] = useState(0.6);
+  const [windFrames, setWindFrames] = useState<GfsWindFrameResponse[]>([]);
+  const [activeWindFrameIndex, setActiveWindFrameIndex] = useState(0);
+  const [isWindPlaying, setIsWindPlaying] = useState(false);
+  const [windStatus, setWindStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  const [windStatusMessage, setWindStatusMessage] = useState<string | null>(null);
+
+  // Scalar forecast fields (temperature / rain / clouds) rendered as a raster
+  // image source. `weatherFieldFrames` holds one frame per forecast hour.
+  const [weatherFieldFrames, setWeatherFieldFrames] = useState<GfsWeatherFieldFrameResponse[]>([]);
+  const [weatherFieldIndex, setWeatherFieldIndex] = useState(0);
+  const [isWeatherFieldPlaying, setIsWeatherFieldPlaying] = useState(false);
+  const [weatherFieldOpacity, setWeatherFieldOpacity] = useState(0.6);
+  const [weatherFieldStatus, setWeatherFieldStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  const [weatherFieldMessage, setWeatherFieldMessage] = useState<string | null>(null);
+
+  // Air Quality weather-map mode: official CPCB station points + modeled surface.
+  const [aqiGrid, setAqiGrid] = useState<AqiGridResponse | null>(null);
+  const [aqiStationsGeoJson, setAqiStationsGeoJson] = useState<GeoJsonFeatureCollection | null>(
+    null
+  );
+  const [aqiStatus, setAqiStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [aqiMessage, setAqiMessage] = useState<string | null>(null);
+  const [aqiOpacity, setAqiOpacity] = useState(0.6);
+
+  const [weatherPanel, setWeatherPanel] = useState<WeatherPanelState>({ status: "idle" });
+  const selectedWeatherMetricsRef = useRef(selectedWeatherMetrics);
+  const weatherRequestIdRef = useRef(0);
+  useEffect(() => {
+    selectedWeatherMetricsRef.current = selectedWeatherMetrics;
+    if (selectedWeatherMetrics.size === 0) {
+      weatherRequestIdRef.current += 1;
+      setWeatherPanel({ status: "idle" });
+    }
+  }, [selectedWeatherMetrics]);
+  const weatherMenuRef = useRef<HTMLDivElement>(null);
+  const windAnimatorRef = useRef<GfsWindCanvasAnimator | null>(null);
+  const aqiGridRendererRef = useRef<AqiGridCanvasRenderer | null>(null);
+  const windAutoFocusedRef = useRef(false);
+  const [weatherHoverCard] = useState<WeatherHoverCardData | null>(null);
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (weatherMenuRef.current && !weatherMenuRef.current.contains(e.target as Node)) {
+        setShowWeatherMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
@@ -1324,6 +1637,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // outside React (async cadastral loads), so the parcel grid recolors correctly even when
   // the basemap switched while a village's cadastrals were still loading.
   const currentLayerRef = useRef<MapLayer>(DEFAULT_MAP_LAYER);
+  // Saved maxZoom before weather mode caps it; restored when weather deactivates.
+  const savedMaxZoomRef = useRef<number | null>(null);
 
   // Shows/hides every existing boundary layer to match the active mode, including any
   // manually-toggled Bengaluru extra files. In the constituency modes the neon-blue
@@ -1545,7 +1860,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
   // Turns the current drawing into the completed AOI and reports it to the caller. Shapes
   // with effectively zero area (a click without a drag, a 2-vertex "polygon") are discarded
-  // rather than shown as a ~0 m² AOI.
+  // rather than shown as a ~0 mÂ² AOI.
   const completeAOI = (map: MapLibreMap, polygon: GeoJSON.Polygon) => {
     const areaSqKm = calculatePolygonAreaSqm(polygon) / 1_000_000;
     if (areaSqKm < 1e-6) {
@@ -1895,6 +2210,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         const response = await fetch(`/api/datasets/state-districts?state=${encodeURIComponent(stateName)}`);
         if (!response.ok) {
           console.warn(`No district data available for "${stateName}"`);
+          showLayerNotice(`No district boundary data available for ${stateName} yet.`);
           return;
         }
         districtsData = await response.json();
@@ -1984,6 +2300,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load district boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load district boundaries for ${stateName}.`);
     }
   };
 
@@ -1999,6 +2316,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       const response = await fetch(`/api/datasets/state-assembly?state=${encodeURIComponent(stateName)}`);
       if (!response.ok) {
         console.warn(`No assembly constituency data available for "${stateName}"`);
+        showLayerNotice(`No assembly constituency data available for ${stateName} yet.`);
         return;
       }
       const assemblyData = await response.json();
@@ -2082,6 +2400,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load assembly constituency boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load assembly constituency data for ${stateName}.`);
     }
   };
 
@@ -2097,6 +2416,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       const response = await fetch(`/api/datasets/state-parliament?state=${encodeURIComponent(stateName)}`);
       if (!response.ok) {
         console.warn(`No parliamentary constituency data available for "${stateName}"`);
+        showLayerNotice(`No parliamentary constituency data available for ${stateName} yet.`);
         return;
       }
       const parliamentData = await response.json();
@@ -2178,6 +2498,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load parliamentary constituency boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load parliamentary constituency data for ${stateName}.`);
     }
   };
 
@@ -2193,6 +2514,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No police station boundary data available for "${stateName}"`);
+        showLayerNotice(`No police station boundary data available for ${stateName} yet.`);
         return;
       }
       const policeData = await response.json();
@@ -2261,6 +2583,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load police station boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load police station data for ${stateName}.`);
     }
   };
 
@@ -2345,6 +2668,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load administrative coverage for ${folder}:`, error);
+      showLayerNotice(`Could not load police coverage data.`);
     }
   };
 
@@ -2363,6 +2687,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No gram panchayat district data available for "${stateName}"`);
+        showLayerNotice(`No gram panchayat data available for ${stateName} yet.`);
         return;
       }
       const districtsData = await response.json();
@@ -2450,6 +2775,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load gram panchayat district boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load gram panchayat data for ${stateName}.`);
     }
   };
 
@@ -2468,6 +2794,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No civic amenities district data available for "${stateName}"`);
+        showLayerNotice(`No civic amenities data available for ${stateName} yet.`);
         return;
       }
       const districtsData = await response.json();
@@ -2555,6 +2882,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load civic amenities district boundaries for "${stateName}":`, error);
+      showLayerNotice(`Could not load civic amenities data for ${stateName}.`);
     }
   };
 
@@ -2576,6 +2904,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No civic amenities pincode data available for district "${districtName}"`);
+        showLayerNotice(`No civic amenities data available for ${districtName} yet.`);
         return;
       }
       const pincodesData = await response.json();
@@ -2651,6 +2980,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load civic amenities pincode boundaries for "${districtName}":`, error);
+      showLayerNotice(`Could not load civic amenities data for ${districtName}.`);
     }
   };
 
@@ -2671,6 +3001,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No gram panchayat taluk data available for district "${districtName}"`);
+        showLayerNotice(`No gram panchayat taluk data available for ${districtName} yet.`);
         return;
       }
       const taluksData = await response.json();
@@ -2755,6 +3086,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load gram panchayat taluk boundaries for "${districtName}":`, error);
+      showLayerNotice(`Could not load gram panchayat taluk data for ${districtName}.`);
     }
   };
 
@@ -2776,6 +3108,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       if (!response.ok) {
         console.warn(`No gram panchayat boundaries data available for taluk "${talukName}"`);
+        showLayerNotice(`No gram panchayat boundaries available for ${talukName} yet.`);
         return;
       }
       const boundariesData = await response.json();
@@ -2851,6 +3184,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load gram panchayat boundaries for taluk "${talukName}":`, error);
+      showLayerNotice(`Could not load gram panchayat boundaries for ${talukName}.`);
     }
   };
 
@@ -2884,7 +3218,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   };
 
   // Punches the selected village polygon as a hole into each ancestor fill layer's geometry
-  // (state → district → taluk → hobli), so those fills stay visible everywhere EXCEPT inside
+  // (state â†’ district â†’ taluk â†’ hobli), so those fills stay visible everywhere EXCEPT inside
   // the selected village - where the cadastral grid and the basemap underneath show through
   // clearly. Only the source data is swapped (from the pristine refs), so feature ids and
   // hover/selection states are untouched; restoreAncestorFills reverses it on clear.
@@ -2970,6 +3304,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (!response.ok) {
           const errorText = await response.text();
           console.warn(`No taluk data available for district "${districtName}":`, errorText);
+          showLayerNotice(`No taluk data available for ${districtName} yet.`);
           return;
         }
         
@@ -3066,6 +3401,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load taluk boundaries for "${districtName}":`, error);
+      showLayerNotice(`Could not load taluk boundaries for ${districtName}.`);
     }
   };
 
@@ -3107,6 +3443,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (!response.ok) {
           const errorText = await response.text();
           console.warn(`No hobli data available for taluk "${talukName}":`, errorText);
+          showLayerNotice(`No hobli data available for ${talukName} yet.`);
           return;
         }
 
@@ -3195,6 +3532,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load hobli boundaries for "${talukName}":`, error);
+      showLayerNotice(`Could not load hobli boundaries for ${talukName}.`);
     }
   };
 
@@ -3235,6 +3573,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (!response.ok) {
           const errorText = await response.text();
           console.warn(`No village data available for hobli "${hobliName}":`, errorText);
+          showLayerNotice(`No village data available for ${hobliName} yet.`);
           return;
         }
 
@@ -3328,6 +3667,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load village boundaries for "${hobliName}":`, error);
+      showLayerNotice(`Could not load village boundaries for ${hobliName}.`);
     }
   };
 
@@ -3370,6 +3710,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (!response.ok) {
           const errorText = await response.text();
           console.warn(`No cadastral data available for village "${villageName}":`, errorText);
+          showLayerNotice(`No cadastral/survey data available for ${villageName} yet.`);
           return;
         }
 
@@ -3470,6 +3811,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       applyBoundaryLayerVisibility(map);
     } catch (error) {
       console.error(`Failed to load cadastral boundaries for "${villageName}":`, error);
+      showLayerNotice(`Could not load cadastral data for ${villageName}.`);
     }
   };
 
@@ -3541,7 +3883,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const drillLevelFingerprint = (level: DrillLevel | null): string =>
     level
       ? `${level.parent}|${level.selectedId}|${level.selectedName}|${level.data.features.length}`
-      : "∅";
+      : "âˆ…";
 
   const drillSnapshotsEqual = (a: DrillSnapshot, b: DrillSnapshot): boolean =>
     a.state === b.state &&
@@ -3791,6 +4133,583 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // The map opens on DEFAULT_MAP_LAYER (satellite) instead of the plain OSM base.
   const [currentLayer, setCurrentLayer] = useState<MapLayer>(DEFAULT_MAP_LAYER);
 
+  // â”€â”€ RainViewer composite radar: data load + 5-min refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  useEffect(() => {
+    if (!isRadarEnabled) {
+      setRadarStatus("idle");
+      setRadarFrames([]);
+      setRadarHost("");
+      setRadarFrameIndex(0);
+      setIsRadarPlaying(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadFrames = async (isRefresh: boolean) => {
+      try {
+        if (!isRefresh) setRadarStatus("loading");
+        const maps = await fetchRainViewerWeatherMaps(controller.signal);
+        if (cancelled) return;
+        if (!maps.hasData) {
+          if (!isRefresh) setRadarStatus("unavailable");
+          return;
+        }
+        if (!isRefresh) {
+          setRadarHost(maps.host);
+          setRadarFrames(maps.frames);
+          // Default to the latest ("now") frame and start animating pastâ†’now.
+          setRadarFrameIndex(maps.frames.length - 1);
+          setIsRadarPlaying(true);
+          setRadarStatus("ready");
+        } else {
+          // Keep the current playback position across a silent refresh, and
+          // recover to "ready" if an earlier attempt had failed.
+          setRadarHost(maps.host);
+          setRadarFrames(maps.frames);
+          setRadarFrameIndex((prev) => Math.min(prev, maps.frames.length - 1));
+          setRadarStatus("ready");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Failed to load RainViewer radar frames:", error);
+        if (!isRefresh) setRadarStatus("unavailable");
+      }
+    };
+
+    void loadFrames(false);
+    const intervalId = window.setInterval(() => {
+      void loadFrames(true);
+    }, RAINVIEWER_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(intervalId);
+    };
+  }, [isRadarEnabled]);
+
+  useEffect(() => {
+    if (!isWindEnabled) {
+      setWindFrames([]);
+      setActiveWindFrameIndex(0);
+      setIsWindPlaying(false);
+      setWindStatus("idle");
+      setWindStatusMessage(null);
+      windAutoFocusedRef.current = false;
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const describeWindFailure = (error: unknown): string => {
+      if (error instanceof ApiUnavailableError) {
+        return "Wind API is unavailable. Start the backend service and reload Explore.";
+      }
+      if (error instanceof ApiRequestError) {
+        return error.message || "NOAA GFS wind is temporarily unavailable.";
+      }
+      return "NOAA GFS wind is temporarily unavailable.";
+    };
+
+    const loadWindFrames = async () => {
+      try {
+        setWindStatus("loading");
+        setWindStatusMessage(null);
+
+        // Show the current wind frame (f000) immediately rather than blocking
+        // on the whole 0..6 series.
+        const first = await fetchGfsWindFrame(0, controller.signal);
+        if (cancelled) return;
+        setWindFrames([first]);
+        setActiveWindFrameIndex(0);
+        setIsWindPlaying(true);
+        setWindStatus("ready");
+        setWindStatusMessage(null);
+
+        const rest = await Promise.allSettled(
+          [1, 2, 3, 4, 5, 6].map((forecastHour) =>
+            fetchGfsWindFrame(forecastHour, controller.signal)
+          )
+        );
+        if (cancelled) return;
+        const extra = rest
+          .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+          .sort((a, b) => a.forecastHour - b.forecastHour);
+        if (extra.length > 0) {
+          setWindFrames((prev) => {
+            const byHour = new Map(prev.map((f) => [f.forecastHour, f]));
+            for (const f of extra) byHour.set(f.forecastHour, f);
+            return [...byHour.values()].sort((a, b) => a.forecastHour - b.forecastHour);
+          });
+        }
+      } catch (error) {
+        if (cancelled || error instanceof DOMException && error.name === "AbortError") return;
+        if (windFrames.length > 0) return; // already showing f000
+        console.error("Failed to load NOAA GFS wind frames:", error);
+        setWindFrames([]);
+        setWindStatus("unavailable");
+        setWindStatusMessage(describeWindFailure(error));
+      }
+    };
+
+    void loadWindFrames();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [isWindEnabled]);
+
+  // Syncs the legacy wind toggle with the unified weather-map mode so the wind
+  // pipeline activates exactly when "Wind" is the selected weather-map mode.
+  useEffect(() => {
+    setIsWindEnabled(weatherMode === "wind");
+  }, [weatherMode]);
+
+  // Loads the all-India scalar forecast field (temperature / rain / clouds) for
+  // forecast hours 0..6 whenever a field mode is active. One combined GFS grid
+  // per hour feeds the image renderer; frames animate as a coherent time series.
+  useEffect(() => {
+    if (weatherMode !== "temperature" && weatherMode !== "rain" && weatherMode !== "clouds") {
+      setWeatherFieldFrames([]);
+      setWeatherFieldIndex(0);
+      setIsWeatherFieldPlaying(false);
+      setWeatherFieldStatus("idle");
+      setWeatherFieldMessage(null);
+      return;
+    }
+
+    const variable: "temperature" | "precipitation" | "clouds" =
+      weatherMode === "rain" ? "precipitation" : weatherMode;
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const describeFailure = (error: unknown): string => {
+      if (error instanceof ApiUnavailableError) {
+        return "Weather API is unavailable. Start the backend service and reload Explore.";
+      }
+      if (error instanceof ApiRequestError) {
+        return error.message || "NOAA GFS forecast is temporarily unavailable.";
+      }
+      return "NOAA GFS forecast is temporarily unavailable.";
+    };
+
+    const loadFieldFrames = async () => {
+      try {
+        setWeatherFieldStatus("loading");
+        setWeatherFieldMessage(null);
+
+        // Render the current frame (f000) immediately so the map shows real
+        // weather without waiting for the whole 0..6 series to download.
+        const first = await fetchGfsWeatherFieldFrame(variable, 0, controller.signal);
+        if (cancelled) return;
+        setWeatherFieldFrames([first]);
+        setWeatherFieldIndex(0);
+        setIsWeatherFieldPlaying(true);
+        setWeatherFieldStatus("ready");
+        setWeatherFieldMessage(null);
+
+        // Then pull the remaining lead times in the background; each successful
+        // frame is appended in order so the timeline grows without a reload.
+        const rest = await Promise.allSettled(
+          [1, 2, 3, 4, 5, 6].map((forecastHour) =>
+            fetchGfsWeatherFieldFrame(variable, forecastHour, controller.signal)
+          )
+        );
+        if (cancelled) return;
+        const extra = rest
+          .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+          .sort((a, b) => a.forecastHour - b.forecastHour);
+        if (extra.length > 0) {
+          setWeatherFieldFrames((prev) => {
+            const byHour = new Map(prev.map((f) => [f.forecastHour, f]));
+            for (const f of extra) byHour.set(f.forecastHour, f);
+            return [...byHour.values()].sort((a, b) => a.forecastHour - b.forecastHour);
+          });
+        }
+      } catch (error) {
+        if (cancelled || error instanceof DOMException && error.name === "AbortError") return;
+        if (weatherFieldFrames.length > 0) return; // already showing f000
+        console.error("Failed to load NOAA GFS field frames:", error);
+        setWeatherFieldFrames([]);
+        setWeatherFieldStatus("unavailable");
+        setWeatherFieldMessage(describeFailure(error));
+      }
+    };
+
+    void loadFieldFrames();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [weatherMode]);
+
+  // Renders the active scalar forecast field (temperature / rain / clouds) as a
+  // MapLibre raster `image` source.  The GFS grid is painted into a canvas
+  // image once per frame/opacity change and handed to MapLibre as an
+  // `image` source + `raster` layer.  MapLibre's WebGL renderer handles the
+  // WebMercator projection and zoom/pan transforms natively on the GPU, so
+  // there is zero JavaScript re-rendering on viewport change — the overlay
+  // stays pinned to the map with the same smoothness as any raster tile.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const isField =
+      weatherMode === "temperature" || weatherMode === "rain" || weatherMode === "clouds";
+    const frame = weatherFieldFrames[weatherFieldIndex];
+
+    if (!isField || !frame) {
+      if (map.getLayer(GFS_FIELD_LAYER_ID)) map.removeLayer(GFS_FIELD_LAYER_ID);
+      if (map.getSource(GFS_FIELD_SOURCE_ID)) map.removeSource(GFS_FIELD_SOURCE_ID);
+      return;
+    }
+
+    const applyFieldOverlay = () => {
+      try {
+        const result = renderFieldToImageSource(frame, weatherFieldOpacity);
+        if (!result) {
+          setWeatherFieldStatus("unavailable");
+          setWeatherFieldMessage("NOAA GFS forecast overlay is temporarily unavailable.");
+          return;
+        }
+
+        // Remove previous layer/source if they exist.
+        if (map.getLayer(GFS_FIELD_LAYER_ID)) map.removeLayer(GFS_FIELD_LAYER_ID);
+        if (map.getSource(GFS_FIELD_SOURCE_ID)) map.removeSource(GFS_FIELD_SOURCE_ID);
+
+        map.addSource(GFS_FIELD_SOURCE_ID, {
+          type: "image",
+          url: result.url,
+          coordinates: result.coordinates,
+        });
+
+        // Insert the raster layer below labels so boundaries / ward names
+        // remain readable on top of the weather colouring.
+        const firstLabelId = map.getStyle().layers?.find(
+          (l: any) => l.type === "symbol" || l.id?.includes("label")
+        )?.id;
+        map.addLayer(
+          {
+            id: GFS_FIELD_LAYER_ID,
+            type: "raster",
+            source: GFS_FIELD_SOURCE_ID,
+            paint: {
+              "raster-opacity": weatherFieldOpacity,
+              "raster-fade-duration": 0,
+              "raster-resampling": "linear",
+            },
+          },
+          firstLabelId
+        );
+
+        setWeatherFieldStatus("ready");
+        setWeatherFieldMessage(null);
+      } catch (error) {
+        console.error("Failed to apply GFS field overlay:", error);
+        setWeatherFieldStatus("unavailable");
+        setWeatherFieldMessage("NOAA GFS forecast overlay is temporarily unavailable.");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyFieldOverlay);
+      return () => {
+        map.off("load", applyFieldOverlay);
+      };
+    }
+    applyFieldOverlay();
+  }, [weatherMode, weatherFieldFrames, weatherFieldIndex, weatherFieldOpacity]);
+
+  // --- Air Quality weather-map mode ------------------------------------------
+  // Renders official CPCB station points (clustered) + a modeled AQ surface
+  // canvas (sampled from the ~1° Open-Meteo grid through the map projection).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const isAqi = weatherMode === "air-quality";
+
+    const cleanupExisting = () => {
+      if (aqiGridRendererRef.current) {
+        aqiGridRendererRef.current.destroy();
+        aqiGridRendererRef.current = null;
+      }
+      // Remove CPCB station layers (points + clusters).
+      [AQI_STATIONS_POINTS_LAYER_ID, AQI_STATIONS_CLUSTER_LAYER_ID, AQI_STATIONS_CLUSTER_COUNT_LAYER_ID].forEach(
+        (id) => {
+          if (map.getLayer(id)) map.removeLayer(id);
+        }
+      );
+      [AQI_STATIONS_CLUSTER_SOURCE_ID, AQI_STATIONS_SOURCE_ID].forEach((id) => {
+        if (map.getSource(id)) map.removeSource(id);
+      });
+    };
+
+    if (!isAqi) {
+      cleanupExisting();
+      return;
+    }
+
+    const applyAqiOverlay = () => {
+      try {
+        const overlayHost = map.getContainer().parentElement ?? map.getContainer();
+        if (getComputedStyle(overlayHost).position === "static") {
+          overlayHost.style.position = "relative";
+        }
+
+        // --- Modeled AQ surface canvas ---
+        if (aqiGrid && aqiGrid.points.length > 0) {
+          if (!aqiGridRendererRef.current) {
+            aqiGridRendererRef.current = new AqiGridCanvasRenderer(aqiOpacity);
+            aqiGridRendererRef.current.attachTo(overlayHost);
+            aqiGridRendererRef.current.setMap(map);
+          } else {
+            aqiGridRendererRef.current.setOpacity(aqiOpacity);
+          }
+          aqiGridRendererRef.current.setGrid(aqiGrid);
+          const syncCanvas = () => {
+            if (!aqiGridRendererRef.current) return;
+            aqiGridRendererRef.current.resize(
+              map.getContainer().clientWidth,
+              map.getContainer().clientHeight,
+              window.devicePixelRatio || 1
+            );
+            aqiGridRendererRef.current.markDirty();
+            aqiGridRendererRef.current.start();
+          };
+          syncCanvas();
+          const handleViewportChange = () => syncCanvas();
+          map.on("move", handleViewportChange);
+          map.on("zoom", handleViewportChange);
+          map.on("rotate", handleViewportChange);
+          map.on("pitch", handleViewportChange);
+          map.on("resize", handleViewportChange);
+          setAqiStatus("ready");
+          setAqiMessage(null);
+
+          return () => {
+            map.off("move", handleViewportChange);
+            map.off("zoom", handleViewportChange);
+            map.off("rotate", handleViewportChange);
+            map.off("pitch", handleViewportChange);
+            map.off("resize", handleViewportChange);
+            aqiGridRendererRef.current?.stop();
+          };
+        }
+
+        // --- Official CPCB stations (points) ---
+        if (aqiStationsGeoJson && aqiStationsGeoJson.features.length > 0) {
+          // Remove existing to re-add cleanly.
+          [AQI_STATIONS_POINTS_LAYER_ID, AQI_STATIONS_CLUSTER_LAYER_ID, AQI_STATIONS_CLUSTER_COUNT_LAYER_ID].forEach(
+            (id) => {
+              if (map.getLayer(id)) map.removeLayer(id);
+            }
+          );
+          [AQI_STATIONS_CLUSTER_SOURCE_ID, AQI_STATIONS_SOURCE_ID].forEach((id) => {
+            if (map.getSource(id)) map.removeSource(id);
+          });
+
+          map.addSource(AQI_STATIONS_CLUSTER_SOURCE_ID, {
+            type: "geojson",
+            data: aqiStationsGeoJson as any,
+            cluster: true,
+            clusterMaxZoom: 14,
+            clusterRadius: 50,
+          });
+
+          map.addLayer({
+            id: AQI_STATIONS_CLUSTER_LAYER_ID,
+            type: "circle",
+            source: AQI_STATIONS_CLUSTER_SOURCE_ID,
+            filter: ["has", "point_count"],
+            paint: {
+              "circle-color": "#888",
+              "circle-radius": 20,
+              "circle-stroke-width": 2,
+              "circle-stroke-color": "#fff",
+            },
+          });
+
+          map.addLayer({
+            id: AQI_STATIONS_CLUSTER_COUNT_LAYER_ID,
+            type: "symbol",
+            source: AQI_STATIONS_CLUSTER_SOURCE_ID,
+            filter: ["has", "point_count"],
+            layout: {
+              "text-field": "{point_count_abbreviated}",
+              "text-font": ["Noto Sans Regular"],
+              "text-size": 12,
+            },
+          });
+
+          map.addLayer({
+            id: AQI_STATIONS_POINTS_LAYER_ID,
+            type: "circle",
+            source: AQI_STATIONS_CLUSTER_SOURCE_ID,
+            filter: ["!", ["has", "point_count"]],
+            paint: {
+              "circle-color": [
+                "interpolate",
+                ["linear"],
+                ["get", "aqi_value"],
+                0, "#00a8be",
+                51, "#8cd000",
+                101, "#fff200",
+                151, "#ff9600",
+                201, "#e8182d",
+                301, "#7e0080",
+                401, "#4c005d",
+              ],
+              "circle-radius": 6,
+              "circle-stroke-width": 1,
+              "circle-stroke-color": "#fff",
+              "circle-opacity": 0.9,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("Failed to apply AQ overlay:", error);
+        setAqiStatus("unavailable");
+        setAqiMessage("Air quality data is temporarily unavailable.");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyAqiOverlay);
+      return () => {
+        map.off("load", applyAqiOverlay);
+      };
+    }
+    const cleanup = applyAqiOverlay();
+    return () => {
+      cleanup?.();
+      cleanupExisting();
+    };
+  }, [weatherMode, aqiGrid, aqiStationsGeoJson, aqiOpacity]);
+
+  // Fetches the modeled AQ grid + official CPCB stations when air-quality mode is active.
+  useEffect(() => {
+    if (weatherMode !== "air-quality") return;
+
+    const controller = new AbortController();
+    let cancelled = false;
+
+    const loadAqiData = async () => {
+      try {
+        setAqiStatus("loading");
+        setAqiMessage(null);
+
+        const [gridRes, stationsRes] = await Promise.allSettled([
+          fetchAqiGrid(controller.signal),
+          fetchNationalAqiStationsGeoJson(controller.signal),
+        ]);
+
+        if (cancelled) return;
+
+        if (gridRes.status === "fulfilled") {
+          setAqiGrid(gridRes.value);
+        } else {
+          console.error("AQI grid fetch failed:", gridRes.reason);
+        }
+
+        if (stationsRes.status === "fulfilled") {
+          setAqiStationsGeoJson(stationsRes.value);
+        } else {
+          console.error("AQI stations fetch failed:", stationsRes.reason);
+        }
+
+        if (gridRes.status === "rejected" && stationsRes.status === "rejected") {
+          setAqiStatus("unavailable");
+          setAqiMessage("Air quality data is temporarily unavailable.");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Failed to load AQ data:", error);
+        setAqiStatus("unavailable");
+        setAqiMessage("Air quality data is temporarily unavailable.");
+      }
+    };
+
+    void loadAqiData();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [weatherMode]);
+
+  // Auto-advances the scalar forecast field timeline (one frame every 1.4s) while
+  // playing, looping 0..6.
+  useEffect(() => {
+    const isField =
+      weatherMode === "temperature" || weatherMode === "rain" || weatherMode === "clouds";
+    if (!isField || weatherFieldFrames.length === 0 || !isWeatherFieldPlaying) return;
+    const intervalId = window.setInterval(() => {
+      setWeatherFieldIndex((current) => (current + 1) % weatherFieldFrames.length);
+    }, 1400);
+    return () => window.clearInterval(intervalId);
+  }, [weatherMode, isWeatherFieldPlaying, weatherFieldFrames]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const firstFrame = windFrames[0];
+    if (!map || !isWindEnabled || !firstFrame || windAutoFocusedRef.current) return;
+
+    const { west, south, east, north } = firstFrame.bounds;
+    map.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      {
+        padding: 80,
+        duration: 1200,
+        maxZoom: 7.5,
+      }
+    );
+    windAutoFocusedRef.current = true;
+  }, [isWindEnabled, windFrames]);
+
+  useEffect(() => {
+    if (!isWindEnabled || windFrames.length < 3 || !isWindPlaying) return;
+    const intervalId = window.setInterval(() => {
+      setActiveWindFrameIndex((current) => (current + 1) % windFrames.length);
+    }, 1400);
+    return () => window.clearInterval(intervalId);
+  }, [isWindEnabled, isWindPlaying, windFrames]);
+
+  // ── Weather workspace topographic basemap ──────────────────────────────────
+  // When ANY weather overlay is active, the basemap is replaced with Maps-For-Free
+  // relief tiles so the colorful weather data sits on a neutral topographic canvas
+  // instead of bright satellite imagery. When weather deactivates, the previous
+  // basemap is restored. No white flash: the topographic tiles are added hidden
+  // and only shown after an `idle` event confirms they have loaded.
+
+  /** Idempotently add the topographic source + layer (hidden) if not already on the map. */
+  const ensureWeatherTopographicBasemap = useCallback((map: MapLibreMap) => {
+    if (map.getSource(TOPO_BASE_SOURCE_ID)) return;
+
+    map.addSource(TOPO_BASE_SOURCE_ID, {
+      type: "raster",
+      tiles: TOPO_TILES,
+      tileSize: 256,
+      maxzoom: TOPO_MAX_ZOOM,
+      bounds: [-180, -56, 180, 60], // Maps-For-Free restricted lat range
+    });
+
+    // Insert at the very bottom so it sits under every overlay / boundary layer.
+    map.addLayer({
+      id: TOPO_BASE_LAYER_ID,
+      type: "raster",
+      source: TOPO_BASE_SOURCE_ID,
+      minzoom: 0,
+      maxzoom: TOPO_MAX_ZOOM,
+      layout: { visibility: "none" },
+    });
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -3818,7 +4737,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   type: "raster",
                   tiles: SATELLITE_TILES,
                   tileSize: 256,
-                  attribution: "© Google",
+                  attribution: "Â© Google",
                   minzoom: 0,
                   maxzoom: SATELLITE_MAX_ZOOM_CEILING,
                 },
@@ -3847,7 +4766,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 type: "raster",
                 tiles: OSM_NOLABELS_TILES,
                 tileSize: 256,
-                attribution: "© CARTO, © OpenStreetMap contributors",
+                attribution: "Â© CARTO, Â© OpenStreetMap contributors",
               },
             },
             layers: [
@@ -4158,6 +5077,37 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           });
         });
 
+        // Weather widget: while at least one metric is checked in the left-side
+        // dropdown, clicking anywhere on the map (that isn't a drill-down layer -
+        // those are blocked by the selectedWeatherMetricsRef guard added to each
+        // drill-down click handler above) fetches current conditions + a 5-day
+        // forecast for that exact point and shows them in the fixed right-side
+        // panel. A monotonically increasing request id discards any response
+        // that arrives after a newer click superseded it.
+        map.on("click", (e: MapMouseEvent) => {
+          if (selectedWeatherMetricsRef.current.size === 0 || drawingToolRef.current) return;
+
+          const { lng, lat } = e.lngLat;
+          const requestId = ++weatherRequestIdRef.current;
+          setWeatherPanel({ status: "loading", latitude: lat, longitude: lng });
+
+          Promise.allSettled([
+            fetchCurrentEnvironment(lat, lng),
+            fetchDailyForecast(lat, lng),
+          ]).then(([currentResult, dailyResult]) => {
+            if (weatherRequestIdRef.current !== requestId) return; // superseded
+            const current = currentResult.status === "fulfilled" ? currentResult.value : null;
+            const daily = dailyResult.status === "fulfilled" ? dailyResult.value : null;
+            setWeatherPanel({
+              status: current || daily ? "loaded" : "unavailable",
+              latitude: lat,
+              longitude: lng,
+              current,
+              daily,
+            });
+          });
+        });
+
         // Distance scale bar
         map.addControl(
           new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
@@ -4306,6 +5256,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // it no longer highlights on hover (matching the state-selection behavior).
             map.on("click", "india-boundary-fill", (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (feature && feature.id !== undefined) {
                 map.setFeatureState(
@@ -4321,20 +5274,24 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // Loads the India states (INDIA_STATES.geojson) and wires up the full state
             // drill-down (hover/click, districts, taluks, ...). Defined here so the boundary
             // click handler above can call it; runs once when the boundary is clicked.
+            // Synchronous re-entry guard. The boundary click can fire several times before
+            // the async fetch below resolves, and the source/layers are only added *after*
+            // the await - so the getSource check alone cannot stop two concurrent calls from
+            // both reaching map.addSource, which throws "Source already exists". This flag is
+            // set synchronously at entry (before any await) to serialize the loads.
+            let indiaStatesLoading = false;
             const loadIndiaStates = async () => {
-              // Guard against re-entry: the boundary click handler can fire again after the
-              // states are already loaded (e.g. a second click on the country), which would
-              // otherwise throw "Source already exists".
-              if (map.getSource(STATE_SOURCE_ID)) return;
-            try {
+              if (indiaStatesLoading || map.getSource(STATE_SOURCE_ID)) return;
+              indiaStatesLoading = true;
+             try {
             let statesResponse: Response;
             try {
               statesResponse = await fetch("/api/datasets/india-boundary?file=states");
             } catch {
-              statesResponse = await fetch("/data/india_states.geojson");
+              statesResponse = await fetch("/geodata/india-states.geojson");
             }
             if (!statesResponse.ok) {
-              statesResponse = await fetch("/data/india_states.geojson");
+              statesResponse = await fetch("/geodata/india-states.geojson");
             }
             const statesData = await statesResponse.json();
             loadedStatesDataRef.current = statesData;
@@ -4471,6 +5428,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               // While an AOI drawing tool is armed, clicks belong to the drawing, not to
               // boundary selection.
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               console.log("=== STATE CLICK EVENT ===");
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
@@ -4486,7 +5446,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // If the click landed within the boundary layer currently on top for this
               // state (assembly/parliamentary constituencies in their respective modes,
-              // districts otherwise), ignore it here — that layer's own click handler
+              // districts otherwise), ignore it here â€” that layer's own click handler
               // already manages it. Only the boundary type relevant to the active mode
               // swallows clicks, so a state whose districts were loaded in a previous mode
               // still responds to a fresh click (which loads the constituency layer instead).
@@ -4512,8 +5472,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const wasSelected = selectedStateIdRef.current === feature.id;
 
               // In the constituency modes (and gram panchayat mode), a click on a state
-              // always selects it — even if the state is already selected from a previous
-              // session — instead of toggling it off. Assembly/parliamentary also (re)load
+              // always selects it â€” even if the state is already selected from a previous
+              // session â€” instead of toggling it off. Assembly/parliamentary also (re)load
               // that mode's boundaries; gram panchayat has no data wired yet, so the click
               // just highlights the state.
               if (isAssemblyMode || isParliamentMode || isGramPanchayatMode || isPoliceMode || isCivicAmenitiesMode) {
@@ -4649,6 +5609,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // boundaries. Clicking the same district again toggles the taluks off.
             map.on("click", GP_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -4750,6 +5713,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // Clicking the same district again toggles the pincodes off.
             map.on("click", CIVIC_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -4883,6 +5849,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // Clicking the same taluk again toggles them off.
             map.on("click", GP_TALUKS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -4980,6 +5949,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               console.log("=== DISTRICT CLICK EVENT ===");
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
@@ -5105,6 +6077,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", STATE_ASSEMBLY_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -5176,6 +6151,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", STATE_PARLIAMENT_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -5241,6 +6219,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             });
             map.on("click", STATE_POLICE_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (selectedPoliceIdRef.current !== null) {
@@ -5308,6 +6289,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", DISTRICT_TALUKS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -5422,6 +6406,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", TALUK_HOBLIES_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -5576,6 +6563,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("click", HOBLI_VILLAGES_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
+              // While the weather widget is enabled, clicks show weather for the clicked
+              // point instead of drilling into the admin-boundary hierarchy underneath it.
+              if (selectedWeatherMetricsRef.current.size > 0) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -5702,6 +6692,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             }
             } catch (error) {
               console.error("Failed to load India state boundaries:", error);
+            } finally {
+              indiaStatesLoading = false;
             }
             };
           } catch (error) {
@@ -5744,6 +6736,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     return () => {
       cancelled = true;
+      if (aqiGridRendererRef.current) {
+        aqiGridRendererRef.current.destroy();
+        aqiGridRendererRef.current = null;
+      }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -5793,6 +6789,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
         l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
         l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID ||
+        l.id === RAINVIEWER_RADAR_LAYER_ID ||
+        l.id === GFS_WIND_LAYER_ID ||
+        l.id === TOPO_BASE_LAYER_ID ||
         l.id.startsWith("kml-") ||
         l.id.startsWith("bengaluru-") ||
         l.id.startsWith("extra-") ||
@@ -5818,6 +6817,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         sourceId === HOBLI_VILLAGES_SOURCE_ID ||
         sourceId === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
         sourceId === VILLAGE_CADASTRALS_SOURCE_ID ||
+        sourceId === RAINVIEWER_RADAR_SOURCE_ID ||
+        sourceId === GFS_WIND_SOURCE_ID ||
+        sourceId === TOPO_BASE_SOURCE_ID ||
         sourceId === "kml-data" ||
         sourceId === "bengaluru-data" ||
         sourceId.startsWith("extra-") ||
@@ -5854,7 +6856,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           type: "raster",
           tiles: SATELLITE_TILES,
           tileSize: 256,
-          attribution: "© Google",
+          attribution: "Â© Google",
           minzoom: 0,
           maxzoom: SATELLITE_MAX_ZOOM_CEILING,
         });
@@ -5891,6 +6893,202 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // Recolor the cadastral overlay for the new basemap (white on satellite, navy otherwise).
     applyCadastralColors(map, layer === "satellite");
   };
+
+  // â”€â”€ RainViewer composite radar overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Adds a raster XYZ source for the active RainViewer frame and keeps it below
+  // the admin boundaries / AOI layers but above the satellite basemap.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const cleanup = () => {
+      if (map.getLayer(RAINVIEWER_RADAR_LAYER_ID)) map.removeLayer(RAINVIEWER_RADAR_LAYER_ID);
+      if (map.getSource(RAINVIEWER_RADAR_SOURCE_ID)) map.removeSource(RAINVIEWER_RADAR_SOURCE_ID);
+    };
+
+    if (!isRadarEnabled || radarHost === "" || radarFrames.length === 0) {
+      cleanup();
+      return;
+    }
+
+    const frame = radarFrames[radarFrameIndex];
+    if (!frame) {
+      cleanup();
+      return;
+    }
+
+    const applyRadarOverlay = () => {
+      try {
+        const tileUrl = buildRainViewerTileUrl(radarHost, frame.path, "{z}", "{x}", "{y}");
+        const existingSource = map.getSource(RAINVIEWER_RADAR_SOURCE_ID) as
+          | { setTiles?: (tiles: string[]) => void }
+          | undefined;
+
+        if (!existingSource) {
+          map.addSource(RAINVIEWER_RADAR_SOURCE_ID, {
+            type: "raster",
+            tiles: [tileUrl],
+            tileSize: 512,
+            attribution: "RainViewer",
+          });
+          map.addLayer(
+            {
+              id: RAINVIEWER_RADAR_LAYER_ID,
+              type: "raster",
+              source: RAINVIEWER_RADAR_SOURCE_ID,
+              paint: {
+                "raster-opacity": radarOpacity,
+                "raster-fade-duration": 150,
+              },
+            },
+            getRadarInsertBeforeId(map)
+          );
+        } else {
+          // Swapping the tile template reloads only the changed frame tiles.
+          existingSource.setTiles?.([tileUrl]);
+        }
+      } catch (error) {
+        console.error("Failed to apply RainViewer radar overlay:", error);
+        setRadarStatus("unavailable");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyRadarOverlay);
+      return () => {
+        map.off("load", applyRadarOverlay);
+      };
+    }
+
+    applyRadarOverlay();
+  }, [isRadarEnabled, radarHost, radarFrames, radarFrameIndex]);
+
+  // Opacity changes shouldn't reload tiles - update paint only.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isRadarEnabled) return;
+    if (map.getLayer(RAINVIEWER_RADAR_LAYER_ID)) {
+      map.setPaintProperty(RAINVIEWER_RADAR_LAYER_ID, "raster-opacity", radarOpacity);
+    }
+  }, [isRadarEnabled, radarOpacity]);
+
+  // Pastâ†’now animation playback.
+  useEffect(() => {
+    if (!isRadarEnabled || !isRadarPlaying || radarFrames.length === 0) return;
+    const intervalId = window.setInterval(() => {
+      setRadarFrameIndex((prev) => {
+        if (radarFrames.length === 0) return prev;
+        return (prev + 1) % radarFrames.length;
+      });
+    }, RAINVIEWER_FRAME_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [isRadarEnabled, isRadarPlaying, radarFrames.length]);
+
+  const radarGoPrev = () => {
+    setIsRadarPlaying(false);
+    setRadarFrameIndex((prev) =>
+      radarFrames.length ? (prev - 1 + radarFrames.length) % radarFrames.length : 0
+    );
+  };
+  const radarGoNext = () => {
+    setIsRadarPlaying(false);
+    setRadarFrameIndex((prev) => (radarFrames.length ? (prev + 1) % radarFrames.length : 0));
+  };
+  const radarTogglePlay = () => {
+    setIsRadarPlaying((prev) => {
+      const next = !prev;
+      // When pausing, snap to the latest ("now") frame.
+      if (!next) {
+        setRadarFrameIndex(() => (radarFrames.length ? radarFrames.length - 1 : 0));
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const activeWindFrame = windFrames[activeWindFrameIndex] ?? null;
+    if (!map) return;
+
+    const applyWindOverlay = () => {
+      if (!isWindEnabled || !activeWindFrame) {
+        windAnimatorRef.current?.destroy();
+        windAnimatorRef.current = null;
+        return;
+      }
+
+      try {
+        const overlayHost = map.getContainer().parentElement ?? map.getContainer();
+        if (getComputedStyle(overlayHost).position === "static") {
+          overlayHost.style.position = "relative";
+        }
+
+        if (!windAnimatorRef.current) {
+          windAnimatorRef.current = new GfsWindCanvasAnimator(activeWindFrame, {
+            onInvalidate: () => map.triggerRepaint(),
+          });
+        } else {
+          windAnimatorRef.current.setFrame(activeWindFrame);
+        }
+        // Set the map BEFORE resizing so screen-space particle spawning
+        // uses the correct projection.  The animator keeps the last valid
+        // wind field alive during zoom — it does NOT clear on viewport change.
+        windAnimatorRef.current.setMap(map);
+        windAnimatorRef.current.setDensity(windDensity);
+        windAnimatorRef.current.attachTo(overlayHost);
+        windAnimatorRef.current.getCanvas().style.opacity = String(windOpacity);
+        const syncAnimatorCanvasToMap = () => {
+          if (!windAnimatorRef.current) return;
+          windAnimatorRef.current.resize(
+            map.getContainer().clientWidth,
+            map.getContainer().clientHeight,
+            window.devicePixelRatio || 1
+          );
+          // Do NOT clear() here — the animation loop continuously redraws.
+          // Clearing on every move/zoom wipes particles between frames,
+          // causing the sparse/empty appearance during zoom.
+        };
+
+        syncAnimatorCanvasToMap();
+        const handleViewportChange = () => syncAnimatorCanvasToMap();
+        map.on("move", handleViewportChange);
+        map.on("zoom", handleViewportChange);
+        map.on("rotate", handleViewportChange);
+        map.on("pitch", handleViewportChange);
+        map.on("resize", handleViewportChange);
+        windAnimatorRef.current.start();
+        setWindStatus("ready");
+
+        return () => {
+          map.off("move", handleViewportChange);
+          map.off("zoom", handleViewportChange);
+          map.off("rotate", handleViewportChange);
+          map.off("pitch", handleViewportChange);
+          map.off("resize", handleViewportChange);
+        };
+
+      } catch (error) {
+        console.error("Failed to apply NOAA GFS wind overlay:", error);
+        setWindStatus("unavailable");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyWindOverlay);
+      return () => {
+        map.off("load", applyWindOverlay);
+      };
+    }
+
+    const cleanup = applyWindOverlay();
+    return () => {
+      cleanup?.();
+      if (!isWindEnabled) {
+        windAnimatorRef.current?.destroy();
+        windAnimatorRef.current = null;
+      }
+    };
+  }, [activeWindFrameIndex, isWindEnabled, windDensity, windFrames, windOpacity]);
 
   // Pressing Escape clears any loaded boundary (Karnataka, Bengaluru wards, or a manually
   // uploaded KML/KMZ) so the user can freshly load a new one. While an AOI drawing tool is
@@ -5950,7 +7148,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
 
       // Ctrl+Z / Ctrl+Y undo and redo the administrative-boundary drill-down
-      // (state → district → taluk → hobli → village selections). Ctrl+Shift+Z also redoes.
+      // (state â†’ district â†’ taluk â†’ hobli â†’ village selections). Ctrl+Shift+Z also redoes.
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redoDrillAction(map);
@@ -6165,7 +7363,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       if (parts.length === 1) {
         // Any state name (Karnataka included) already lives in the default
-        // india_states.geojson layer — select it there instead of fetching a separate KMZ
+        // india_states.geojson layer â€” select it there instead of fetching a separate KMZ
         // from MinIO. Fall back to the Karnataka-specific KMZ only as a legacy safety net.
         if (selectStateByName(map, parts[0] ?? "")) return;
         if (place === "karnataka") loadKarnatakaStateFromMinIO(map);
@@ -6257,7 +7455,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     try {
       console.log("Loading Karnataka State boundary from MinIO...");
       
-      // Fetch KMZ from our Next.js API route (which proxies to backend → MinIO)
+      // Fetch KMZ from our Next.js API route (which proxies to backend â†’ MinIO)
       const response = await fetch('/api/datasets/karnataka-boundary-kmz');
       
       if (!response.ok) {
@@ -6571,7 +7769,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         },
       });
 
-      // Add outline layer (polygons only — point placemarks are intentionally not rendered)
+      // Add outline layer (polygons only â€” point placemarks are intentionally not rendered)
       map.addLayer({
         id: "bengaluru-line",
         type: "line",
@@ -6884,6 +8082,120 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
+  const forecastDays =
+    weatherPanel.status === "loaded" && weatherPanel.daily ? weatherPanel.daily.days : [];
+  const forecastTemperatures = forecastDays.flatMap((day) =>
+    [day.temperatureMinC, day.temperatureMaxC].filter(
+      (value): value is number => value !== null && value !== undefined
+    )
+  );
+  const forecastRangeMin =
+    forecastTemperatures.length > 0 ? Math.min(...forecastTemperatures) : 0;
+  const forecastRangeMax =
+    forecastTemperatures.length > 0 ? Math.max(...forecastTemperatures) : 1;
+  const isWeatherControlActive =
+    showWeatherMenu ||
+    selectedWeatherMetrics.size > 0 ||
+    isRadarEnabled ||
+    isWindEnabled ||
+    weatherMode !== "none";
+
+  // ── Topographic basemap toggle ────────────────────────────────────────────
+  // See the ensureWeatherTopographicBasemap callback above for details.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const active = isWeatherControlActive;
+
+    /** Layer IDs that form the current normal basemap and should be hidden during weather. */
+    const getBasemapLayerIds = (): string[] => {
+      const layer = currentLayerRef.current;
+      if (layer === "satellite") return ["satellite-base-layer"];
+      if (layer === "default") return [OSM_NOLABELS_LAYER_ID];
+      if (layer === "terrain") {
+        // India DEM hypsometric + hillshade + background – all added by addIndiaTerrain.
+        return [
+          "local-terrain-background",
+          "local-dem-color-layer",
+          "local-dem-hillshade",
+        ];
+      }
+      return [];
+    };
+
+    const showBasemapLayers = () => {
+      for (const id of getBasemapLayerIds()) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
+      }
+    };
+
+    const hideBasemapLayers = () => {
+      for (const id of getBasemapLayerIds()) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
+      }
+    };
+
+    if (active) {
+      // ── Activate topographic basemap ──
+      ensureWeatherTopographicBasemap(map);
+
+      // Cap maxZoom to what the topo tiles support (z9) so the user doesn't
+      // scroll past the last real relief tile into empty gray tiles.
+      const currentMax = map.getMaxZoom();
+      savedMaxZoomRef.current = currentMax;
+      if (currentMax > TOPO_MAX_ZOOM) {
+        map.setMaxZoom(TOPO_MAX_ZOOM);
+      }
+
+      const showTopo = () => {
+        map.setLayoutProperty(TOPO_BASE_LAYER_ID, "visibility", "visible");
+        hideBasemapLayers();
+      };
+
+      // If the topo source already has loaded tiles, switch immediately.
+      // Otherwise wait for the first `sourcedata` from the topo source so
+      // there is no flash of blank canvas between hiding the basemap and
+      // the topo tiles arriving.
+      const topoSource = map.getSource(TOPO_BASE_SOURCE_ID) as any;
+      const hasLoaded = topoSource?.loaded?.() ?? false;
+
+      if (hasLoaded) {
+        showTopo();
+      } else {
+        const onSourceData = (e: any) => {
+          if (e.sourceId !== TOPO_BASE_SOURCE_ID) return;
+          showTopo();
+          map.off("sourcedata", onSourceData);
+        };
+        map.on("sourcedata", onSourceData);
+        // Safety timeout: don't leave the user staring at a blank map if the
+        // topo provider is down. After 4s fall back to showing topo anyway.
+        const fallback = setTimeout(() => {
+          map.off("sourcedata", onSourceData);
+          showTopo();
+        }, 4000);
+        return () => {
+          map.off("sourcedata", onSourceData);
+          clearTimeout(fallback);
+        };
+      }
+    } else {
+      // ── Deactivate topographic basemap ──
+      showBasemapLayers();
+
+      if (map.getLayer(TOPO_BASE_LAYER_ID)) {
+        map.setLayoutProperty(TOPO_BASE_LAYER_ID, "visibility", "none");
+      }
+
+      // Restore maxZoom.
+      if (savedMaxZoomRef.current !== null) {
+        map.setMaxZoom(savedMaxZoomRef.current);
+        savedMaxZoomRef.current = null;
+      }
+    }
+  }, [isWeatherControlActive, currentLayer, ensureWeatherTopographicBasemap]);
+
   return (
     <div className="relative w-full h-full explore-map-root">
       {/* Fixes the scale control's box to a constant width sized for its longest possible
@@ -6939,6 +8251,936 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
         />
+      )}
+
+      {/* Non-blocking notice for a drill-down layer that failed to load (e.g.
+          no boundary data uploaded yet for this state/place) â€” small and
+          dismisses itself, never covers the map. */}
+      {layerNotice && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2">
+          <div className="pointer-events-auto rounded-lg bg-gray-900/90 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+            {layerNotice}
+          </div>
+        </div>
+      )}
+
+      {/* Weather menu: select which live metrics to include. When at least one
+          metric is enabled, left-clicking the map opens/updates the fixed
+          right-side weather panel and boundary drill-down is paused. */}
+      {!isLoading && !loadError && (
+        <div ref={weatherMenuRef} className="absolute left-4 top-20 z-20">
+          <button
+            type="button"
+            onClick={() => setShowWeatherMenu((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showWeatherMenu}
+            aria-label="Weather details"
+            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
+              isWeatherControlActive
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <CloudSun className="h-4 w-4" />
+            Weather
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
+                showWeatherMenu ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+              {(showWeatherMenu ||
+                isRadarEnabled ||
+                isWindEnabled ||
+                weatherMode !== "none" ||
+                selectedWeatherMetrics.size > 0) && (
+            <div
+              role="menu"
+              className="absolute left-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather
+              </p>
+
+              <div className="mt-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  Weather Map
+                </p>
+                <WeatherLayerToolbar
+                  activeLayer={weatherMode === "none" ? null : (weatherMode as WeatherLayerKey)}
+                  onLayerSelect={(layer) => {
+                    // Only accept modes that exist in WeatherMapMode
+                    if (layer === "temperature" || layer === "rain" || layer === "wind" || layer === "clouds" || layer === "air-quality" || layer === null) {
+                      setWeatherMode(layer ?? "none");
+                    }
+                  }}
+                />
+
+                {(weatherMode === "temperature" ||
+                  weatherMode === "rain" ||
+                  weatherMode === "clouds") && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Active</span>
+                      <span className="text-right font-medium capitalize text-slate-900">
+                        {weatherMode}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Model</span>
+                      <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {weatherFieldFrames[weatherFieldIndex]
+                          ? formatIstShortDateTime(
+                              weatherFieldFrames[weatherFieldIndex]!.forecastTime
+                            )
+                          : "Loading..."}
+                      </span>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Opacity</span>
+                        <span className="font-medium text-slate-900">
+                          {Math.round(weatherFieldOpacity * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={Math.round(weatherFieldOpacity * 100)}
+                        onChange={(event) =>
+                          setWeatherFieldOpacity(Number(event.target.value) / 100)
+                        }
+                        className="w-full accent-atlas-cobalt"
+                      />
+                    </div>
+
+                    {weatherFieldStatus === "ready" && weatherFieldFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-slate-500">Frame</span>
+                          <span className="font-medium text-slate-900">
+                            {formatIstShortDateTime(
+                              weatherFieldFrames[weatherFieldIndex]?.forecastTime ?? ""
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setWeatherFieldIndex((current) =>
+                                current === 0 ? weatherFieldFrames.length - 1 : current - 1
+                              )
+                            }
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsWeatherFieldPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isWeatherFieldPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setWeatherFieldIndex(
+                                (current) => (current + 1) % weatherFieldFrames.length
+                              )
+                            }
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {weatherFieldIndex + 1} / {weatherFieldFrames.length} frames · GFS forecast
+                        </p>
+                      </div>
+                    )}
+                    {weatherFieldStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Loading NOAA GFS forecast...</p>
+                    )}
+                    {weatherFieldStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        {weatherFieldMessage ?? "NOAA GFS forecast is temporarily unavailable."}
+                      </p>
+                    )}
+
+                    <WeatherFieldLegend mode={weatherMode} />
+                  </div>
+                )}
+              </div>
+
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Click Map · Details
+                  </p>
+                  <p className="mb-3 text-xs text-slate-500">
+                    Enable metrics, then click the map to open current conditions + a 5-day
+                    forecast in the right-side panel.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {WEATHER_METRICS.map(({ key, label, Icon }) => (
+                      <label
+                        key={key}
+                        className={`flex cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors ${
+                          selectedWeatherMetrics.has(key)
+                            ? "border-atlas-cobalt bg-atlas-cobalt/11 text-atlas-cobalt"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="accent-atlas-cobalt"
+                          checked={selectedWeatherMetrics.has(key)}
+                          onChange={() =>
+                            setSelectedWeatherMetrics((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            })
+                          }
+                        />
+                        <Icon className="h-4 w-4 flex-shrink-0 text-slate-400" />
+                        <span className="truncate">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Radar</p>
+                    <p className="text-xs text-slate-500">Observed India composite</p>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+                    <input
+                      type="checkbox"
+                      className="accent-atlas-cobalt"
+                      checked={isRadarEnabled}
+                      onChange={(event) => setIsRadarEnabled(event.target.checked)}
+                    />
+                    <span className="font-medium">On</span>
+                  </label>
+                </div>
+
+                <div className="mt-3 space-y-3 text-sm text-slate-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Coverage</span>
+                    <span className="text-right font-medium text-slate-900">
+                      India Radar Composite
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Source</span>
+                    <span className="text-right font-medium text-slate-900">
+                      RainViewer composite
+                    </span>
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Opacity</span>
+                      <span className="font-medium text-slate-900">
+                        {Math.round(radarOpacity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(radarOpacity * 100)}
+                      onChange={(event) => setRadarOpacity(Number(event.target.value) / 100)}
+                      className="w-full accent-atlas-cobalt"
+                    />
+                  </div>
+                </div>
+
+                {isRadarEnabled && radarStatus === "ready" && radarFrames.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="font-medium text-slate-900">
+                        {formatRadarTimeIST(radarFrames[radarFrameIndex]?.time ?? 0)} IST
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={radarGoPrev}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={radarTogglePlay}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        {isRadarPlaying ? "Pause" : "Play"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={radarGoNext}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      {radarFrameIndex + 1} / {radarFrames.length} frames Â· past â†’ now
+                    </p>
+                  </div>
+                )}
+
+                {isRadarEnabled && radarStatus === "loading" && (
+                  <p className="mt-3 text-xs text-slate-500">Loading India radar composite...</p>
+                )}
+                {isRadarEnabled && radarStatus === "ready" && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Composite of multiple radars. Coverage varies by region; gaps are normal.
+                  </p>
+                )}
+                {isRadarEnabled && radarStatus === "unavailable" && (
+                  <p className="mt-3 text-xs text-amber-700">
+                    Radar is temporarily unavailable. The base map keeps working.
+                  </p>
+                )}
+              </div>
+
+              {weatherMode === "wind" && (
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Wind</p>
+                      <p className="text-xs text-slate-500">Animated NOAA GFS flow field</p>
+                    </div>
+                  </div>
+
+                <div className="mt-3 space-y-3 text-sm text-slate-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Model</span>
+                    <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Valid</span>
+                    <span className="text-right font-medium text-slate-900">
+                      {windFrames[activeWindFrameIndex]
+                        ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
+                        : "Loading..."}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Opacity</span>
+                      <span className="font-medium text-slate-900">
+                        {Math.round(windOpacity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(windOpacity * 100)}
+                      onChange={(event) => setWindOpacity(Number(event.target.value) / 100)}
+                      className="w-full accent-atlas-cobalt"
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Particle Density</span>
+                      <span className="font-medium text-slate-900">
+                        {Math.round(windDensity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={20}
+                      max={100}
+                      value={Math.round(windDensity * 100)}
+                      onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
+                      className="w-full accent-atlas-cobalt"
+                    />
+                  </div>
+                </div>
+
+                {isWindEnabled && windStatus === "loading" && (
+                  <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
+                )}
+                {isWindEnabled && windStatus === "ready" && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Live particles are projected directly from the NOAA U/V wind field.
+                  </p>
+                )}
+                {isWindEnabled && windStatus === "unavailable" && (
+                  <p className="mt-3 text-xs text-amber-700">
+                    {windStatusMessage ?? "NOAA GFS wind is temporarily unavailable."}
+                  </p>
+                )}
+              </div>
+              )}
+
+              {weatherMode === "air-quality" && (
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Air Quality</p>
+                      <p className="text-xs text-slate-500">Modeled US AQI surface + official CPCB stations</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Modeled Surface</span>
+                      <span className="text-right font-medium text-slate-900">Open-Meteo</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Official Stations</span>
+                      <span className="text-right font-medium text-slate-900">CPCB / data.gov.in</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {aqiGrid
+                          ? new Intl.DateTimeFormat("en-IN", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                              timeZone: "Asia/Kolkata",
+                            }).format(new Date(aqiGrid.fetchedAt))
+                          : "Loading..."}
+                      </span>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Opacity</span>
+                        <span className="font-medium text-slate-900">
+                          {Math.round(aqiOpacity * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={Math.round(aqiOpacity * 100)}
+                        onChange={(event) => setAqiOpacity(Number(event.target.value) / 100)}
+                        className="w-full accent-atlas-cobalt"
+                      />
+                    </div>
+
+                    {aqiStatus === "loading" && (
+                      <p className="mt-3 text-xs text-slate-500">Loading air quality data...</p>
+                    )}
+                    {aqiStatus === "unavailable" && (
+                      <p className="mt-3 text-xs text-amber-700">
+                        {aqiMessage ?? "Air quality data is temporarily unavailable."}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+        </div>
+      )}
+
+      {/*
+      {!isLoading && !loadError && (
+        <div ref={windControlRef} className="absolute left-4 top-52 z-20">
+          <button
+            type="button"
+            onClick={() => setShowWindPanel((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showWindPanel}
+            aria-label="Wind overlay"
+            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
+              showWindPanel || isWindEnabled
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Wind className="h-4 w-4" />
+            Wind
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
+                showWindPanel ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {(showWindPanel || isWindEnabled) && (
+            <div className="absolute left-0 top-full z-30 mt-2 w-72 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather
+              </p>
+              <label className="mt-3 flex cursor-pointer items-center gap-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  className="accent-atlas-cobalt"
+                  checked={isWindEnabled}
+                  onChange={(event) => setIsWindEnabled(event.target.checked)}
+                />
+                <span className="font-medium">Wind</span>
+              </label>
+
+              <div className="mt-4 space-y-3 text-sm text-slate-700">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-slate-500">Model</span>
+                  <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-slate-500">Valid</span>
+                  <span className="text-right font-medium text-slate-900">
+                    {windFrames[activeWindFrameIndex]
+                      ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
+                      : "Loading..."}
+                  </span>
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Opacity</span>
+                    <span className="font-medium text-slate-900">
+                      {Math.round(windOpacity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(windOpacity * 100)}
+                    onChange={(event) => setWindOpacity(Number(event.target.value) / 100)}
+                    className="w-full accent-atlas-cobalt"
+                  />
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Particle Density</span>
+                    <span className="font-medium text-slate-900">
+                      {Math.round(windDensity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={20}
+                    max={100}
+                    value={Math.round(windDensity * 100)}
+                    onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
+                    className="w-full accent-atlas-cobalt"
+                  />
+                </div>
+              </div>
+
+              {isWindEnabled && windStatus === "loading" && (
+                <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
+              )}
+              {isWindEnabled && windStatus === "unavailable" && (
+                <p className="mt-3 text-xs text-amber-700">
+                  NOAA GFS wind is temporarily unavailable.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      */}
+
+      {isWindEnabled && windFrames.length >= 3 && !isLoading && !loadError && (
+        <div className="absolute bottom-6 left-1/2 z-20 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 rounded-3xl border border-white/70 bg-white/92 p-4 shadow-2xl backdrop-blur-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Wind Forecast
+              </p>
+              <p className="text-sm font-medium text-slate-900">NOAA GFS 0.25°</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() =>
+                  setActiveWindFrameIndex((current) =>
+                    current === 0 ? windFrames.length - 1 : current - 1
+                  )
+                }
+              >
+                â—€
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() => setIsWindPlaying((current) => !current)}
+              >
+                {isWindPlaying ? "âšâš" : "â–¶"}
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() =>
+                  setActiveWindFrameIndex((current) => (current + 1) % windFrames.length)
+                }
+              >
+                â–¶
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2">
+            {windFrames.map((frame, index) => (
+              <button
+                key={frame.forecastHour}
+                type="button"
+                onClick={() => {
+                  setActiveWindFrameIndex(index);
+                  setIsWindPlaying(false);
+                }}
+                className={`rounded-2xl border px-3 py-2 text-left transition-colors ${
+                  index === activeWindFrameIndex
+                    ? "border-atlas-cobalt bg-atlas-cobalt/10"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <p className="text-xs font-semibold text-slate-900">
+                  +{frame.forecastHour}h
+                </p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {formatIstShortDateTime(frame.forecastTime)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedWeatherMetrics.size > 0 && !isLoading && !loadError && (
+        <div className="absolute right-4 top-20 z-20 w-[min(24rem,calc(100%-2rem))] max-h-[calc(100%-6rem)] overflow-y-auto rounded-3xl border border-white/70 bg-white/94 p-4 shadow-2xl backdrop-blur-sm">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather Details
+              </p>
+              <h3 className="text-lg font-semibold text-slate-900">Click Map To Inspect</h3>
+            </div>
+            {weatherPanel.status !== "idle" && (
+              <div className="text-right text-xs text-slate-500">
+                <p>{formatCoordinate(weatherPanel.latitude)},</p>
+                <p>{formatCoordinate(weatherPanel.longitude)}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4 rounded-2xl bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            Weather mode is active. Boundary drill-down stays paused until all weather metrics are cleared.
+          </div>
+
+          {weatherPanel.status === "idle" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Click anywhere on the map to load live conditions and a 5-day forecast for that point.
+            </p>
+          )}
+
+          {weatherPanel.status === "loading" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600" role="status">
+              Loading live weather and forecast...
+            </p>
+          )}
+
+          {weatherPanel.status === "unavailable" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Weather details are temporarily unavailable for this location.
+            </p>
+          )}
+
+          {weatherPanel.status === "loaded" && (
+            <div className="space-y-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-slate-900">Current Conditions</h4>
+                  <span className="text-xs text-slate-500">Open-Meteo</span>
+                </div>
+
+                {weatherPanel.current?.weather.status === "AVAILABLE" && weatherPanel.current.weather.data ? (
+                  <div className="space-y-2">
+                    {selectedWeatherMetrics.has("temperature") && (
+                      <WeatherRow
+                        label="Temperature"
+                        value={formatMetric(weatherPanel.current.weather.data.temperatureC, "Â°C")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("humidity") && (
+                      <WeatherRow
+                        label="Humidity"
+                        value={formatMetric(
+                          weatherPanel.current.weather.data.relativeHumidityPercent,
+                          "%"
+                        )}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("pressure") && (
+                      <WeatherRow
+                        label="Pressure"
+                        value={formatMetric(weatherPanel.current.weather.data.surfacePressureHpa, "hPa")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("rain") && (
+                      <>
+                        <WeatherRow
+                          label="Rain"
+                          value={formatMetric(weatherPanel.current.weather.data.rainMm, "mm")}
+                        />
+                        <WeatherRow
+                          label="Precipitation"
+                          value={formatMetric(
+                            weatherPanel.current.weather.data.precipitationMm,
+                            "mm"
+                          )}
+                        />
+                      </>
+                    )}
+                    {selectedWeatherMetrics.has("wind") && (
+                      <WeatherRow
+                        label="Wind"
+                        value={`${formatMetric(
+                          weatherPanel.current.weather.data.windSpeedKmh,
+                          "km/h"
+                        )}${
+                          weatherPanel.current.weather.data.windDirectionCompass
+                            ? ` (${weatherPanel.current.weather.data.windDirectionCompass})`
+                            : ""
+                        }`}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-600">
+                    {weatherPanel.current?.weather.message ?? "Live weather is temporarily unavailable."}
+                  </p>
+                )}
+
+                {selectedWeatherMetrics.has("aqi") && (
+                  <div className="mt-3 border-t border-slate-200 pt-3">
+                    {weatherPanel.current?.modeledAirQuality.status === "AVAILABLE" &&
+                    weatherPanel.current.modeledAirQuality.data ? (
+                      <WeatherRow
+                        label="AQI (US)"
+                        value={formatMetric(
+                          weatherPanel.current.modeledAirQuality.data.usAqi,
+                          ""
+                        ).trim()}
+                      />
+                    ) : (
+                      <p className="text-sm text-slate-600">
+                        Modeled air quality is temporarily unavailable.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs text-slate-500">
+                  {weatherPanel.current?.weather.data?.observationTime
+                    ? `Observed: ${formatIstTime(
+                        weatherPanel.current.weather.data.observationTime
+                      )} Â· `
+                    : ""}
+                  AQI is modeled, not an official CPCB reading.
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-slate-900">5-Day Forecast</h4>
+                  <span className="text-xs text-slate-500">Bars show temperature range and rain chance</span>
+                </div>
+
+                {forecastDays.length > 0 ? (
+                  <div className="space-y-3">
+                    {forecastDays.map((day) => {
+                      const tempBar = temperatureBarStyle(
+                        day.temperatureMinC,
+                        day.temperatureMaxC,
+                        forecastRangeMin,
+                        forecastRangeMax
+                      );
+                      const rainChance = Math.max(
+                        0,
+                        Math.min(100, day.precipitationProbabilityMax ?? 0)
+                      );
+
+                      return (
+                        <div key={day.date} className="rounded-2xl bg-white p-3 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {formatForecastDate(day.date)}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {weatherCodeLabel(day.weatherCode)}
+                              </p>
+                            </div>
+                            <div className="text-right text-xs text-slate-500">
+                              <p>Rain {formatMetric(day.precipitationSumMm, "mm")}</p>
+                              <p>Wind {formatMetric(day.windSpeedMaxKmh, "km/h")}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 space-y-2">
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                                <span>Temperature</span>
+                                <span>
+                                  {formatMetric(day.temperatureMinC, "Â°C")} to{" "}
+                                  {formatMetric(day.temperatureMaxC, "Â°C")}
+                                </span>
+                              </div>
+                              <div className="relative h-2 rounded-full bg-slate-200">
+                                <div
+                                  className="absolute top-0 h-2 rounded-full bg-gradient-to-r from-sky-400 via-amber-300 to-rose-400"
+                                  style={tempBar}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                                <span>Rain chance</span>
+                                <span>{formatMetric(day.precipitationProbabilityMax, "%")}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-slate-200">
+                                <div
+                                  className="h-2 rounded-full bg-atlas-cobalt"
+                                  style={{ width: `${rainChance}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-600">
+                    Daily forecast is temporarily unavailable for this location.
+                  </p>
+                )}
+
+                {weatherPanel.daily && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Forecast source: {weatherPanel.daily.source}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cursor-following weather glass card - only rendered once at least one
+          metric is selected; hidden the instant the checklist is cleared. */}
+      {weatherHoverCard && selectedWeatherMetrics.size > 0 && (
+        <div
+          className="pointer-events-none absolute z-30"
+          style={{ left: weatherHoverCard.left, top: weatherHoverCard.top, width: 240 }}
+        >
+          <div
+            className="rounded-xl px-4 py-3 text-white"
+            style={{
+              background: "rgba(20, 30, 38, 0.82)",
+              backdropFilter: "blur(14px)",
+              WebkitBackdropFilter: "blur(14px)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "0 8px 28px rgba(0,0,0,0.25)",
+            }}
+          >
+            <p className="mb-2 text-[11px] uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.68)" }}>
+              Weather
+            </p>
+
+            {weatherHoverCard.status === "loading" && (
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }} role="status">
+                Loadingâ€¦
+              </p>
+            )}
+            {weatherHoverCard.status === "unavailable" && (
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                Weather is temporarily unavailable for this location.
+              </p>
+            )}
+            {weatherHoverCard.status === "loaded" && weatherHoverCard.data && (
+              <div className="space-y-1.5">
+                {weatherHoverCard.data.weather.status === "AVAILABLE" && weatherHoverCard.data.weather.data && (
+                  <>
+                    {selectedWeatherMetrics.has("temperature") && (
+                      <WeatherRow
+                        label="Temperature"
+                        value={formatMetric(weatherHoverCard.data.weather.data.temperatureC, "Â°C")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("humidity") && (
+                      <WeatherRow
+                        label="Humidity"
+                        value={formatMetric(weatherHoverCard.data.weather.data.relativeHumidityPercent, "%")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("pressure") && (
+                      <WeatherRow
+                        label="Pressure"
+                        value={formatMetric(weatherHoverCard.data.weather.data.surfacePressureHpa, "hPa")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("rain") && (
+                      <WeatherRow label="Rain" value={formatMetric(weatherHoverCard.data.weather.data.rainMm, "mm")} />
+                    )}
+                    {selectedWeatherMetrics.has("wind") && (
+                      <WeatherRow
+                        label="Wind"
+                        value={`${formatMetric(weatherHoverCard.data.weather.data.windSpeedKmh, "km/h")}${
+                          weatherHoverCard.data.weather.data.windDirectionCompass
+                            ? ` (${weatherHoverCard.data.weather.data.windDirectionCompass})`
+                            : ""
+                        }`}
+                      />
+                    )}
+                  </>
+                )}
+                {weatherHoverCard.data.weather.status !== "AVAILABLE" &&
+                  WEATHER_METRICS.some(({ key }) => key !== "aqi" && selectedWeatherMetrics.has(key)) && (
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                      {weatherHoverCard.data.weather.message ?? "Live weather is temporarily unavailable."}
+                    </p>
+                  )}
+
+                {selectedWeatherMetrics.has("aqi") &&
+                  (weatherHoverCard.data.modeledAirQuality.status === "AVAILABLE" &&
+                  weatherHoverCard.data.modeledAirQuality.data ? (
+                    <WeatherRow
+                      label="AQI (US)"
+                      value={formatMetric(weatherHoverCard.data.modeledAirQuality.data.usAqi, "")}
+                    />
+                  ) : (
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                      Modeled air quality is temporarily unavailable.
+                    </p>
+                  ))}
+
+                <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.68)" }}>
+                  {weatherHoverCard.data.weather.data?.observationTime &&
+                    `Observed: ${formatIstTime(weatherHoverCard.data.weather.data.observationTime)} Â· `}
+                  Source: Open-Meteo
+                  {selectedWeatherMetrics.has("aqi") ? " Â· AQI is modeled, not an official CPCB reading" : ""}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

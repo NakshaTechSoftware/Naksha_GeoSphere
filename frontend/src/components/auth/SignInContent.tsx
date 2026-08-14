@@ -1,9 +1,52 @@
 "use client";
 
 import { useState } from "react";
-import { Eye, EyeOff, Mail, Lock, Shield } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, MapPin, Shield } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { saveStoredUserSession, type StoredUserLocation } from "@/lib/userSession";
 import { SignInBenefits } from "./SignInBenefits";
+
+function requestCurrentLocation(): Promise<StoredUserLocation> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined" || !("geolocation" in navigator)) {
+      reject(new Error("Geolocation is not supported in this browser."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters:
+            typeof position.coords.accuracy === "number" ? position.coords.accuracy : null,
+          capturedAt: new Date().toISOString(),
+          source: "browser_geolocation",
+        });
+      },
+      (error) => {
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            reject(new Error("Location permission was denied. You can still sign in and add it later."));
+            return;
+          case error.POSITION_UNAVAILABLE:
+            reject(new Error("Your exact location is currently unavailable."));
+            return;
+          case error.TIMEOUT:
+            reject(new Error("Location request timed out. Please try again later."));
+            return;
+          default:
+            reject(new Error("We could not read your location right now."));
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 300000,
+      }
+    );
+  });
+}
 
 export function SignInContent() {
   const [showPassword, setShowPassword] = useState(false);
@@ -11,6 +54,7 @@ export function SignInContent() {
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
+  const [locationMessage, setLocationMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -18,6 +62,7 @@ export function SignInContent() {
     e.stopPropagation();
     
     setError("");
+    setLocationMessage("");
     setIsLoading(true);
 
     console.log("Form submitted with:", { email, password });
@@ -25,13 +70,31 @@ export function SignInContent() {
     // Test credentials
     if (email === "demo@gmail.com" && password === "Demo@123") {
       console.log("Credentials match! Redirecting...");
-      
-      // Store user info in sessionStorage for demo purposes
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("user", JSON.stringify({ email, name: "Arjun Singh" }));
+
+      let preferredLocation: StoredUserLocation | null = null;
+      try {
+        setLocationMessage("Allow your browser location so we can personalize AQI, weather, and nearby environmental data.");
+        preferredLocation = await requestCurrentLocation();
+        setLocationMessage(
+          `Location saved at ${preferredLocation.latitude.toFixed(4)}, ${preferredLocation.longitude.toFixed(4)}.`
+        );
+      } catch (locationError) {
+        setLocationMessage(
+          locationError instanceof Error
+            ? locationError.message
+            : "Location could not be captured. You can still continue."
+        );
       }
-      
-      // Redirect to the explore page after sign-in
+
+      if (typeof window !== "undefined") {
+        saveStoredUserSession(
+          { email, name: "Arjun Singh", preferredLocation },
+          rememberMe
+        );
+      }
+
+      // Redirect after sign-in. The dashboard/environment panels now pick up
+      // the saved location automatically.
       await new Promise(resolve => setTimeout(resolve, 300));
       console.log("Attempting redirect to /explore");
       
@@ -76,10 +139,27 @@ export function SignInContent() {
                   </p>
                 </div>
 
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  <div className="mb-1 flex items-center gap-2 font-medium">
+                    <MapPin className="h-4 w-4" />
+                    Exact location on sign in
+                  </div>
+                  <p>
+                    After the credentials are accepted, the browser asks for your exact location so
+                    we can load location-based AQI, weather, and related environmental data.
+                  </p>
+                </div>
+
                 {/* Error Message */}
                 {error && (
                   <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
                     {error}
+                  </div>
+                )}
+
+                {locationMessage && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    {locationMessage}
                   </div>
                 )}
 

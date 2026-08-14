@@ -161,3 +161,26 @@ describe("namesMatch – district folder with parentheses", () => {
     expect(namesMatch(cleaned, "Bengaluru Rural")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// namesMatch – display name (not just the folder name) contains parentheses
+//
+// Regression test for a real bug found while debugging missing cadastral data
+// for village "Badasa (Ka)": cleanFolderName strips "()" from the MinIO
+// folder name, but namesMatch's own inline normalization of the *display*
+// name (from the GeoJSON's KGISVillageName property) did not, so
+// "badasa ka" (folder) was compared against "badasa (ka)" (display) and
+// never matched even though the file existed in MinIO.
+// ---------------------------------------------------------------------------
+describe("namesMatch – display name contains parentheses", () => {
+  it('matches "Badasa_(Ka)" folder against "Badasa (Ka)" display name', () => {
+    const cleaned = cleanFolderName("Badasa_(Ka)");
+    expect(cleaned).toBe("badasa ka");
+    expect(namesMatch(cleaned, "Badasa (Ka)")).toBe(true);
+  });
+
+  it("matches regardless of spacing around the parenthesized qualifier", () => {
+    const cleaned = cleanFolderName("Hosahalli_(B)");
+    expect(namesMatch(cleaned, "Hosahalli (B)")).toBe(true);
+  });
+});

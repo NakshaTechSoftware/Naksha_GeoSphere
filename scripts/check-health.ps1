@@ -33,7 +33,7 @@ function Get-EnvVar {
     return $Default
 }
 
-$composeArgs = @("-f", "compose.yaml", "-f", "compose.local-storage.yaml", "-f", "compose.local-storage.dev.yaml", "-f", "compose.dev.yaml")
+$composeArgs = @("-f", "compose.yaml", "-f", "compose.dev.yaml")
 $webPort = Get-EnvVar "WEB_HOST_PORT" "3000"
 $apiPort = Get-EnvVar "API_HOST_PORT" "8000"
 $minioPort = Get-EnvVar "MINIO_API_HOST_PORT" "9000"
@@ -92,7 +92,7 @@ Invoke-Check "API liveness (/api/v1/health/live)" {
 }
 
 Invoke-Check "API readiness (/api/v1/health/ready)" {
-    Invoke-WebRequest -Uri "http://localhost:$apiPort/api/v1/health/ready" -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck | Out-Null
+    Invoke-WebRequest -Uri "http://localhost:$apiPort/api/v1/health/ready" -UseBasicParsing -TimeoutSec 5 | Out-Null
 }
 
 Invoke-Check "PostgreSQL accepts connections" {

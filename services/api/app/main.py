@@ -21,6 +21,8 @@ from app.modules.authentication.error_handlers import (
     validation_exception_handler,
 )
 from app.modules.authentication.exceptions import AuthError
+from app.modules.environment.error_handlers import environment_error_handler
+from app.modules.environment.exceptions import EnvironmentError
 
 API_VERSION = "0.1.0"
 
@@ -59,6 +61,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
 
     app.add_exception_handler(AuthError, auth_error_handler)
+    app.add_exception_handler(EnvironmentError, environment_error_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 

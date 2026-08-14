@@ -50,7 +50,11 @@ export function similarity(a: string, b: string): number {
 // other, or - as a last resort - they're within a small edit-distance tolerance to absorb
 // minor transliteration differences like "Kalaburagi" vs "Kalaburgi".
 export function namesMatch(cleanFolder: string, displayName: string): boolean {
-  const cleanDisplay = displayName.toLowerCase().replace(/[-_]/g, ' ').trim();
+  const cleanDisplay = displayName
+    .toLowerCase()
+    .replace(/[-_]/g, ' ')
+    .replace(/[()]/g, '')
+    .trim();
   if (!cleanFolder || !cleanDisplay) return false;
 
   if (

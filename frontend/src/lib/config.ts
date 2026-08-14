@@ -4,6 +4,6 @@
  * defaults and validation live in one place.
  */
 export const config = {
-  apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
+  apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8200",
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? "Naksha GeoSphere",
 } as const;

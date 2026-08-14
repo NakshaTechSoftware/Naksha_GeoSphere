@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     registration_rate_limit_per_email: int = 3
     registration_rate_limit_per_email_window_seconds: int = 3600
 
+    # --- External environment/weather APIs ------------------------------
+    # data.gov.in personal API key for the CPCB real-time AQI resource.
+    # Optional: when unset, official CPCB endpoints degrade to
+    # "unavailable" rather than failing application startup — Open-Meteo
+    # weather/air-quality (no key required) keep working either way.
+    data_gov_in_api_key: str | None = None
+
     @field_validator("cors_origins", "trusted_hosts", mode="before")
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:

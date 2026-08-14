@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { User, LogOut, Settings, HelpCircle } from "lucide-react";
+import { clearStoredUserSession } from "@/lib/userSession";
 
 interface UserProfileProps {
   userName?: string;
   userEmail?: string;
+  userLocationLabel?: string | null;
   /** Fired with the new open state whenever the avatar button toggles the dropdown. */
   onMenuToggle?: (open: boolean) => void;
 }
@@ -17,6 +19,7 @@ interface UserProfileProps {
 export function UserProfile({
   userName = "Guest User",
   userEmail = "guest@naksha.com",
+  userLocationLabel = null,
   onMenuToggle,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -72,6 +75,11 @@ export function UserProfile({
                     {userName}
                   </p>
                   <p className="text-xs text-gray-600 truncate">{userEmail}</p>
+                  {userLocationLabel && (
+                    <p className="mt-1 text-[11px] text-gray-500 truncate">
+                      Location: {userLocationLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -116,6 +124,7 @@ export function UserProfile({
               <button
                 onClick={() => {
                   setIsOpen(false);
+                  clearStoredUserSession();
                   // Full-page navigation clears any in-memory session state and
                   // sends the user back to the public welcome page.
                   window.location.href = "/welcome-page";

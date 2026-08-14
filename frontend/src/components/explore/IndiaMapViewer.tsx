@@ -12,6 +12,7 @@ import type {
   FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { booleanIntersects } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
@@ -2245,6 +2246,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     taluks: false,
     highways: false,
   });
+  // The unfiltered highway/local-road data for whichever district/taluk is currently loaded,
+  // keyed by source id - kept so selecting a taluk/hobli/village can filter each source down
+  // to just the features intersecting that boundary (see applyRoadsBoundaryFilter) without
+  // re-fetching, and so deselecting one restores the parent level's view instead of refetching.
+  const roadsUnfilteredDataRef = useRef<Record<string, GeoJSON.FeatureCollection>>({});
+  // The selected taluk's/hobli's own polygon geometry - kept so deselecting a *child* level
+  // (hobli deselected -> back to taluk's clip; village deselected -> back to hobli's clip)
+  // knows which geometry to re-apply, rather than falling all the way back to "no filter".
+  const selectedRoadsTalukGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  const selectedRoadsHobliGeometryRef = useRef<GeoJSON.Geometry | null>(null);
   // Roads hierarchy hoblies/villages - same shape as the taluk/hobli refs above, kept
   // separate so switching to/from "administrative" mode never touches this drill position.
   const loadedRoadsHobliesTalukRef = useRef<string | null>(null);
@@ -2637,6 +2648,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID)) map.removeLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID);
     if (map.getSource(ROADS_LOCAL_ROADS_SOURCE_ID)) map.removeSource(ROADS_LOCAL_ROADS_SOURCE_ID);
     loadedRoadsHighwaysRef.current = null;
+    roadsUnfilteredDataRef.current = {};
   };
 
   const clearRoadsVillages = (map: MapLibreMap) => {
@@ -2645,6 +2657,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     removeLabelLayer(map, ROADS_VILLAGES_LABELS_LAYER_ID);
     if (map.getSource(ROADS_VILLAGES_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_SOURCE_ID);
     if (map.getSource(ROADS_VILLAGES_LABELS_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_LABELS_SOURCE_ID);
+    // Whatever road filter (taluk/hobli/village clip - see applyRoadsBoundaryFilter) should be
+    // active after this clear is the caller's call, not this function's - the taluk/hobli
+    // click handlers set it explicitly right after invoking this, since only they know
+    // whether this is "deselecting one level, fall back to the parent's clip" or "switching
+    // to a different taluk entirely, the highway data itself is about to be replaced".
     loadedRoadsVillagesHobliRef.current = null;
     selectedRoadsVillageIdRef.current = null;
   };
@@ -2659,11 +2676,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     loadedRoadsHobliesTalukRef.current = null;
     selectedRoadsHobliIdRef.current = null;
     selectedRoadsHobliNameRef.current = null;
+    selectedRoadsHobliGeometryRef.current = null;
   };
 
   const clearRoadsTaluks = (map: MapLibreMap) => {
     clearRoadsHighways(map);
     clearRoadsHoblies(map);
+    selectedRoadsTalukGeometryRef.current = null;
     if (map.getLayer(ROADS_TALUKS_FILL_LAYER_ID)) map.removeLayer(ROADS_TALUKS_FILL_LAYER_ID);
     if (map.getLayer(ROADS_TALUKS_LINE_LAYER_ID)) map.removeLayer(ROADS_TALUKS_LINE_LAYER_ID);
     removeLabelLayer(map, ROADS_TALUKS_LABELS_LAYER_ID);
@@ -2739,6 +2758,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
         const data = results[i]!;
+        roadsUnfilteredDataRef.current[sourceId] = data;
         map.addSource(sourceId, { type: "geojson", data });
         map.addLayer({
           id: fillLayerId,
@@ -2765,6 +2785,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         const localRoadsData: GeoJSON.FeatureCollection = response.ok
           ? await response.json()
           : { type: "FeatureCollection", features: [] };
+        roadsUnfilteredDataRef.current[ROADS_LOCAL_ROADS_SOURCE_ID] = localRoadsData;
         map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, { type: "geojson", data: localRoadsData });
         map.addLayer({
           id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
@@ -2784,6 +2805,35 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       console.error(`Failed to load ${level}-level highways for "${taluk ?? district}":`, error);
     } finally {
       roadsLoadingRef.current.highways = false;
+    }
+  };
+
+  // Narrows every currently-loaded highway/local-road source down to just the features that
+  // intersect `boundaryGeometry` (pass null to restore the full taluk-wide view). Used at
+  // every level below "taluk" - selecting a taluk clips to that taluk's own polygon,
+  // selecting a hobli clips to the hobli's, selecting a village clips to the village's - each
+  // one replacing whatever clip was active before, not stacking on top of it. Filters
+  // client-side against the data already fetched for the taluk (roadsUnfilteredDataRef)
+  // rather than a fresh request - there's no separate taluk/hobli/village-level road file to
+  // fetch, the road data itself doesn't split any finer than taluk.
+  const applyRoadsBoundaryFilter = (map: MapLibreMap, boundaryGeometry: GeoJSON.Geometry | null) => {
+    for (const [sourceId, fullData] of Object.entries(roadsUnfilteredDataRef.current)) {
+      const source = map.getSource(sourceId);
+      if (!source || !("setData" in source)) continue;
+      const data: GeoJSON.FeatureCollection = boundaryGeometry
+        ? {
+            type: "FeatureCollection",
+            features: fullData.features.filter((feature) => {
+              try {
+                return booleanIntersects(feature, boundaryGeometry);
+              } catch {
+                // Malformed/degenerate geometry (rare) - exclude rather than crash the filter.
+                return false;
+              }
+            }),
+          }
+        : fullData;
+      (source as GeoJSONSource).setData(data);
     }
   };
 
@@ -6932,6 +6982,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsTalukIdRef.current = null;
                 selectedRoadsTalukNameRef.current = null;
+                selectedRoadsTalukGeometryRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
                 clearRoadsHoblies(map);
                 map.getCanvas().style.cursor = "wait";
                 void loadRoadsHighways(map, "district", districtName).finally(() => {
@@ -6945,10 +6997,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
               selectedRoadsTalukIdRef.current = feature.id;
               selectedRoadsTalukNameRef.current = talukName;
+              selectedRoadsTalukGeometryRef.current = feature.geometry;
+              selectedRoadsHobliGeometryRef.current = null;
               map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
               map.getCanvas().style.cursor = "wait";
               void Promise.all([
-                loadRoadsHighways(map, "taluk", districtName, talukName),
+                // Clip the highway/local-road layers down to this taluk's own polygon once
+                // they've loaded - the taluk-level file's road geometries aren't necessarily
+                // clipped exactly to the administrative boundary (a road can run slightly
+                // past it), same reasoning as the hobli/village clips below.
+                loadRoadsHighways(map, "taluk", districtName, talukName).then(() => {
+                  applyRoadsBoundaryFilter(map, feature.geometry);
+                }),
                 loadRoadsHoblies(map, talukName, districtName),
               ]).finally(() => {
                 if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -6995,9 +7055,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 loadedRoadsVillagesHobliRef.current === hobliName.toLowerCase();
 
               if (alreadySelected) {
+                // Toggle off - deselect the hobli and fall back to the taluk's own clip
+                // (the taluk itself is still selected).
                 map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsHobliIdRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
                 clearRoadsVillages(map);
+                applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
                 return;
               }
 
@@ -7005,7 +7069,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: selectedRoadsHobliIdRef.current }, { selected: false });
               }
               selectedRoadsHobliIdRef.current = feature.id;
+              selectedRoadsHobliGeometryRef.current = feature.geometry;
               map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
+              // Clip the highway/local-road layers down to this hobli's own polygon - the
+              // road data already loaded (for the parent taluk) so this is instant, no fetch.
+              applyRoadsBoundaryFilter(map, feature.geometry);
               map.getCanvas().style.cursor = "wait";
               void loadRoadsVillages(map, hobliName, talukName, districtName).finally(() => {
                 if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -7042,6 +7110,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!isSame) {
                 map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
               }
+              // Narrow the highway/local-road layers to just this village, or - on deselect -
+              // fall back to the parent hobli's own clip (the hobli itself is still
+              // selected), not all the way back to the full taluk view.
+              applyRoadsBoundaryFilter(map, isSame ? selectedRoadsHobliGeometryRef.current : feature.geometry);
             });
 
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {

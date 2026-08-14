@@ -13,6 +13,7 @@ import type {
   FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { booleanIntersects } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
@@ -731,7 +732,8 @@ export type BoundaryLayerMode =
   | "gram_panchayat"
   | "police_station"
   | "civic_amenities"
-  | "gba";
+  | "gba"
+  | "roads";
 
 export type PoliceType =
   | "all" | "law_and_order" | "women_police" | "traffic_police"
@@ -825,6 +827,59 @@ const GBA_WARDS_FILL_LAYER_ID = "gba-wards-fill";
 const GBA_WARDS_LINE_LAYER_ID = "gba-wards-line";
 const GBA_WARDS_LABELS_LAYER_ID = "gba-wards-labels";
 const GBA_WARDS_LABELS_SOURCE_ID = "gba-wards-labels-data";
+
+// Source/layer ids for the Roads hierarchy: District -> Taluk (reusing the existing
+// state-districts/district-taluks API data, but as their own dedicated layers so this mode
+// never interferes with "administrative" mode's own district/taluk layers), plus the 3
+// highway categories (National/State/District Road) shown together at whichever level -
+// district or taluk - is currently selected.
+const ROADS_DISTRICTS_SOURCE_ID = "roads-districts-data";
+const ROADS_DISTRICTS_FILL_LAYER_ID = "roads-districts-fill";
+const ROADS_DISTRICTS_LINE_LAYER_ID = "roads-districts-line";
+const ROADS_DISTRICTS_LABELS_LAYER_ID = "roads-districts-labels";
+const ROADS_DISTRICTS_LABELS_SOURCE_ID = "roads-districts-labels-data";
+
+const ROADS_TALUKS_SOURCE_ID = "roads-taluks-data";
+const ROADS_TALUKS_FILL_LAYER_ID = "roads-taluks-fill";
+const ROADS_TALUKS_LINE_LAYER_ID = "roads-taluks-line";
+const ROADS_TALUKS_LABELS_LAYER_ID = "roads-taluks-labels";
+const ROADS_TALUKS_LABELS_SOURCE_ID = "roads-taluks-labels-data";
+
+const ROADS_NATIONAL_HIGHWAY_SOURCE_ID = "roads-national-highway-data";
+const ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID = "roads-national-highway-fill";
+const ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID = "roads-national-highway-line";
+
+const ROADS_STATE_HIGHWAY_SOURCE_ID = "roads-state-highway-data";
+const ROADS_STATE_HIGHWAY_FILL_LAYER_ID = "roads-state-highway-fill";
+const ROADS_STATE_HIGHWAY_LINE_LAYER_ID = "roads-state-highway-line";
+
+const ROADS_DISTRICT_ROAD_SOURCE_ID = "roads-district-road-data";
+const ROADS_DISTRICT_ROAD_FILL_LAYER_ID = "roads-district-road-fill";
+const ROADS_DISTRICT_ROAD_LINE_LAYER_ID = "roads-district-road-line";
+
+// Local road network (Road Center Line) - shown only once a taluk is selected, same as the
+// highway categories, and only at taluk level: KGIS only ships this pre-split down to taluk
+// granularity (a few MB each after server-side simplification), the district-level files are
+// still 100-300MB+ raw, too large to hand to the browser as GeoJSON.
+const ROADS_LOCAL_ROADS_SOURCE_ID = "roads-local-roads-data";
+const ROADS_LOCAL_ROADS_LINE_LAYER_ID = "roads-local-roads-line";
+
+// Hobli/Village boundaries within the Roads hierarchy - the road data itself doesn't split
+// any finer than taluk (see loadRoadsHighways), but the administrative boundaries do, so
+// these reuse the same /api/datasets/taluk-hoblies and /api/datasets/hobli-villages data
+// "administrative" mode already uses, just into their own dedicated layers (so switching
+// modes never collides with administrative mode's own hobli/village drill position).
+const ROADS_HOBLIES_SOURCE_ID = "roads-hoblies-data";
+const ROADS_HOBLIES_FILL_LAYER_ID = "roads-hoblies-fill";
+const ROADS_HOBLIES_LINE_LAYER_ID = "roads-hoblies-line";
+const ROADS_HOBLIES_LABELS_SOURCE_ID = "roads-hoblies-labels-data";
+const ROADS_HOBLIES_LABELS_LAYER_ID = "roads-hoblies-labels";
+
+const ROADS_VILLAGES_SOURCE_ID = "roads-villages-data";
+const ROADS_VILLAGES_FILL_LAYER_ID = "roads-villages-fill";
+const ROADS_VILLAGES_LINE_LAYER_ID = "roads-villages-line";
+const ROADS_VILLAGES_LABELS_SOURCE_ID = "roads-villages-labels-data";
+const ROADS_VILLAGES_LABELS_LAYER_ID = "roads-villages-labels";
 
 // Source/layer ids for a selected state's assembly constituency boundaries, loaded on demand
 // from MinIO when the "Assembly Constituency Boundaries" filter option is active.
@@ -1201,6 +1256,25 @@ const BOUNDARY_LAYER_IDS = [
   GBA_WARDS_FILL_LAYER_ID,
   GBA_WARDS_LINE_LAYER_ID,
   GBA_WARDS_LABELS_LAYER_ID,
+  ROADS_DISTRICTS_FILL_LAYER_ID,
+  ROADS_DISTRICTS_LINE_LAYER_ID,
+  ROADS_DISTRICTS_LABELS_LAYER_ID,
+  ROADS_TALUKS_FILL_LAYER_ID,
+  ROADS_TALUKS_LINE_LAYER_ID,
+  ROADS_TALUKS_LABELS_LAYER_ID,
+  ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+  ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+  ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+  ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+  ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+  ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+  ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+  ROADS_HOBLIES_FILL_LAYER_ID,
+  ROADS_HOBLIES_LINE_LAYER_ID,
+  ROADS_HOBLIES_LABELS_LAYER_ID,
+  ROADS_VILLAGES_FILL_LAYER_ID,
+  ROADS_VILLAGES_LINE_LAYER_ID,
+  ROADS_VILLAGES_LABELS_LAYER_ID,
 ];
 const BOUNDARY_SOURCE_IDS = [
   "kml-data",
@@ -1237,6 +1311,18 @@ const BOUNDARY_SOURCE_IDS = [
   GBA_ZONES_LABELS_SOURCE_ID,
   GBA_WARDS_SOURCE_ID,
   GBA_WARDS_LABELS_SOURCE_ID,
+  ROADS_DISTRICTS_SOURCE_ID,
+  ROADS_DISTRICTS_LABELS_SOURCE_ID,
+  ROADS_TALUKS_SOURCE_ID,
+  ROADS_TALUKS_LABELS_SOURCE_ID,
+  ROADS_NATIONAL_HIGHWAY_SOURCE_ID,
+  ROADS_STATE_HIGHWAY_SOURCE_ID,
+  ROADS_DISTRICT_ROAD_SOURCE_ID,
+  ROADS_LOCAL_ROADS_SOURCE_ID,
+  ROADS_HOBLIES_SOURCE_ID,
+  ROADS_HOBLIES_LABELS_SOURCE_ID,
+  ROADS_VILLAGES_SOURCE_ID,
+  ROADS_VILLAGES_LABELS_SOURCE_ID,
 ];
 
 // Layer ids of the default india_states.geojson (neon-blue states) - shown both under the
@@ -1633,6 +1719,34 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     ].forEach((layerId) => {
       if (map.getLayer(layerId)) {
         map.setLayoutProperty(layerId, "visibility", gbaVisible ? "visible" : "none");
+      }
+    });
+
+    // Roads hierarchy layers follow the "roads" mode directly, same pattern as GBA above.
+    const roadsVisible = mode === "roads";
+    [
+      ROADS_DISTRICTS_FILL_LAYER_ID,
+      ROADS_DISTRICTS_LINE_LAYER_ID,
+      ROADS_DISTRICTS_LABELS_LAYER_ID,
+      ROADS_TALUKS_FILL_LAYER_ID,
+      ROADS_TALUKS_LINE_LAYER_ID,
+      ROADS_TALUKS_LABELS_LAYER_ID,
+      ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+      ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+      ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+      ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+      ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+      ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+      ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+      ROADS_HOBLIES_FILL_LAYER_ID,
+      ROADS_HOBLIES_LINE_LAYER_ID,
+      ROADS_HOBLIES_LABELS_LAYER_ID,
+      ROADS_VILLAGES_FILL_LAYER_ID,
+      ROADS_VILLAGES_LINE_LAYER_ID,
+      ROADS_VILLAGES_LABELS_LAYER_ID,
+    ].forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", roadsVisible ? "visible" : "none");
       }
     });
 
@@ -2130,7 +2244,54 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     zones: false,
     wards: false,
   });
+  // Same reasoning as gbaLoadingRef above, for loadIndiaStates - its own guard
+  // (`map.getSource(STATE_SOURCE_ID)`) only catches a *second* call once the first one has
+  // already reached addSource; two calls landing back-to-back (e.g. the boundary click firing
+  // while a search-triggered `loadIndiaStatesRef.current()` is still awaiting its fetch) both
+  // pass that check and both call addSource, throwing "Source already exists".
+  const loadingIndiaStatesRef = useRef(false);
 
+  // Roads hierarchy: District -> Taluk, each level showing National/State/District Road
+  // highways together. Mirrors the GBA refs above - loading guards prevent the same
+  // duplicate-source race, "loaded" refs track drill-down position, "selected" refs track
+  // which feature is highlighted.
+  const loadedRoadsDistrictsRef = useRef<boolean>(false);
+  const selectedRoadsDistrictIdRef = useRef<string | number | null>(null);
+  // Original-case name of the currently-selected district (District_Road/etc API calls and
+  // the taluks fetch need the real spelling, not the lowercased comparison key below).
+  const selectedRoadsDistrictNameRef = useRef<string | null>(null);
+  const loadedRoadsTaluksDistrictRef = useRef<string | null>(null);
+  const selectedRoadsTalukIdRef = useRef<string | number | null>(null);
+  // Original-case name of the currently-selected taluk (the hobli-villages fetch needs the
+  // real spelling, not loadedRoadsTaluksDistrictRef which holds the *district* name).
+  const selectedRoadsTalukNameRef = useRef<string | null>(null);
+  // Which admin unit's highway layers are currently loaded - "district" or "taluk" level,
+  // plus the names needed to refetch/identify them.
+  const loadedRoadsHighwaysRef = useRef<{ level: "district" | "taluk"; district: string; taluk?: string } | null>(
+    null
+  );
+  const roadsLoadingRef = useRef<{ districts: boolean; taluks: boolean; highways: boolean }>({
+    districts: false,
+    taluks: false,
+    highways: false,
+  });
+  // The unfiltered highway/local-road data for whichever district/taluk is currently loaded,
+  // keyed by source id - kept so selecting a taluk/hobli/village can filter each source down
+  // to just the features intersecting that boundary (see applyRoadsBoundaryFilter) without
+  // re-fetching, and so deselecting one restores the parent level's view instead of refetching.
+  const roadsUnfilteredDataRef = useRef<Record<string, GeoJSON.FeatureCollection>>({});
+  // The selected taluk's/hobli's own polygon geometry - kept so deselecting a *child* level
+  // (hobli deselected -> back to taluk's clip; village deselected -> back to hobli's clip)
+  // knows which geometry to re-apply, rather than falling all the way back to "no filter".
+  const selectedRoadsTalukGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  const selectedRoadsHobliGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  // Roads hierarchy hoblies/villages - same shape as the taluk/hobli refs above, kept
+  // separate so switching to/from "administrative" mode never touches this drill position.
+  const loadedRoadsHobliesTalukRef = useRef<string | null>(null);
+  const selectedRoadsHobliIdRef = useRef<string | number | null>(null);
+  const selectedRoadsHobliNameRef = useRef<string | null>(null);
+  const loadedRoadsVillagesHobliRef = useRef<string | null>(null);
+  const selectedRoadsVillageIdRef = useRef<string | number | null>(null);
   // Name of the taluk whose hoblies are currently loaded, if any.
   const loadedHobliesTalukRef = useRef<string | null>(null);
   // Currently-selected hobli feature id.
@@ -2499,6 +2660,469 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       console.error(`Failed to load GBA wards for zone "${zone}":`, error);
     } finally {
       gbaLoadingRef.current.wards = false;
+    }
+  };
+
+  const clearRoadsHighways = (map: MapLibreMap) => {
+    const groups: [string, string, string][] = [
+      [ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID, ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID, ROADS_NATIONAL_HIGHWAY_SOURCE_ID],
+      [ROADS_STATE_HIGHWAY_FILL_LAYER_ID, ROADS_STATE_HIGHWAY_LINE_LAYER_ID, ROADS_STATE_HIGHWAY_SOURCE_ID],
+      [ROADS_DISTRICT_ROAD_FILL_LAYER_ID, ROADS_DISTRICT_ROAD_LINE_LAYER_ID, ROADS_DISTRICT_ROAD_SOURCE_ID],
+    ];
+    groups.forEach(([fillId, lineId, sourceId]) => {
+      if (map.getLayer(fillId)) map.removeLayer(fillId);
+      if (map.getLayer(lineId)) map.removeLayer(lineId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    });
+    if (map.getLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID)) map.removeLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID);
+    if (map.getSource(ROADS_LOCAL_ROADS_SOURCE_ID)) map.removeSource(ROADS_LOCAL_ROADS_SOURCE_ID);
+    loadedRoadsHighwaysRef.current = null;
+    roadsUnfilteredDataRef.current = {};
+  };
+
+  const clearRoadsVillages = (map: MapLibreMap) => {
+    if (map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID)) map.removeLayer(ROADS_VILLAGES_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_VILLAGES_LINE_LAYER_ID)) map.removeLayer(ROADS_VILLAGES_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_VILLAGES_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_VILLAGES_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_SOURCE_ID);
+    if (map.getSource(ROADS_VILLAGES_LABELS_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_LABELS_SOURCE_ID);
+    // Whatever road filter (taluk/hobli/village clip - see applyRoadsBoundaryFilter) should be
+    // active after this clear is the caller's call, not this function's - the taluk/hobli
+    // click handlers set it explicitly right after invoking this, since only they know
+    // whether this is "deselecting one level, fall back to the parent's clip" or "switching
+    // to a different taluk entirely, the highway data itself is about to be replaced".
+    loadedRoadsVillagesHobliRef.current = null;
+    selectedRoadsVillageIdRef.current = null;
+  };
+
+  const clearRoadsHoblies = (map: MapLibreMap) => {
+    clearRoadsVillages(map);
+    if (map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID)) map.removeLayer(ROADS_HOBLIES_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_HOBLIES_LINE_LAYER_ID)) map.removeLayer(ROADS_HOBLIES_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_HOBLIES_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_HOBLIES_SOURCE_ID)) map.removeSource(ROADS_HOBLIES_SOURCE_ID);
+    if (map.getSource(ROADS_HOBLIES_LABELS_SOURCE_ID)) map.removeSource(ROADS_HOBLIES_LABELS_SOURCE_ID);
+    loadedRoadsHobliesTalukRef.current = null;
+    selectedRoadsHobliIdRef.current = null;
+    selectedRoadsHobliNameRef.current = null;
+    selectedRoadsHobliGeometryRef.current = null;
+  };
+
+  const clearRoadsTaluks = (map: MapLibreMap) => {
+    clearRoadsHighways(map);
+    clearRoadsHoblies(map);
+    selectedRoadsTalukGeometryRef.current = null;
+    if (map.getLayer(ROADS_TALUKS_FILL_LAYER_ID)) map.removeLayer(ROADS_TALUKS_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_TALUKS_LINE_LAYER_ID)) map.removeLayer(ROADS_TALUKS_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_TALUKS_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_TALUKS_SOURCE_ID)) map.removeSource(ROADS_TALUKS_SOURCE_ID);
+    if (map.getSource(ROADS_TALUKS_LABELS_SOURCE_ID)) map.removeSource(ROADS_TALUKS_LABELS_SOURCE_ID);
+    loadedRoadsTaluksDistrictRef.current = null;
+    selectedRoadsTalukIdRef.current = null;
+    selectedRoadsTalukNameRef.current = null;
+  };
+
+  const clearRoadsDistricts = (map: MapLibreMap) => {
+    clearRoadsTaluks(map);
+    if (map.getLayer(ROADS_DISTRICTS_FILL_LAYER_ID)) map.removeLayer(ROADS_DISTRICTS_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_DISTRICTS_LINE_LAYER_ID)) map.removeLayer(ROADS_DISTRICTS_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_DISTRICTS_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_DISTRICTS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_SOURCE_ID);
+    if (map.getSource(ROADS_DISTRICTS_LABELS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_LABELS_SOURCE_ID);
+    loadedRoadsDistrictsRef.current = false;
+    selectedRoadsDistrictIdRef.current = null;
+    selectedRoadsDistrictNameRef.current = null;
+  };
+
+  // Colors and API category ids for the 3 highway categories shown together at whichever
+  // level (district or taluk) is currently selected.
+  const ROADS_HIGHWAY_CATEGORIES: {
+    category: "national_highway" | "state_highway" | "district_road";
+    color: string;
+    sourceId: string;
+    fillLayerId: string;
+    lineLayerId: string;
+  }[] = [
+    {
+      category: "national_highway",
+      color: "#9333ea", // violet - was red, but that matched the village boundary color
+      sourceId: ROADS_NATIONAL_HIGHWAY_SOURCE_ID,
+      fillLayerId: ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+      lineLayerId: ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+    },
+    {
+      category: "state_highway",
+      color: "#f59e0b", // amber
+      sourceId: ROADS_STATE_HIGHWAY_SOURCE_ID,
+      fillLayerId: ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+      lineLayerId: ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+    },
+    {
+      category: "district_road",
+      color: "#65a30d", // olive green
+      sourceId: ROADS_DISTRICT_ROAD_SOURCE_ID,
+      fillLayerId: ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+      lineLayerId: ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+    },
+  ];
+
+  // Fetches and renders the 3 highway categories (National/State/District Road) together
+  // for either a district or a taluk (via /api/datasets/roads). A taluk genuinely missing a
+  // category comes back as an empty FeatureCollection (see the API route), which just adds
+  // an empty source - no special-casing needed here.
+  const loadRoadsHighways = async (map: MapLibreMap, level: "district" | "taluk", district: string, taluk?: string) => {
+    if (roadsLoadingRef.current.highways) return;
+    roadsLoadingRef.current.highways = true;
+    clearRoadsHighways(map);
+    try {
+      const results = await Promise.all(
+        ROADS_HIGHWAY_CATEGORIES.map(async ({ category }) => {
+          const params = new URLSearchParams({ district, category });
+          if (taluk) params.set("taluk", taluk);
+          const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+          if (!response.ok) return { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
+          return (await response.json()) as GeoJSON.FeatureCollection;
+        })
+      );
+
+      ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
+        const data = results[i]!;
+        roadsUnfilteredDataRef.current[sourceId] = data;
+        map.addSource(sourceId, { type: "geojson", data });
+        map.addLayer({
+          id: fillLayerId,
+          type: "fill",
+          source: sourceId,
+          // Fully transparent - border-only, matching every other boundary layer's style.
+          paint: { "fill-color": color, "fill-opacity": 0 },
+        });
+        map.addLayer({
+          id: lineLayerId,
+          type: "line",
+          source: sourceId,
+          paint: { "line-color": color, "line-width": 2 },
+        });
+      });
+
+      // The full local street network (Road Center Line) is only served pre-split down to
+      // taluk granularity - the district-level files are still 100-300MB+ raw, too large for
+      // the browser - so it only shows once a taluk is actually selected, same scoping the
+      // GBA hierarchy uses for its own deepest level.
+      if (level === "taluk" && taluk) {
+        const params = new URLSearchParams({ district, taluk, category: "local_roads" });
+        const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+        const localRoadsData: GeoJSON.FeatureCollection = response.ok
+          ? await response.json()
+          : { type: "FeatureCollection", features: [] };
+        roadsUnfilteredDataRef.current[ROADS_LOCAL_ROADS_SOURCE_ID] = localRoadsData;
+        map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, { type: "geojson", data: localRoadsData });
+        map.addLayer({
+          id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+          type: "line",
+          source: ROADS_LOCAL_ROADS_SOURCE_ID,
+          // Bright cyan - the original dark slate blended into the satellite basemap's own
+          // dark urban texture and became unreadable once zoomed into a dense city taluk.
+          // Distinct from the district/taluk boundary blue and the red/amber/olive highway
+          // colors, so it reads clearly at any zoom without being confused for either.
+          paint: { "line-color": "#22d3ee", "line-width": 1, "line-opacity": 0.9 },
+        });
+      }
+
+      loadedRoadsHighwaysRef.current = { level, district, taluk };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load ${level}-level highways for "${taluk ?? district}":`, error);
+    } finally {
+      roadsLoadingRef.current.highways = false;
+    }
+  };
+
+  // Narrows every currently-loaded highway/local-road source down to just the features that
+  // intersect `boundaryGeometry` (pass null to restore the full taluk-wide view). Used at
+  // every level below "taluk" - selecting a taluk clips to that taluk's own polygon,
+  // selecting a hobli clips to the hobli's, selecting a village clips to the village's - each
+  // one replacing whatever clip was active before, not stacking on top of it. Filters
+  // client-side against the data already fetched for the taluk (roadsUnfilteredDataRef)
+  // rather than a fresh request - there's no separate taluk/hobli/village-level road file to
+  // fetch, the road data itself doesn't split any finer than taluk.
+  const applyRoadsBoundaryFilter = (map: MapLibreMap, boundaryGeometry: GeoJSON.Geometry | null) => {
+    for (const [sourceId, fullData] of Object.entries(roadsUnfilteredDataRef.current)) {
+      const source = map.getSource(sourceId);
+      if (!source || !("setData" in source)) continue;
+      const data: GeoJSON.FeatureCollection = boundaryGeometry
+        ? {
+            type: "FeatureCollection",
+            features: fullData.features.filter((feature) => {
+              try {
+                return booleanIntersects(feature, boundaryGeometry);
+              } catch {
+                // Malformed/degenerate geometry (rare) - exclude rather than crash the filter.
+                return false;
+              }
+            }),
+          }
+        : fullData;
+      (source as GeoJSONSource).setData(data);
+    }
+  };
+
+  // Fetches and renders Karnataka's district boundaries as the entry point into the Roads
+  // hierarchy, reusing /api/datasets/state-districts but into dedicated layers so this mode
+  // never collides with "administrative" mode's own district layer.
+  const loadRoadsDistricts = async (map: MapLibreMap) => {
+    if (roadsLoadingRef.current.districts) return;
+    roadsLoadingRef.current.districts = true;
+    clearRoadsDistricts(map);
+    try {
+      const response = await fetch(`/api/datasets/state-districts?state=Karnataka`);
+      if (!response.ok) throw new Error(`state-districts failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      map.addSource(ROADS_DISTRICTS_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_DISTRICTS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["dtname"]),
+      });
+      map.addLayer({
+        id: ROADS_DISTRICTS_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_DISTRICTS_SOURCE_ID,
+        paint: { "fill-color": "#0ea5e9", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_DISTRICTS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_DISTRICTS_SOURCE_ID,
+        paint: {
+          "line-color": "#0ea5e9",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const districtLabelLayer: any = {
+        id: ROADS_DISTRICTS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_DISTRICTS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "dtname" here.
+          "text-field": ["get", "dtname"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#075985", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(districtLabelLayer);
+      loadedRoadsDistrictsRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load Roads districts:", error);
+    } finally {
+      roadsLoadingRef.current.districts = false;
+    }
+  };
+
+  // Fetches and renders a district's taluk boundaries, reusing /api/datasets/district-taluks
+  // into dedicated layers, triggered by clicking a district in the Roads hierarchy.
+  const loadRoadsTaluks = async (map: MapLibreMap, districtName: string) => {
+    if (roadsLoadingRef.current.taluks) return;
+    roadsLoadingRef.current.taluks = true;
+    clearRoadsTaluks(map);
+    try {
+      const url = `/api/datasets/district-taluks?district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No taluk data available for district "${districtName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      map.addSource(ROADS_TALUKS_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_TALUKS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["KGISTalukName", "subdist_nm", "name"]),
+      });
+      map.addLayer({
+        id: ROADS_TALUKS_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_TALUKS_SOURCE_ID,
+        paint: { "fill-color": "#0369a1", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_TALUKS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_TALUKS_SOURCE_ID,
+        paint: {
+          "line-color": "#0369a1",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const talukLabelLayer: any = {
+        id: ROADS_TALUKS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_TALUKS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "KGISTalukName" here.
+          "text-field": ["get", "KGISTalukName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#0c4a6e", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(talukLabelLayer);
+      loadedRoadsTaluksDistrictRef.current = districtName.trim().toLowerCase();
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads taluks for "${districtName}":`, error);
+    } finally {
+      roadsLoadingRef.current.taluks = false;
+    }
+  };
+
+  // Fetches and renders a taluk's hobli boundaries, reusing /api/datasets/taluk-hoblies
+  // (the same generic administrative data "administrative" mode uses) into dedicated Roads
+  // layers - the road data itself has no hobli-level split, this is boundary context only.
+  const loadRoadsHoblies = async (map: MapLibreMap, talukName: string, districtName: string) => {
+    const normalized = talukName.trim().toLowerCase();
+    if (loadedRoadsHobliesTalukRef.current === normalized) return;
+    try {
+      const url = `/api/datasets/taluk-hoblies?taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No hobli data available for taluk "${talukName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      clearRoadsHoblies(map);
+      map.addSource(ROADS_HOBLIES_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_HOBLIES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["KGISHobliName", "hobli_name", "name"]),
+      });
+      map.addLayer({
+        id: ROADS_HOBLIES_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_HOBLIES_SOURCE_ID,
+        paint: { "fill-color": "#eab308", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_HOBLIES_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_HOBLIES_SOURCE_ID,
+        paint: {
+          "line-color": "#eab308",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const hobliLabelLayer: any = {
+        id: ROADS_HOBLIES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_HOBLIES_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "KGISHobliName" here.
+          "text-field": ["get", "KGISHobliName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 9.5,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#713f12", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(hobliLabelLayer);
+      loadedRoadsHobliesTalukRef.current = normalized;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads hoblies for "${talukName}":`, error);
+    }
+  };
+
+  // Fetches and renders a hobli's village boundaries, reusing /api/datasets/hobli-villages
+  // into dedicated Roads layers - same reasoning as loadRoadsHoblies above.
+  const loadRoadsVillages = async (map: MapLibreMap, hobliName: string, talukName: string, districtName: string) => {
+    const normalized = hobliName.trim().toLowerCase();
+    if (loadedRoadsVillagesHobliRef.current === normalized) return;
+    try {
+      const url = `/api/datasets/hobli-villages?hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No village data available for hobli "${hobliName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      clearRoadsVillages(map);
+      map.addSource(ROADS_VILLAGES_SOURCE_ID, { type: "geojson", data, generateId: true });
+      const firstProps = data.features[0]?.properties ?? {};
+      const villageNameKey = VILLAGE_NAME_KEYS.find((key) => typeof firstProps[key] === "string") ?? "name";
+      map.addSource(ROADS_VILLAGES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, [villageNameKey]),
+      });
+      map.addLayer({
+        id: ROADS_VILLAGES_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_VILLAGES_SOURCE_ID,
+        paint: { "fill-color": "#ff073a", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_VILLAGES_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_VILLAGES_SOURCE_ID,
+        paint: {
+          "line-color": "#ff073a",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const villageLabelLayer: any = {
+        id: ROADS_VILLAGES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_VILLAGES_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", villageNameKey],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 9,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#7f1d1d", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(villageLabelLayer);
+      loadedRoadsVillagesHobliRef.current = normalized;
+      selectedRoadsHobliNameRef.current = hobliName;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads villages for "${hobliName}":`, error);
     }
   };
 
@@ -5574,8 +6198,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             const loadIndiaStates = async () => {
               // Guard against re-entry: the boundary click handler can fire again after the
               // states are already loaded (e.g. a second click on the country), which would
-              // otherwise throw "Source already exists".
-              if (map.getSource(STATE_SOURCE_ID)) return;
+              // otherwise throw "Source already exists". The loadingIndiaStatesRef half of
+              // this check catches the narrower race where a second call starts before the
+              // first has reached addSource yet - map.getSource() alone can't see that.
+              if (map.getSource(STATE_SOURCE_ID) || loadingIndiaStatesRef.current) return;
+              loadingIndiaStatesRef.current = true;
             try {
             let statesResponse: Response;
             try {
@@ -6424,6 +7051,249 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
             });
 
+            // --- Roads hierarchy: District -> Taluk, each level showing National/State/
+            // District Road highways together (see loadRoadsHighways). Mirrors the GBA
+            // handlers above - sibling-layer guards stop a click on a taluk (which sits
+            // geometrically inside its district) from also toggling the district off.
+            let hoveredRoadsDistrictId: string | number | null = null;
+            map.on("mousemove", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsDistrictId !== null && hoveredRoadsDistrictId !== feature.id) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+              }
+              hoveredRoadsDistrictId = feature.id;
+              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_DISTRICTS_FILL_LAYER_ID, () => {
+              if (hoveredRoadsDistrictId !== null) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+              }
+              hoveredRoadsDistrictId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a taluk (inside this district) would otherwise also reach this
+              // handler and immediately toggle the taluks/highways back off.
+              if (
+                map.getLayer(ROADS_TALUKS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_TALUKS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const districtName = (feature.properties?.dtname as string | undefined)?.trim();
+              if (!districtName) return;
+              const normalized = districtName.toLowerCase();
+
+              if (
+                selectedRoadsDistrictIdRef.current === feature.id &&
+                loadedRoadsTaluksDistrictRef.current === normalized
+              ) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsDistrictIdRef.current = null;
+                selectedRoadsDistrictNameRef.current = null;
+                clearRoadsTaluks(map);
+                return;
+              }
+
+              if (selectedRoadsDistrictIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: selectedRoadsDistrictIdRef.current }, { selected: false });
+              }
+              selectedRoadsDistrictIdRef.current = feature.id;
+              selectedRoadsDistrictNameRef.current = districtName;
+              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: true });
+              map.getCanvas().style.cursor = "wait";
+              void Promise.all([
+                loadRoadsTaluks(map, districtName),
+                loadRoadsHighways(map, "district", districtName),
+              ]).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredRoadsTalukId: string | number | null = null;
+            map.on("mousemove", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsTalukId !== null && hoveredRoadsTalukId !== feature.id) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+              }
+              hoveredRoadsTalukId = feature.id;
+              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_TALUKS_FILL_LAYER_ID, () => {
+              if (hoveredRoadsTalukId !== null) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+              }
+              hoveredRoadsTalukId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a hobli (inside this taluk) would otherwise also reach this
+              // handler and immediately toggle the taluk (and its hoblies) back off.
+              if (
+                map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_HOBLIES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const talukName = (feature.properties?.KGISTalukName as string | undefined)?.trim();
+              const districtName = selectedRoadsDistrictNameRef.current;
+              if (!talukName || !districtName) return;
+
+              const alreadySelected =
+                selectedRoadsTalukIdRef.current === feature.id &&
+                loadedRoadsHighwaysRef.current?.level === "taluk" &&
+                loadedRoadsHighwaysRef.current?.taluk?.toLowerCase() === talukName.toLowerCase();
+
+              if (alreadySelected) {
+                // Toggle off - deselect the taluk and fall back to showing the district's
+                // own highways (the district itself is still selected).
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsTalukIdRef.current = null;
+                selectedRoadsTalukNameRef.current = null;
+                selectedRoadsTalukGeometryRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
+                clearRoadsHoblies(map);
+                map.getCanvas().style.cursor = "wait";
+                void loadRoadsHighways(map, "district", districtName).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+                return;
+              }
+
+              if (selectedRoadsTalukIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: selectedRoadsTalukIdRef.current }, { selected: false });
+              }
+              selectedRoadsTalukIdRef.current = feature.id;
+              selectedRoadsTalukNameRef.current = talukName;
+              selectedRoadsTalukGeometryRef.current = feature.geometry;
+              selectedRoadsHobliGeometryRef.current = null;
+              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
+              map.getCanvas().style.cursor = "wait";
+              void Promise.all([
+                // Clip the highway/local-road layers down to this taluk's own polygon once
+                // they've loaded - the taluk-level file's road geometries aren't necessarily
+                // clipped exactly to the administrative boundary (a road can run slightly
+                // past it), same reasoning as the hobli/village clips below.
+                loadRoadsHighways(map, "taluk", districtName, talukName).then(() => {
+                  applyRoadsBoundaryFilter(map, feature.geometry);
+                }),
+                loadRoadsHoblies(map, talukName, districtName),
+              ]).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredRoadsHobliId: string | number | null = null;
+            map.on("mousemove", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsHobliId !== null && hoveredRoadsHobliId !== feature.id) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+              }
+              hoveredRoadsHobliId = feature.id;
+              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_HOBLIES_FILL_LAYER_ID, () => {
+              if (hoveredRoadsHobliId !== null) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+              }
+              hoveredRoadsHobliId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a village (inside this hobli) would otherwise also reach this
+              // handler and immediately toggle the hobli (and its villages) back off.
+              if (
+                map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_VILLAGES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const hobliName = (feature.properties?.KGISHobliName as string | undefined)?.trim();
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!hobliName || !districtName || !talukName) return;
+
+              const alreadySelected =
+                selectedRoadsHobliIdRef.current === feature.id &&
+                loadedRoadsVillagesHobliRef.current === hobliName.toLowerCase();
+
+              if (alreadySelected) {
+                // Toggle off - deselect the hobli and fall back to the taluk's own clip
+                // (the taluk itself is still selected).
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsHobliIdRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
+                clearRoadsVillages(map);
+                applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
+                return;
+              }
+
+              if (selectedRoadsHobliIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: selectedRoadsHobliIdRef.current }, { selected: false });
+              }
+              selectedRoadsHobliIdRef.current = feature.id;
+              selectedRoadsHobliGeometryRef.current = feature.geometry;
+              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
+              // Clip the highway/local-road layers down to this hobli's own polygon - the
+              // road data already loaded (for the parent taluk) so this is instant, no fetch.
+              applyRoadsBoundaryFilter(map, feature.geometry);
+              map.getCanvas().style.cursor = "wait";
+              void loadRoadsVillages(map, hobliName, talukName, districtName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredRoadsVillageId: string | number | null = null;
+            map.on("mousemove", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsVillageId !== null && hoveredRoadsVillageId !== feature.id) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+              }
+              hoveredRoadsVillageId = feature.id;
+              map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_VILLAGES_FILL_LAYER_ID, () => {
+              if (hoveredRoadsVillageId !== null) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+              }
+              hoveredRoadsVillageId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (selectedRoadsVillageIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: selectedRoadsVillageIdRef.current }, { selected: false });
+              }
+              const isSame = selectedRoadsVillageIdRef.current === feature.id;
+              selectedRoadsVillageIdRef.current = isSame ? null : feature.id;
+              if (!isSame) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
+              }
+              // Narrow the highway/local-road layers to just this village, or - on deselect -
+              // fall back to the parent hobli's own clip (the hobli itself is still
+              // selected), not all the way back to the full taluk view.
+              applyRoadsBoundaryFilter(map, isSame ? selectedRoadsHobliGeometryRef.current : feature.geometry);
+            });
+
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               console.log("=== DISTRICT CLICK EVENT ===");
@@ -7220,6 +8090,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             }
             } catch (error) {
               console.error("Failed to load India state boundaries:", error);
+            } finally {
+              loadingIndiaStatesRef.current = false;
             }
             };
             loadIndiaStatesRef.current = loadIndiaStates;
@@ -7479,6 +8351,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     clearGbaCorporations(map);
     clearGbaBoundary(map);
     selectedGbaWardIdRef.current = null;
+    clearRoadsHighways(map);
+    clearRoadsTaluks(map);
+    clearRoadsDistricts(map);
     // The states source survives the boundary wipe (it's not in BOUNDARY_SOURCE_IDS), so
     // undo any village cutout that was punched into it.
     restoreAncestorFills(map);
@@ -7908,13 +8783,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         mode === "gram_panchayat" ||
         mode === "police_station" ||
         mode === "civic_amenities" ||
-        mode === "gba"
+        mode === "gba" ||
+        mode === "roads"
       ) {
         clearStateDistricts(map);
         clearDistrictTaluks(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
-        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba") {
+        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba" || mode === "roads") {
           clearStateAssembly(map);
           clearStateParliament(map);
         } else if (mode === "assembly") {
@@ -7929,7 +8805,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           const selectedState = selectedStateNameRef.current;
           if (selectedState) void loadStatePolice(map, selectedState);
         }
-        if (mode === "gba") {
+        if (mode === "gba" || mode === "roads") {
           clearStatePolice(map);
         }
       } else if (mode === "administrative") {
@@ -7953,6 +8829,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearGbaZones(map);
         clearGbaCorporations(map);
         clearGbaBoundary(map);
+      }
+      // Roads mode's entry point is the district layer itself (the data only covers
+      // Karnataka, so there's no separate "authority boundary" step like GBA) - leaving
+      // "roads" mode fully tears down the drill-down, same reasoning as GBA above, so
+      // re-entering it always starts fresh at the district list.
+      if (mode === "roads") {
+        if (!loadedRoadsDistrictsRef.current) void loadRoadsDistricts(map);
+      } else {
+        clearRoadsHighways(map);
+        clearRoadsTaluks(map);
+        clearRoadsDistricts(map);
       }
       applyBoundaryLayerVisibility(map);
     },

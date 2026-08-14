@@ -37,7 +37,8 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
   { id: "police_station", label: "Police Station Boundaries" },
   { id: "civic_amenities", label: "Civic Amenities" },
-  { id: "gba", label: "GBA Boundaries" },
+  { id: "gba", label: "Bengaluru Boundaries" },
+  { id: "roads", label: "Roads" },
 ];
 const POLICE_TYPE_OPTIONS: { id: PoliceType; label: string }[] = [
   { id: "all", label: "All Police Types" },

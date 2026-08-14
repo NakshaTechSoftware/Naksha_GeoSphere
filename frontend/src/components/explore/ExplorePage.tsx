@@ -255,6 +255,12 @@ export function ExplorePage() {
     useState<BoundaryLayerMode>("administrative");
   const [selectedPoliceType, setSelectedPoliceType] = useState<PoliceType>("all");
   const [selectedPoliceDistrict, setSelectedPoliceDistrict] = useState("all");
+  // What a district click does in Roads mode - "none" (default, neither button pressed) is
+  // fast/boundaries-only, matching taluk/hobli/village's own lightweight click behavior.
+  // "district" makes a single click also fetch that district's full roads immediately;
+  // "state" loads every district's roads combined on the next click, since districts tile
+  // the whole state with no separate clickable "state" area.
+  const [selectedRoadsScope, setSelectedRoadsScope] = useState<"none" | "district" | "state">("none");
   const [searchSuggestions, setSearchSuggestions] = useState<
     { category: string; items: string[] }[]
   >([]);
@@ -1248,6 +1254,7 @@ export function ExplorePage() {
                           onChange={() => {
                             setSelectedBoundaryLayer(id);
                             mapViewerRef.current?.setBoundaryLayerMode(id);
+                            if (id !== "roads") setSelectedRoadsScope("none");
                           }}
                         />
                         {label}
@@ -1279,6 +1286,28 @@ export function ExplorePage() {
                           <option value="all">All Districts</option>
                           {POLICE_DISTRICTS.map((district) => <option key={district} value={district}>{district}</option>)}
                         </select>
+                        </div>
+                      )}
+                      {id === "roads" && selectedBoundaryLayer === "roads" && (
+                        <div className="ml-6 mt-2 flex w-[calc(100%-1.5rem)] gap-2">
+                          {(["district", "state"] as const).map((scope) => (
+                            <button
+                              key={scope}
+                              type="button"
+                              className={`flex-1 rounded-md border px-2 py-1.5 text-sm capitalize transition-colors ${
+                                selectedRoadsScope === scope
+                                  ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                              }`}
+                              onClick={() => {
+                                const next = selectedRoadsScope === scope ? "none" : scope;
+                                setSelectedRoadsScope(next);
+                                mapViewerRef.current?.setRoadsClickScope(next);
+                              }}
+                            >
+                              {scope}
+                            </button>
+                          ))}
                         </div>
                       )}
                       </div>

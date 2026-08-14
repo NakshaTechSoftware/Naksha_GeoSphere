@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { cleanFolderName, namesMatch } from '../_folder-match';
+import { cleanFolderName, namesEqual, namesMatch } from '../_folder-match';
 
 // Remote MinIO configuration
 const MINIO_ENDPOINT = '192.168.10.81:9010';
@@ -158,28 +158,21 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    const hobliFolder = hobliListResponse.CommonPrefixes?.find((prefix) => {
+    const hobliCandidates = hobliListResponse.CommonPrefixes.map((prefix) => {
       const folderName = prefix.Prefix?.split('/').slice(-2)[0] || '';
       const cleaned = cleanFolderName(folderName);
-      const hobliCleaned = hobli.trim().toLowerCase().replace(/[_-]/g, ' ');
-      
-      console.log(`[hobli-villages] >>> Comparing: folderName="${folderName}"`);
-      console.log(`[hobli-villages] >>> After cleanFolderName: cleaned="${cleaned}"`);
-      console.log(`[hobli-villages] >>> Search term: hobli="${hobli}", hobliCleaned="${hobliCleaned}"`);
-      
-      // Try exact match first
-      let match = namesMatch(cleaned, hobli);
-      console.log(`[hobli-villages] >>> namesMatch result: ${match}`);
-      
-      // If no match, try contains matching (handles cases like "230308_Kanakatte" matching "Kanakatte")
-      if (!match) {
-        match = cleaned.includes(hobliCleaned) || hobliCleaned.includes(cleaned);
-        console.log(`[hobli-villages] >>> contains match result: ${match}`);
-      }
-      
-      console.log(`[hobli-villages] Hobli check: "${folderName}" -> cleaned="${cleaned}" vs "${hobli}" -> FINAL MATCH=${match}\n`);
-      return match;
+      return { prefix, folderName, cleaned };
     });
+
+    // Suffixes distinguish real Bengaluru Urban hoblis. Previously namesMatch
+    // considered "Kasaba" a match for "Kasaba-1", and Array.find selected the
+    // first MinIO folder. Prefer exact identity; accept a fuzzy legacy match
+    // only when it resolves to exactly one sibling.
+    const exactHobli = hobliCandidates.find(({ cleaned }) => namesEqual(cleaned, hobli));
+    const fuzzyHoblis = exactHobli
+      ? []
+      : hobliCandidates.filter(({ cleaned }) => namesMatch(cleaned, hobli));
+    const hobliFolder = exactHobli?.prefix ?? (fuzzyHoblis.length === 1 ? fuzzyHoblis[0]?.prefix : undefined);
 
     if (!hobliFolder?.Prefix) {
       return NextResponse.json(

@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${config.apiUrl}/api/v1/export/feature`, {
+    upstream = await fetch(`${config.internalApiUrl}/api/v1/export/feature`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

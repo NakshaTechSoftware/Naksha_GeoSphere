@@ -21,15 +21,14 @@ class ExportFeatureRequest(BaseModel):
     name_hint: str = "export"
 
 
-class ExportLayer(BaseModel):
-    level: AdminLevel
-    # Each item is a GeoJSON-shaped {"geometry": ..., "properties": ...} pair - the frontend
-    # already collected these by walking the admin hierarchy (state -> district -> taluk ->
-    # hobli -> village) via its own MinIO-backed routes before calling this endpoint.
-    features: list[dict[str, Any]]
-
-
 class ExportBulkRequest(BaseModel):
+    """The frontend walks the admin hierarchy (state -> district -> taluk -> hobli ->
+    village) itself via its own MinIO-backed routes, but never sends the collected
+    features directly here - a whole-district export can be hundreds of MB of GeoJSON,
+    past what a single JSON request body can safely carry through Node's V8 engine
+    (~512MB per-string hard cap) or a single Celery/Redis message. It stages them as
+    NDJSON via POST /export/bulk/stage first and passes only the resulting key."""
+
     export_format: ExportFormat
-    layers: list[ExportLayer]
+    staged_key: str
     name_hint: str = "export"

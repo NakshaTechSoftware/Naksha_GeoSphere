@@ -38,6 +38,27 @@ export function cleanFolderName(name: string): string {
     .trim();
 }
 
+// Display names in the current district boundary dataset that intentionally map to a
+// differently named legacy MinIO hierarchy. Keep these aliases in the shared matcher so
+// every drill-down API (taluks, hoblis, villages and cadastrals) resolves the same parent.
+const PLACE_ALIASES: Record<string, string> = {
+  'bengaluru south': 'ramanagara',
+};
+
+function canonicalName(name: string): string {
+  const normalized = cleanFolderName(name).replace(/\s+/g, ' ');
+  return PLACE_ALIASES[normalized] ?? normalized;
+}
+
+// Exact comparison after applying the same normalization and known aliases as
+// namesMatch. Use this for sibling folders where suffixes carry identity
+// (for example Kasaba, Kasaba-1 and Kasaba-2).
+export function namesEqual(folderName: string, displayName: string): boolean {
+  const canonicalFolder = canonicalName(folderName);
+  const canonicalDisplay = canonicalName(displayName);
+  return Boolean(canonicalFolder && canonicalDisplay && canonicalFolder === canonicalDisplay);
+}
+
 // 0..1 closeness of two already-normalized names, for callers that need to rank candidates
 // rather than take a yes/no verdict (see namesMatch).
 export function similarity(a: string, b: string): number {
@@ -50,20 +71,19 @@ export function similarity(a: string, b: string): number {
 // other, or - as a last resort - they're within a small edit-distance tolerance to absorb
 // minor transliteration differences like "Kalaburagi" vs "Kalaburgi".
 export function namesMatch(cleanFolder: string, displayName: string): boolean {
-  const cleanDisplay = displayName
-    .toLowerCase()
-    .replace(/[-_]/g, ' ')
-    .replace(/[()]/g, '')
-    .trim();
-  if (!cleanFolder || !cleanDisplay) return false;
+  // Parentheses are stripped from BOTH sides so "Bengaluru (Rural)" matches the
+  // "Bengaluru_Rural" folder (cleanFolderName already removes parens from folders).
+  const canonicalFolder = canonicalName(cleanFolder);
+  const cleanDisplay = canonicalName(displayName);
+  if (!canonicalFolder || !cleanDisplay) return false;
 
   if (
-    cleanFolder === cleanDisplay ||
-    cleanFolder.includes(cleanDisplay) ||
-    cleanDisplay.includes(cleanFolder)
+    canonicalFolder === cleanDisplay ||
+    canonicalFolder.includes(cleanDisplay) ||
+    cleanDisplay.includes(canonicalFolder)
   ) {
     return true;
   }
 
-  return similarity(cleanFolder, cleanDisplay) >= 0.9;
+  return similarity(canonicalFolder, cleanDisplay) >= 0.9;
 }

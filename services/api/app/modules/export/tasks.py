@@ -16,7 +16,6 @@ from celery import Celery
 from celery.result import AsyncResult
 
 from app.core.config import get_settings
-from app.modules.export.schemas import ExportLayer
 
 FEATURE_TASK_NAME = "export.export_feature"
 BULK_TASK_NAME = "export.export_bulk"
@@ -48,12 +47,12 @@ def submit_export_feature(
 
 def submit_export_bulk(
     *,
-    layers: list[ExportLayer],
+    staged_key: str,
     export_format: str,
     name_hint: str,
 ) -> AsyncResult:
     return _celery_producer().send_task(
         BULK_TASK_NAME,
-        args=[[layer.model_dump() for layer in layers], export_format, name_hint],
+        args=[staged_key, export_format, name_hint],
         queue="vector",
     )

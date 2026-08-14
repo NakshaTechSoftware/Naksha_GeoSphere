@@ -10,6 +10,7 @@ import type {
   MapMouseEvent,
   PointLike,
   QueryRenderedFeaturesOptions,
+  FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
@@ -364,6 +365,29 @@ function withVillageHole(
 // this, states like Andaman & Nicobar (8 islands), Puducherry (4 enclaves) or a multi-part
 // district scatters duplicate labels. Each emitted feature carries the name under nameKeys[0],
 // which the label layer's text-field reads.
+// Zooms the map to fit every coordinate in a GeoJSON collection - used when loading a
+// boundary that's likely off-screen at the current zoom (e.g. the GBA authority boundary
+// is a small part of Karnataka, invisible at a whole-state/whole-India zoom level).
+async function fitBoundsToGeoJSON(map: MapLibreMap, data: GeoJSON.FeatureCollection): Promise<void> {
+  const maplibregl = await import("maplibre-gl");
+  const bounds = new maplibregl.LngLatBounds();
+  let hasBounds = false;
+  const extend = (coords: unknown): void => {
+    if (Array.isArray(coords) && typeof coords[0] === "number") {
+      bounds.extend(coords as [number, number]);
+      hasBounds = true;
+    } else if (Array.isArray(coords)) {
+      coords.forEach(extend);
+    }
+  };
+  for (const feature of data.features) {
+    if (feature.geometry && "coordinates" in feature.geometry) {
+      extend(feature.geometry.coordinates);
+    }
+  }
+  if (hasBounds) map.fitBounds(bounds, { padding: 50, duration: 1000 });
+}
+
 function labelAnchorFeatures(
   data: GeoJSON.FeatureCollection,
   nameKeys: string[]
@@ -475,6 +499,80 @@ function labelAnchorFeatures(
   }
 
   return { type: "FeatureCollection", features };
+}
+
+// Cached list of Karnataka's district names (lowercased), fetched once from the same
+// state-districts API the map uses to render them. Backs the bare district-name search
+// (e.g. "Hassan" → "Karnataka, Hassan"); only Karnataka has district data today.
+let karnatakaDistrictNamesCache: string[] | null = null;
+
+async function getKarnatakaDistrictNames(): Promise<string[] | null> {
+  if (karnatakaDistrictNamesCache) return karnatakaDistrictNamesCache;
+  try {
+    const response = await fetch("/api/datasets/state-districts?state=Karnataka");
+    if (!response.ok) return null;
+    const geo = await response.json();
+    karnatakaDistrictNamesCache = Array.from(
+      new Set(
+        (geo.features as Array<{ properties?: { dtname?: string } }>)
+          .map((f) => f.properties?.dtname)
+          .filter((n): n is string => Boolean(n)),
+      )
+    ).map((name) => name.trim().toLowerCase());
+    return karnatakaDistrictNamesCache;
+  } catch (error) {
+    console.error("Failed to load Karnataka district names:", error);
+    return null;
+  }
+}
+
+// Normalizes a place name for comparison: lowercase, strip parentheses/commas (so
+// "Bengaluru (Rural)" matches "Bengaluru Rural"), replace separators with spaces (so
+// folder-derived "Honnenahalli_Kavalu" matches "Honnenahalli Kavalu"), collapse
+// whitespace. Used for the district/taluk/hobli/village search matching because the layer
+// properties (e.g. dtname, KGISVillageName) and the MinIO folder-derived display names
+// (e.g. the village index) occasionally differ in punctuation.
+function normalizeNameForMatch(name: string): string {
+  return name.toLowerCase().replace(/[(),]/g, " ").replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Cached all-Karnataka hobli index (district/taluk/hobli triples, built from the MinIO
+// folder structure into /data/karnataka_hoblis.json). Backs both the bare hobli-name
+// search (e.g. "Kasaba" → its district/taluk chain) and the dropdown suggestions.
+type HobliIndexEntry = { district: string; taluk: string; hobli: string };
+let karnatakaHoblisCache: HobliIndexEntry[] | null = null;
+
+async function getKarnatakaHoblis(): Promise<HobliIndexEntry[] | null> {
+  if (karnatakaHoblisCache) return karnatakaHoblisCache;
+  try {
+    const response = await fetch("/data/karnataka_hoblis.json");
+    if (!response.ok) return null;
+    karnatakaHoblisCache = (await response.json()) as HobliIndexEntry[];
+    return karnatakaHoblisCache;
+  } catch (error) {
+    console.error("Failed to load Karnataka hobli index:", error);
+    return null;
+  }
+}
+
+// Cached all-Karnataka village index (district/taluk/hobli/village quadruples, built from
+// the MinIO folder structure into /data/karnataka_villages.json). Backs both the bare
+// village-name search (e.g. "Belur" → its district/taluk/hobli chain) and the dropdown
+// suggestions. ~27k villages, so it's fetched lazily only when a village search needs it.
+type VillageIndexEntry = { district: string; taluk: string; hobli: string; village: string };
+let karnatakaVillagesCache: VillageIndexEntry[] | null = null;
+
+async function getKarnatakaVillages(): Promise<VillageIndexEntry[] | null> {
+  if (karnatakaVillagesCache) return karnatakaVillagesCache;
+  try {
+    const response = await fetch("/data/karnataka_villages.json");
+    if (!response.ok) return null;
+    karnatakaVillagesCache = (await response.json()) as VillageIndexEntry[];
+    return karnatakaVillagesCache;
+  } catch (error) {
+    console.error("Failed to load Karnataka village index:", error);
+    return null;
+  }
 }
 
 // text-size (like every other symbol layout property) can't be driven by a feature-state
@@ -671,7 +769,15 @@ export type BoundaryLayerMode =
   | "parliamentary"
   | "gram_panchayat"
   | "police_station"
-  | "civic_amenities";
+  | "civic_amenities"
+  | "gba";
+
+export type PoliceType =
+  | "all" | "law_and_order" | "women_police" | "traffic_police"
+  | "railway_police" | "railway_police_outpost" | "police_outpost"
+  | "police_check_post" | "police_forest_cell" | "district_armed_reserve"
+  | "city_armed_reserve" | "city_crime_branch" | "coastal_security"
+  | "cyber_crime" | "ksisf" | "ksrp";
 
 export interface IndiaMapViewerHandle {
   /** Sets the active Boundary Layers filter option (single-select). "administrative" shows
@@ -680,6 +786,8 @@ export interface IndiaMapViewerHandle {
    * shows the states plus loaded parliamentary constituency boundaries; "gram_panchayat"
    * shows the states too (panchayat boundaries not wired to data yet). */
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
+  setPoliceType: (type: PoliceType) => void;
+  setPoliceDistrict: (district: string) => void;
   /** Loads the Karnataka or Bengaluru boundary when the query matches (case-insensitive). */
   search: (query: string) => void;
   /** Lists every Bengaluru boundary file, grouped by region subfolder (Central, East, ...). */
@@ -717,6 +825,9 @@ export interface IndiaMapViewerProps {
    * caller's side panel), or with null when the panel should close (Escape, new right-click
    * on empty map). */
   onAttributeInfo?: (info: AttributeInfo | null) => void;
+  /** Called whenever the map's current drill-down context changes (e.g. a taluk search
+   * resolves), so callers can scope their own suggestions; null when the map is reset. */
+  onDrillContextChange?: (context: { state: string; district: string; taluk: string } | null) => void;
 }
 
 // Source/layer ids for a selected state's district boundaries, loaded on demand from MinIO.
@@ -725,6 +836,34 @@ const STATE_DISTRICTS_FILL_LAYER_ID = "state-districts-fill";
 const STATE_DISTRICTS_LINE_LAYER_ID = "state-districts-line";
 const STATE_DISTRICTS_LABELS_LAYER_ID = "state-districts-labels";
 const STATE_DISTRICTS_LABELS_SOURCE_ID = "state-districts-labels-data";
+
+// Source/layer ids for the GBA (Greater Bengaluru Authority) hierarchy: the single
+// authority boundary, then Corporation -> Zone -> Ward, each loaded on demand from the
+// dedicated gba-* API routes as the user drills down (mirrors the district/taluk pattern
+// above, just with GBA's own 4 levels instead of district/taluk/hobli/village).
+const GBA_BOUNDARY_SOURCE_ID = "gba-boundary-data";
+const GBA_BOUNDARY_FILL_LAYER_ID = "gba-boundary-fill";
+const GBA_BOUNDARY_LINE_LAYER_ID = "gba-boundary-line";
+const GBA_BOUNDARY_LABELS_LAYER_ID = "gba-boundary-labels";
+const GBA_BOUNDARY_LABELS_SOURCE_ID = "gba-boundary-labels-data";
+
+const GBA_CORPORATIONS_SOURCE_ID = "gba-corporations-data";
+const GBA_CORPORATIONS_FILL_LAYER_ID = "gba-corporations-fill";
+const GBA_CORPORATIONS_LINE_LAYER_ID = "gba-corporations-line";
+const GBA_CORPORATIONS_LABELS_LAYER_ID = "gba-corporations-labels";
+const GBA_CORPORATIONS_LABELS_SOURCE_ID = "gba-corporations-labels-data";
+
+const GBA_ZONES_SOURCE_ID = "gba-zones-data";
+const GBA_ZONES_FILL_LAYER_ID = "gba-zones-fill";
+const GBA_ZONES_LINE_LAYER_ID = "gba-zones-line";
+const GBA_ZONES_LABELS_LAYER_ID = "gba-zones-labels";
+const GBA_ZONES_LABELS_SOURCE_ID = "gba-zones-labels-data";
+
+const GBA_WARDS_SOURCE_ID = "gba-wards-data";
+const GBA_WARDS_FILL_LAYER_ID = "gba-wards-fill";
+const GBA_WARDS_LINE_LAYER_ID = "gba-wards-line";
+const GBA_WARDS_LABELS_LAYER_ID = "gba-wards-labels";
+const GBA_WARDS_LABELS_SOURCE_ID = "gba-wards-labels-data";
 
 // Source/layer ids for a selected state's assembly constituency boundaries, loaded on demand
 // from MinIO when the "Assembly Constituency Boundaries" filter option is active.
@@ -747,6 +886,9 @@ const STATE_POLICE_SOURCE_ID = "state-police-data";
 const STATE_POLICE_FILL_LAYER_ID = "state-police-fill";
 const STATE_POLICE_LINE_LAYER_ID = "state-police-line";
 const STATE_POLICE_LABEL_LAYER_ID = "state-police-labels";
+const STATE_POLICE_POINT_LAYER_ID = "state-police-points";
+const STATE_POLICE_POINT_HALO_LAYER_ID = "state-police-point-halo";
+const STATE_POLICE_POINT_LABEL_LAYER_ID = "state-police-point-labels";
 const POLICE_HOBLIES_SOURCE_ID = "police-hoblies-data";
 const POLICE_HOBLIES_FILL_LAYER_ID = "police-hoblies-fill";
 const POLICE_HOBLIES_LINE_LAYER_ID = "police-hoblies-line";
@@ -838,16 +980,16 @@ const VILLAGE_CADASTRALS_LABELS_LAYER_ID = "village-cadastrals-labels";
 // and applyCadastralColors so the two can never drift apart.
 const CADASTRAL_COLORS = {
   satellite: {
-    line: "#ffffff", lineWidth: 1.1, lineOpacity: 1, text: "#ffffff", halo: "#151a23", haloWidth: 2,
+    line: "#ffffff", lineWidth: 0.8, lineOpacity: 1, text: "#ffffff", halo: "#151a23", haloWidth: 2,
     // Hover highlight: the parcel's border only thickens (no fill tint) so the interior
     // of the box stays fully visible over the aerial backdrop.
-    fill: "#ffffff", hoverLineWidth: 4.5,
+    fill: "#ffffff", hoverLineWidth: 2.2,
   },
   standard: {
-    line: "#000080", lineWidth: 0.8, lineOpacity: 0.9, text: "#000080", halo: "#ffffff", haloWidth: 1.5,
+    line: "#000080", lineWidth: 0.7, lineOpacity: 0.9, text: "#000080", halo: "#ffffff", haloWidth: 1.5,
     // Hover highlight: the parcel's border only thickens (no fill tint) over the light
     // OSM base.
-    fill: "#000080", hoverLineWidth: 3.2,
+    fill: "#000080", hoverLineWidth: 2,
   },
 } as const;
 
@@ -885,6 +1027,8 @@ function applyCadastralColors(map: MapLibreMap, satellite: boolean) {
 // rendered (fill-opacity 0) and thus queryable. Order does not matter: queryRenderedFeatures
 // returns topmost-first.
 const ATTRIBUTE_POPUP_LAYER_IDS = [
+  STATE_POLICE_POINT_LAYER_ID,
+  STATE_POLICE_POINT_HALO_LAYER_ID,
   GP_BOUNDARIES_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
@@ -928,6 +1072,7 @@ const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
   [STATE_ASSEMBLY_FILL_LAYER_ID]: "Assembly Constituency",
   [STATE_PARLIAMENT_FILL_LAYER_ID]: "Parliamentary Constituency",
   [STATE_POLICE_FILL_LAYER_ID]: "Police Station",
+  [STATE_POLICE_POINT_LAYER_ID]: "Police Station Location",
   [POLICE_HOBLIES_FILL_LAYER_ID]: "Police-area Hobli",
   [POLICE_VILLAGES_FILL_LAYER_ID]: "Police-area Village",
   [DISTRICT_TALUKS_FILL_LAYER_ID]: "Taluk",
@@ -958,6 +1103,9 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   taluk: "Taluk",
   hobli: "Hobli",
   gram_panchayat: "Gram Panchayat",
+  taluk_panchayat: "Taluk Panchayat",
+  no_of_villages: "No. of Villages",
+  source_file: "Source File",
 };
 
 // "st_nm" -> "St Nm" is wrong for display; keys without a known label get a sensible split:
@@ -1019,6 +1167,7 @@ const BOUNDARY_LAYER_IDS = [
   STATE_POLICE_FILL_LAYER_ID,
   STATE_POLICE_LINE_LAYER_ID,
   STATE_POLICE_LABEL_LAYER_ID,
+  STATE_POLICE_POINT_LAYER_ID,
   POLICE_HOBLIES_FILL_LAYER_ID,
   POLICE_HOBLIES_LINE_LAYER_ID,
   POLICE_HOBLIES_LABEL_LAYER_ID,
@@ -1052,6 +1201,18 @@ const BOUNDARY_LAYER_IDS = [
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
   VILLAGE_CADASTRALS_LABELS_LAYER_ID,
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_BOUNDARY_LINE_LAYER_ID,
+  GBA_BOUNDARY_LABELS_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_CORPORATIONS_LINE_LAYER_ID,
+  GBA_CORPORATIONS_LABELS_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_ZONES_LINE_LAYER_ID,
+  GBA_ZONES_LABELS_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
+  GBA_WARDS_LINE_LAYER_ID,
+  GBA_WARDS_LABELS_LAYER_ID,
 ];
 const BOUNDARY_SOURCE_IDS = [
   "kml-data",
@@ -1080,6 +1241,14 @@ const BOUNDARY_SOURCE_IDS = [
   HOBLI_VILLAGES_SOURCE_ID,
   HOBLI_VILLAGES_LABELS_SOURCE_ID,
   VILLAGE_CADASTRALS_SOURCE_ID,
+  GBA_BOUNDARY_SOURCE_ID,
+  GBA_BOUNDARY_LABELS_SOURCE_ID,
+  GBA_CORPORATIONS_SOURCE_ID,
+  GBA_CORPORATIONS_LABELS_SOURCE_ID,
+  GBA_ZONES_SOURCE_ID,
+  GBA_ZONES_LABELS_SOURCE_ID,
+  GBA_WARDS_SOURCE_ID,
+  GBA_WARDS_LABELS_SOURCE_ID,
 ];
 
 // Layer ids of the default india_states.geojson (neon-blue states) - shown both under the
@@ -1515,6 +1684,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       onAOIChange,
       onDrawingToolChange,
       onAttributeInfo,
+      onDrillContextChange,
     },
     ref
   ) {
@@ -1619,6 +1789,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
   }, [onWardSelected]);
+  const onDrillContextChangeRef = useRef(onDrillContextChange);
+  useEffect(() => {
+    onDrillContextChangeRef.current = onDrillContextChange;
+  }, [onDrillContextChange]);
   const onBoundariesClearedRef = useRef(onBoundariesCleared);
   useEffect(() => {
     onBoundariesClearedRef.current = onBoundariesCleared;
@@ -1633,6 +1807,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // "administrative" so the india states / districts / taluks / hoblies / villages layers
   // show initially. Layers added later follow the active mode.
   const boundaryLayerModeRef = useRef<BoundaryLayerMode>("administrative");
+  const policeTypeRef = useRef<PoliceType>("all");
+  const policeDistrictRef = useRef("all");
   // Mirrors the active base layer ("satellite" | "terrain" | "default") for refs that run
   // outside React (async cadastral loads), so the parcel grid recolors correctly even when
   // the basemap switched while a village's cadastrals were still loading.
@@ -1668,6 +1844,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         layerId === STATE_POLICE_FILL_LAYER_ID ||
         layerId === STATE_POLICE_LINE_LAYER_ID ||
         layerId === STATE_POLICE_LABEL_LAYER_ID ||
+        layerId === STATE_POLICE_POINT_LAYER_ID ||
+        layerId === STATE_POLICE_POINT_HALO_LAYER_ID ||
+        layerId === STATE_POLICE_POINT_LABEL_LAYER_ID ||
         layerId.startsWith("police-");
       const isCivicLayer =
         layerId === CIVIC_DISTRICTS_FILL_LAYER_ID ||
@@ -1706,11 +1885,40 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     extraLayerKeysRef.current.forEach((key) => {
       const baseId = extraLayerIdFromKey(key);
+      // Manually-toggled Bengaluru files (via the file-tree UI) only show under
+      // "administrative" - the GBA hierarchy itself (Authority/Corporation/Zone/Ward) is
+      // a separate, dedicated set of layers below, not one of these "extra" files.
       if (map.getLayer(`${baseId}-fill`)) {
         map.setLayoutProperty(`${baseId}-fill`, "visibility", showAll ? "visible" : "none");
       }
       if (map.getLayer(`${baseId}-line`)) {
         map.setLayoutProperty(`${baseId}-line`, "visibility", showAll ? "visible" : "none");
+      }
+      if (map.getLayer(`${baseId}-label`)) {
+        map.setLayoutProperty(`${baseId}-label`, "visibility", showAll ? "visible" : "none");
+      }
+    });
+
+    // GBA hierarchy layers follow the "gba" mode directly, same pattern as the states/
+    // districts/etc. groups above - shown only in "gba" mode, hidden (not unloaded) in
+    // every other mode so switching modes and back doesn't lose the drill-down position.
+    const gbaVisible = mode === "gba";
+    [
+      GBA_BOUNDARY_FILL_LAYER_ID,
+      GBA_BOUNDARY_LINE_LAYER_ID,
+      GBA_BOUNDARY_LABELS_LAYER_ID,
+      GBA_CORPORATIONS_FILL_LAYER_ID,
+      GBA_CORPORATIONS_LINE_LAYER_ID,
+      GBA_CORPORATIONS_LABELS_LAYER_ID,
+      GBA_ZONES_FILL_LAYER_ID,
+      GBA_ZONES_LINE_LAYER_ID,
+      GBA_ZONES_LABELS_LAYER_ID,
+      GBA_WARDS_FILL_LAYER_ID,
+      GBA_WARDS_LINE_LAYER_ID,
+      GBA_WARDS_LABELS_LAYER_ID,
+    ].forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", gbaVisible ? "visible" : "none");
       }
     });
 
@@ -1729,6 +1937,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // it hasn't been dismissed yet). Escape gives the panel first priority: it closes the panel
   // without clearing the loaded boundaries.
   const attributeInfoOpenRef = useRef(false);
+  // The loaded India national boundary data, kept so a "India" search can frame the
+  // country even after the boundary layers are hidden by the states loading.
+  const indiaBoundaryDataRef = useRef<GeoJSON.FeatureCollection | null>(null);
+  // The India-states loader, kept so a state search can load the states layer first
+  // (it normally only loads when the India boundary is clicked) and then select the
+  // searched state.
+  const loadIndiaStatesRef = useRef<(() => Promise<void>) | null>(null);
   // Pixel position + timestamp of the previous polygon vertex click, used to tell the second
   // click of a double-click (which closes the polygon) apart from a genuine new vertex.
   const lastVertexClickRef = useRef<{ t: number; x: number; y: number } | null>(null);
@@ -1940,6 +2155,152 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Currently-selected feature id in the default states layer (shared between click and search)
   const selectedStateIdRef = useRef<string | number | null>(null);
 
+  // Restricts the visible state borders (and name labels) to a single state, hiding the
+  // rest of the country's boundaries once that state is selected (e.g. from a search).
+  // The transparent fill hit-area stays unfiltered, so every other state remains
+  // clickable - clicking one simply re-focuses the borders on it.
+  const focusStateBorders = (map: MapLibreMap, stateName: string) => {
+    const filter: FilterSpecification = ["==", ["get", "st_nm"], stateName];
+    for (const layerId of [
+      "states-borders-default",
+      "states-labels-default",
+      "states-labels-default-hover",
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+    }
+  };
+
+  // Restores the full national state-boundary view (all borders + labels visible).
+  const showAllStateBorders = (map: MapLibreMap) => {
+    for (const layerId of [
+      "states-borders-default",
+      "states-labels-default",
+      "states-labels-default-hover",
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, null);
+    }
+  };
+
+  // Restricts the visible district borders (and name labels) to a single district, hiding
+  // the rest of the state's district boundaries once that district is selected from a
+  // search. The transparent fill hit-area stays unfiltered, so every other district
+  // remains clickable - clicking one simply restores all borders and drills into it.
+  const focusDistrictBorders = (map: MapLibreMap, districtName: string) => {
+    const filter: FilterSpecification = ["==", ["get", "dtname"], districtName];
+    for (const layerId of [
+      STATE_DISTRICTS_LINE_LAYER_ID,
+      STATE_DISTRICTS_LABELS_LAYER_ID,
+      `${STATE_DISTRICTS_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+    }
+  };
+
+  // Restores the full district-boundary view (all borders + labels visible) once a
+  // different district is clicked or the drill-down resumes.
+  const showAllDistrictBorders = (map: MapLibreMap) => {
+    for (const layerId of [
+      STATE_DISTRICTS_LINE_LAYER_ID,
+      STATE_DISTRICTS_LABELS_LAYER_ID,
+      `${STATE_DISTRICTS_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, null);
+    }
+  };
+
+  // Restricts the visible taluk borders (and name labels) to a single taluk, hiding the
+  // rest of the district's taluk boundaries once that taluk is selected from a search. The
+  // transparent fill hit-area stays unfiltered, so every other taluk remains clickable -
+  // clicking one simply restores all borders and drills into it.
+  const focusTalukBorders = (map: MapLibreMap, talukName: string) => {
+    // Taluk labels are anchored under the KGISTalukName key (see labelAnchorFeatures), so
+    // one filter expression works for both the boundary lines and the name labels.
+    const filter: FilterSpecification = ["==", ["get", "KGISTalukName"], talukName];
+    for (const layerId of [
+      DISTRICT_TALUKS_LINE_LAYER_ID,
+      DISTRICT_TALUKS_LABELS_LAYER_ID,
+      `${DISTRICT_TALUKS_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+    }
+  };
+
+  // Restores the full taluk-boundary view (all borders + labels visible) once a different
+  // taluk is clicked or the drill-down resumes.
+  const showAllTalukBorders = (map: MapLibreMap) => {
+    for (const layerId of [
+      DISTRICT_TALUKS_LINE_LAYER_ID,
+      DISTRICT_TALUKS_LABELS_LAYER_ID,
+      `${DISTRICT_TALUKS_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, null);
+    }
+  };
+
+  // Restricts the visible hobli borders (and name labels) to a single hobli, hiding the
+  // rest of the taluk's hobli boundaries once that hobli is selected from a search. The
+  // transparent fill hit-area stays unfiltered, so every other hobli remains clickable -
+  // clicking one simply restores all borders and drills into it.
+  const focusHobliBorders = (map: MapLibreMap, hobliName: string) => {
+    // Hobli labels are anchored under the KGISHobliName key (see labelAnchorFeatures), so
+    // one filter expression works for both the boundary lines and the name labels.
+    const filter: FilterSpecification = ["==", ["get", "KGISHobliName"], hobliName];
+    for (const layerId of [
+      TALUK_HOBLIES_LINE_LAYER_ID,
+      TALUK_HOBLIES_LABELS_LAYER_ID,
+      `${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+    }
+  };
+
+  // Restores the full hobli-boundary view (all borders + labels visible) once a different
+  // hobli is clicked or the drill-down resumes.
+  const showAllHobliBorders = (map: MapLibreMap) => {
+    for (const layerId of [
+      TALUK_HOBLIES_LINE_LAYER_ID,
+      TALUK_HOBLIES_LABELS_LAYER_ID,
+      `${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, null);
+    }
+  };
+
+  // The village boundaries use whichever name property the loaded data actually has (see
+  // loadHobliVillages) - re-derive it here for the focus filters.
+  const villageNameKey = () => {
+    const firstProps = loadedVillagesDataRef.current?.features?.[0]?.properties ?? {};
+    return (
+      VILLAGE_NAME_KEYS.find((key) => typeof firstProps[key] === "string") ?? "name"
+    );
+  };
+
+  // A village search shows ONLY the searched village's boundary: hide the sibling
+  // villages' borders and labels (the transparent fill stays unfiltered so villages stay
+  // clickable), mirroring the state/district/taluk/hobli search focus.
+  const focusVillageBorders = (map: MapLibreMap, villageName: string) => {
+    const filter: FilterSpecification = ["==", ["get", villageNameKey()], villageName];
+    for (const layerId of [
+      HOBLI_VILLAGES_LINE_LAYER_ID,
+      HOBLI_VILLAGES_LABELS_LAYER_ID,
+      `${HOBLI_VILLAGES_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, filter);
+    }
+  };
+
+  // Restores the full village-boundary view once a different village is clicked or the
+  // drill-down resumes.
+  const showAllVillageBorders = (map: MapLibreMap) => {
+    for (const layerId of [
+      HOBLI_VILLAGES_LINE_LAYER_ID,
+      HOBLI_VILLAGES_LABELS_LAYER_ID,
+      `${HOBLI_VILLAGES_LABELS_LAYER_ID}-hover`,
+    ]) {
+      if (map.getLayer(layerId)) map.setFilter(layerId, null);
+    }
+  };
+
   const clearStateSelection = (map: MapLibreMap) => {
     if (selectedStateIdRef.current !== null) {
       map.setFeatureState(
@@ -1948,6 +2309,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       );
       selectedStateIdRef.current = null;
     }
+    // Deselecting the state restores the whole country's borders.
+    showAllStateBorders(map);
   };
 
   const selectStateFeature = (map: MapLibreMap, feature: GeoJSONFeature) => {
@@ -1955,6 +2318,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     clearStateSelection(map);
     selectedStateIdRef.current = feature.id;
     map.setFeatureState({ source: STATE_SOURCE_ID, id: feature.id }, { selected: true });
+    const stateName = feature.properties?.st_nm as string | undefined;
+    if (stateName) focusStateBorders(map, stateName);
     if (feature.geometry) {
       map.fitBounds(boundsOfGeometry(feature.geometry), {
         padding: 60,
@@ -2023,6 +2388,35 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Currently-selected taluk name.
   const selectedTalukNameRef = useRef<string | null>(null);
 
+  // GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone -> Ward.
+  // Whether the (single) GBA authority boundary is currently loaded.
+  const loadedGbaBoundaryRef = useRef<boolean>(false);
+  // Whether the corporations layer (below the authority boundary) is currently loaded.
+  const loadedGbaCorporationsRef = useRef<boolean>(false);
+  // Currently-selected corporation feature id.
+  const selectedGbaCorporationIdRef = useRef<string | number | null>(null);
+  // Name of the corporation whose zones are currently loaded, if any.
+  const loadedGbaZonesCorporationRef = useRef<string | null>(null);
+  // Currently-selected zone feature id.
+  const selectedGbaZoneIdRef = useRef<string | number | null>(null);
+  // Name of the zone whose wards are currently loaded, if any (paired with its corporation,
+  // since zone names aren't necessarily unique across corporations).
+  const loadedGbaWardsZoneRef = useRef<{ corporation: string; zone: string } | null>(null);
+  // Currently-selected ward feature id.
+  const selectedGbaWardIdRef = useRef<string | number | null>(null);
+  // Set synchronously the instant each level's load starts, cleared when it settles - a
+  // fast double-click (or a stray duplicate event listener from dev-mode hot-reload) firing
+  // the same load function twice before the first call's fetch even resolves would
+  // otherwise both reach addSource, and the second one throws "Source already exists"
+  // (clearGba* at the top of each load function only cleans up a *previous, finished*
+  // load - it can't see another call still in flight).
+  const gbaLoadingRef = useRef<{ boundary: boolean; corporations: boolean; zones: boolean; wards: boolean }>({
+    boundary: false,
+    corporations: false,
+    zones: false,
+    wards: false,
+  });
+
   // Name of the taluk whose hoblies are currently loaded, if any.
   const loadedHobliesTalukRef = useRef<string | null>(null);
   // Currently-selected hobli feature id.
@@ -2078,6 +2472,322 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     loadedDistrictsDataRef.current = null;
   };
 
+  // --- GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone ->
+  // Ward. Each level's load function fetches its own dedicated gba-* API route (server-side
+  // filtered by the parent's name for Corporation/Zone/Ward) and adds a fill/line/label
+  // layer set styled consistently with the existing Bengaluru file-tree color coding
+  // (colorForBengaluruFileKey: corporation=orange, zone=blue, ward=green). Clear functions
+  // only ever remove their own level - cascading down to child levels is the caller's job
+  // (the click handlers below), matching how clearDistrictTaluks etc. work elsewhere.
+
+  const clearGbaWards = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_WARDS_FILL_LAYER_ID)) map.removeLayer(GBA_WARDS_FILL_LAYER_ID);
+    if (map.getLayer(GBA_WARDS_LINE_LAYER_ID)) map.removeLayer(GBA_WARDS_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_WARDS_LABELS_LAYER_ID);
+    if (map.getSource(GBA_WARDS_SOURCE_ID)) map.removeSource(GBA_WARDS_SOURCE_ID);
+    if (map.getSource(GBA_WARDS_LABELS_SOURCE_ID)) map.removeSource(GBA_WARDS_LABELS_SOURCE_ID);
+    loadedGbaWardsZoneRef.current = null;
+    selectedGbaWardIdRef.current = null;
+  };
+
+  const clearGbaZones = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_ZONES_FILL_LAYER_ID)) map.removeLayer(GBA_ZONES_FILL_LAYER_ID);
+    if (map.getLayer(GBA_ZONES_LINE_LAYER_ID)) map.removeLayer(GBA_ZONES_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_ZONES_LABELS_LAYER_ID);
+    if (map.getSource(GBA_ZONES_SOURCE_ID)) map.removeSource(GBA_ZONES_SOURCE_ID);
+    if (map.getSource(GBA_ZONES_LABELS_SOURCE_ID)) map.removeSource(GBA_ZONES_LABELS_SOURCE_ID);
+    loadedGbaZonesCorporationRef.current = null;
+    selectedGbaZoneIdRef.current = null;
+  };
+
+  const clearGbaCorporations = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_CORPORATIONS_FILL_LAYER_ID)) map.removeLayer(GBA_CORPORATIONS_FILL_LAYER_ID);
+    if (map.getLayer(GBA_CORPORATIONS_LINE_LAYER_ID)) map.removeLayer(GBA_CORPORATIONS_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_CORPORATIONS_LABELS_LAYER_ID);
+    if (map.getSource(GBA_CORPORATIONS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_SOURCE_ID);
+    if (map.getSource(GBA_CORPORATIONS_LABELS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_LABELS_SOURCE_ID);
+    loadedGbaCorporationsRef.current = false;
+    selectedGbaCorporationIdRef.current = null;
+  };
+
+  const clearGbaBoundary = (map: MapLibreMap) => {
+    if (map.getLayer(GBA_BOUNDARY_FILL_LAYER_ID)) map.removeLayer(GBA_BOUNDARY_FILL_LAYER_ID);
+    if (map.getLayer(GBA_BOUNDARY_LINE_LAYER_ID)) map.removeLayer(GBA_BOUNDARY_LINE_LAYER_ID);
+    removeLabelLayer(map, GBA_BOUNDARY_LABELS_LAYER_ID);
+    if (map.getSource(GBA_BOUNDARY_SOURCE_ID)) map.removeSource(GBA_BOUNDARY_SOURCE_ID);
+    if (map.getSource(GBA_BOUNDARY_LABELS_SOURCE_ID)) map.removeSource(GBA_BOUNDARY_LABELS_SOURCE_ID);
+    loadedGbaBoundaryRef.current = false;
+  };
+
+  const loadGbaBoundary = async (map: MapLibreMap) => {
+    // Defends against a double-fire (a fast double-click, or a stray duplicate event
+    // listener left over from dev-mode hot-reload) calling this again before the first
+    // call's addSource has happened - see gbaLoadingRef's comment.
+    if (gbaLoadingRef.current.boundary) return;
+    gbaLoadingRef.current.boundary = true;
+    clearGbaBoundary(map);
+    try {
+      const response = await fetch("/api/datasets/gba-boundary");
+      if (!response.ok) throw new Error(`gba-boundary failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      // The source shapefile only carries an "id" field, no name - stamp one on so it can
+      // get a label like every other level, instead of showing up as an unlabeled outline.
+      const dataWithName: GeoJSON.FeatureCollection = {
+        ...data,
+        features: data.features.map((f) => ({
+          ...f,
+          properties: { ...f.properties, Name: "Greater Bengaluru Authority" },
+        })),
+      };
+
+      map.addSource(GBA_BOUNDARY_SOURCE_ID, { type: "geojson", data: dataWithName });
+      map.addSource(GBA_BOUNDARY_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(dataWithName, ["Name"]),
+      });
+      // The GBA authority boundary is a small part of Karnataka - zoom to it so it's
+      // actually visible, whatever the current view happens to be (whole-India, whole-
+      // Karnataka, etc.).
+      void fitBoundsToGeoJSON(map, dataWithName);
+      map.addLayer({
+        id: GBA_BOUNDARY_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_BOUNDARY_SOURCE_ID,
+        // Fully transparent - just a clickable hit-area, so hovering/clicking anywhere
+        // inside the boundary (not just on its border) works. Only the outline (line
+        // layer) carries the visible style - a bolder violet, distinct from every other
+        // GBA level's color (corporation=orange, zone=blue, ward=green) and from the
+        // state/district blue theme, so it doesn't blend into either on a satellite
+        // basemap.
+        paint: { "fill-color": "#7c3aed", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_BOUNDARY_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_BOUNDARY_SOURCE_ID,
+        paint: { "line-color": "#7c3aed", "line-width": 4 },
+      });
+      const boundaryLabelLayer: any = {
+        id: GBA_BOUNDARY_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_BOUNDARY_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under whichever key was passed as
+          // nameKeys[0] - here "Name" - not a normalized "name".
+          "text-field": ["get", "Name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 14,
+          // There's only one authority label, but it sits at the same anchor as some
+          // corporations' labels below - without this it can lose the collision fight
+          // and simply not render, same reasoning as the other 3 GBA label layers.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#5b21b6", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(boundaryLabelLayer);
+      loadedGbaBoundaryRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load GBA authority boundary:", error);
+    } finally {
+      gbaLoadingRef.current.boundary = false;
+    }
+  };
+
+  const loadGbaCorporations = async (map: MapLibreMap) => {
+    if (gbaLoadingRef.current.corporations) return;
+    gbaLoadingRef.current.corporations = true;
+    clearGbaCorporations(map);
+    try {
+      const response = await fetch("/api/datasets/gba-corporations");
+      if (!response.ok) throw new Error(`gba-corporations failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_CORPORATIONS_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_CORPORATIONS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["Name"]),
+      });
+      map.addLayer({
+        id: GBA_CORPORATIONS_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_CORPORATIONS_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        // Still a real fill layer so hovering/clicking anywhere inside a corporation (not
+        // just on its border) works, same technique used throughout this file.
+        paint: { "fill-color": "#f59e0b", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_CORPORATIONS_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_CORPORATIONS_SOURCE_ID,
+        paint: {
+          "line-color": "#f59e0b",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            4,
+            1.5,
+          ],
+        },
+      });
+      const corpLabelLayer: any = {
+        id: GBA_CORPORATIONS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_CORPORATIONS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "Name" here.
+          "text-field": ["get", "Name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 13,
+          // With 5 corporations packed close together (plus the authority label overlapping
+          // the center one), MapLibre's default collision detection silently drops whichever
+          // labels lose - force every one of them to render regardless.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#92400e", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(corpLabelLayer);
+      loadedGbaCorporationsRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load GBA corporations:", error);
+    } finally {
+      gbaLoadingRef.current.corporations = false;
+    }
+  };
+
+  const loadGbaZones = async (map: MapLibreMap, corporation: string) => {
+    if (gbaLoadingRef.current.zones) return;
+    gbaLoadingRef.current.zones = true;
+    clearGbaZones(map);
+    try {
+      const response = await fetch(`/api/datasets/gba-zones?corporation=${encodeURIComponent(corporation)}`);
+      if (!response.ok) throw new Error(`gba-zones failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_ZONES_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_ZONES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["zone_name", "Name"]),
+      });
+      map.addLayer({
+        id: GBA_ZONES_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_ZONES_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        paint: { "fill-color": "#3563e9", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_ZONES_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_ZONES_SOURCE_ID,
+        paint: {
+          "line-color": "#3563e9",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            5,
+            ["boolean", ["feature-state", "hover"], false],
+            4,
+            1.5,
+          ],
+        },
+      });
+      const zoneLabelLayer: any = {
+        id: GBA_ZONES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_ZONES_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "zone_name" here.
+          "text-field": ["get", "zone_name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 12,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#1d4ed8", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(zoneLabelLayer);
+      loadedGbaZonesCorporationRef.current = corporation.trim().toLowerCase();
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load GBA zones for corporation "${corporation}":`, error);
+    } finally {
+      gbaLoadingRef.current.zones = false;
+    }
+  };
+
+  const loadGbaWards = async (map: MapLibreMap, corporation: string, zone: string) => {
+    if (gbaLoadingRef.current.wards) return;
+    gbaLoadingRef.current.wards = true;
+    clearGbaWards(map);
+    try {
+      const response = await fetch(
+        `/api/datasets/gba-wards?corporation=${encodeURIComponent(corporation)}&zone=${encodeURIComponent(zone)}`
+      );
+      if (!response.ok) throw new Error(`gba-wards failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      const dataWithIds: GeoJSON.FeatureCollection = { ...data, features: data.features.map((f, i) => ({ ...f, id: i })) };
+
+      map.addSource(GBA_WARDS_SOURCE_ID, { type: "geojson", data: dataWithIds, generateId: false });
+      map.addSource(GBA_WARDS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["ward_name", "Name"]),
+      });
+      map.addLayer({
+        id: GBA_WARDS_FILL_LAYER_ID,
+        type: "fill",
+        source: GBA_WARDS_SOURCE_ID,
+        // Fully transparent - border-only, matching the district/state boundary style.
+        paint: { "fill-color": "#10b981", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: GBA_WARDS_LINE_LAYER_ID,
+        type: "line",
+        source: GBA_WARDS_SOURCE_ID,
+        paint: {
+          "line-color": "#10b981",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            4,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const wardLabelLayer: any = {
+        id: GBA_WARDS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: GBA_WARDS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "ward_name" here.
+          "text-field": ["get", "ward_name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#047857", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(wardLabelLayer);
+      loadedGbaWardsZoneRef.current = { corporation: corporation.trim().toLowerCase(), zone: zone.trim().toLowerCase() };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load GBA wards for zone "${zone}":`, error);
+    } finally {
+      gbaLoadingRef.current.wards = false;
+    }
+  };
+
   const clearStateAssembly = (map: MapLibreMap) => {
     if (map.getLayer(STATE_ASSEMBLY_FILL_LAYER_ID)) map.removeLayer(STATE_ASSEMBLY_FILL_LAYER_ID);
     if (map.getLayer(STATE_ASSEMBLY_LINE_LAYER_ID)) map.removeLayer(STATE_ASSEMBLY_LINE_LAYER_ID);
@@ -2119,6 +2829,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getLayer(STATE_POLICE_FILL_LAYER_ID)) map.removeLayer(STATE_POLICE_FILL_LAYER_ID);
     if (map.getLayer(STATE_POLICE_LINE_LAYER_ID)) map.removeLayer(STATE_POLICE_LINE_LAYER_ID);
     if (map.getLayer(STATE_POLICE_LABEL_LAYER_ID)) map.removeLayer(STATE_POLICE_LABEL_LAYER_ID);
+    if (map.getLayer(STATE_POLICE_POINT_LAYER_ID)) map.removeLayer(STATE_POLICE_POINT_LAYER_ID);
+    if (map.getLayer(STATE_POLICE_POINT_HALO_LAYER_ID)) map.removeLayer(STATE_POLICE_POINT_HALO_LAYER_ID);
+    if (map.getLayer(STATE_POLICE_POINT_LABEL_LAYER_ID)) map.removeLayer(STATE_POLICE_POINT_LABEL_LAYER_ID);
     if (map.getSource(STATE_POLICE_SOURCE_ID)) map.removeSource(STATE_POLICE_SOURCE_ID);
     loadedPoliceStateRef.current = null;
     selectedPoliceIdRef.current = null;
@@ -2265,10 +2978,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
-            2,
+            3,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -2356,9 +3069,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
+            3,
             1,
           ],
           "line-opacity": 0.9,
@@ -2454,9 +3167,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
+            3,
             1,
           ],
           "line-opacity": 0.9,
@@ -2504,13 +3217,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
   // Loads all police-station jurisdiction polygons for a state from the same MinIO
   // administrative-boundary hierarchy used by the constituency layers.
-  const loadStatePolice = async (map: MapLibreMap, stateName: string) => {
-    const normalized = stateName.trim().toLowerCase();
+  const loadStatePolice = async (map: MapLibreMap, stateName: string, policeType = policeTypeRef.current, district = policeDistrictRef.current) => {
+    const normalized = `${stateName.trim().toLowerCase()}:${policeType}:${district}`;
     if (loadedPoliceStateRef.current === normalized) return;
 
     try {
       const response = await fetch(
-        `/api/datasets/state-police-stations?state=${encodeURIComponent(stateName)}`,
+        `/api/datasets/state-police-stations?state=${encodeURIComponent(stateName)}&type=${encodeURIComponent(policeType)}&district=${encodeURIComponent(district)}`,
       );
       if (!response.ok) {
         console.warn(`No police station boundary data available for "${stateName}"`);
@@ -2529,6 +3242,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         id: STATE_POLICE_FILL_LAYER_ID,
         type: "fill",
         source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "JURISDICTION"],
         paint: {
           "fill-color": "#8b5cf6",
           "fill-opacity": [
@@ -2545,13 +3259,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         id: STATE_POLICE_LINE_LAYER_ID,
         type: "line",
         source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "JURISDICTION"],
         paint: {
           "line-color": "#7c3aed",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3,
-            1.25,
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            2,
+            0.9,
           ],
           "line-opacity": 0.95,
         },
@@ -2560,9 +3277,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         id: STATE_POLICE_LABEL_LAYER_ID,
         type: "symbol",
         source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "JURISDICTION"],
         minzoom: 7,
         layout: {
-          "text-field": ["coalesce", ["get", "PS_BOUNDName"], ["get", "_police_station"]],
+          "text-field": ["get", "station_name"],
           "text-font": ["Noto Sans Regular"],
           "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 11, 13, 15, 16],
           "text-anchor": "center",
@@ -2578,6 +3296,61 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "text-halo-blur": 0.4,
         },
       });
+      // A large translucent halo remains obvious over both bright city imagery and dark
+      // terrain, while its center stays anchored to the exact official point coordinate.
+      map.addLayer({
+        id: STATE_POLICE_POINT_HALO_LAYER_ID,
+        type: "circle",
+        source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "LOCATION"],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2, 8, 4, 11, 8, 14, 13],
+          "circle-color": "#ef4444",
+          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 5, 0.08, 8, 0.15, 11, 0.24, 14, 0.3],
+          "circle-blur": 0.15,
+        },
+      });
+      map.addLayer({
+        id: STATE_POLICE_POINT_LAYER_ID,
+        type: "circle",
+        source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "LOCATION"],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 1.5, 7, 2, 9, 3, 11, 5, 14, 8],
+          "circle-color": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false], "#7f1d1d",
+            "#dc2626",
+          ],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 5, 0.5, 8, 1, 11, 2, 14, 3],
+        },
+      });
+      map.addLayer({
+        id: STATE_POLICE_POINT_LABEL_LAYER_ID,
+        type: "symbol",
+        source: STATE_POLICE_SOURCE_ID,
+        filter: ["==", ["get", "feature_role"], "LOCATION"],
+        minzoom: 10,
+        layout: {
+          "text-field": ["get", "station_name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 10, 10, 13, 12, 16, 14],
+          "text-offset": [0, 1.7],
+          "text-anchor": "top",
+          "text-max-width": 24,
+          "text-line-height": 1.15,
+          "text-padding": 4,
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+        },
+        paint: {
+          "text-color": "#7f1d1d",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2,
+          "text-halo-blur": 0.3,
+        },
+      });
 
       loadedPoliceStateRef.current = normalized;
       applyBoundaryLayerVisibility(map);
@@ -2587,10 +3360,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
   };
 
-  const loadPoliceCoverage = async (map: MapLibreMap, folder: string) => {
+  const loadPoliceCoverage = async (map: MapLibreMap, station: string) => {
     try {
       const response = await fetch(
-        `/api/datasets/police-station-coverage?folder=${encodeURIComponent(folder)}`,
+        `/api/datasets/police-station-coverage?station=${encodeURIComponent(station)}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const { hoblis, villages } = (await response.json()) as {
@@ -2612,7 +3385,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: POLICE_HOBLIES_SOURCE_ID,
         minzoom: 8,
-        paint: { "line-color": "#f59e0b", "line-width": 1.5, "line-opacity": 0.95 },
+        paint: { "line-color": "#f59e0b", "line-width": 1, "line-opacity": 0.95 },
       });
       map.addLayer({
         id: POLICE_HOBLIES_LABEL_LAYER_ID,
@@ -2637,21 +3410,21 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         id: POLICE_VILLAGES_FILL_LAYER_ID,
         type: "fill",
         source: POLICE_VILLAGES_SOURCE_ID,
-        minzoom: 10,
+        minzoom: 7,
         paint: { "fill-color": "#06b6d4", "fill-opacity": 0.035 },
       });
       map.addLayer({
         id: POLICE_VILLAGES_LINE_LAYER_ID,
         type: "line",
         source: POLICE_VILLAGES_SOURCE_ID,
-        minzoom: 10,
-        paint: { "line-color": "#06b6d4", "line-width": 1, "line-opacity": 0.9 },
+        minzoom: 7,
+        paint: { "line-color": "#06b6d4", "line-width": 0.8, "line-opacity": 0.9 },
       });
       map.addLayer({
         id: POLICE_VILLAGES_LABEL_LAYER_ID,
         type: "symbol",
         source: POLICE_VILLAGES_SOURCE_ID,
-        minzoom: 11,
+        minzoom: 9,
         layout: {
           "text-field": ["get", "KGISVillageName"],
           "text-font": ["Noto Sans Regular"],
@@ -2667,8 +3440,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       });
       applyBoundaryLayerVisibility(map);
     } catch (error) {
-      console.error(`Failed to load administrative coverage for ${folder}:`, error);
-      showLayerNotice(`Could not load police coverage data.`);
+      console.error(`Failed to load administrative coverage for ${station}:`, error);
     }
   };
 
@@ -2717,18 +3489,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: GP_DISTRICTS_SOURCE_ID,
         paint: {
           "fill-color": "#FF6600",
-          // Lines-only: the base opacity is 0 (no orange wash over the basemap), hover
-          // still highlights an unselected district under the cursor. The selected
-          // district gets NO fill and no hover highlight (checked first), so only its
-          // boundary line thickens.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a district
+          // (not just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -2737,14 +3501,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         type: "line",
         source: GP_DISTRICTS_SOURCE_ID,
         paint: {
-          // Bright neon orange at full opacity with a slightly thicker stroke so the GP
-          // district borders glow clearly against the satellite imagery.
+          // Bright neon orange at full opacity. On hover/selection (feature-state) the
+          // border only thickens, the color stays orange - no fill, no color change
+          // (same highlight as the other boundary layers, just with the GP district color).
           "line-color": "#FF6600",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
             2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -2850,8 +3617,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
             2.5,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -2950,7 +3717,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           // Bright neon magenta at full opacity - one step deeper than the districts' neon
           // orange, so the civic hierarchy reads clearly.
           "line-color": "#EC4899",
-          "line-width": 1.5,
+          "line-width": 1,
           "line-opacity": 1,
         },
       });
@@ -3028,18 +3795,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: GP_TALUKS_SOURCE_ID,
         paint: {
           "fill-color": "#A855F7",
-          // Lines-only: the base opacity is 0 (no purple wash over the basemap), hover
-          // still highlights an unselected taluk under the cursor. The selected taluk
-          // gets NO fill and no hover highlight (checked first), so only its boundary
-          // line thickens.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "selected"], false],
-            0,
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a taluk (not
+          // just on its border) triggers the highlight. It never paints anything - the
+          // highlight lives on the boundary line below, so the basemap stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -3049,13 +3808,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: GP_TALUKS_SOURCE_ID,
         paint: {
           // Bright neon purple at full opacity - one step deeper than the districts' neon
-          // orange, so the GP hierarchy reads clearly.
+          // orange, so the GP hierarchy reads clearly. On hover/selection (feature-state)
+          // the border only thickens, the color stays purple - no fill, no color change
+          // (same highlight as the other boundary layers, just with the GP taluk color).
           "line-color": "#A855F7",
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            3.5,
-            2,
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -3134,14 +3897,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         source: GP_BOUNDARIES_SOURCE_ID,
         paint: {
           "fill-color": "#FFEA00",
-          // Lines-only: the base opacity is 0 (no yellow wash over the basemap), hover
-          // still highlights the gram panchayat under the cursor.
-          "fill-opacity": [
-            "case",
-            ["boolean", ["feature-state", "hover"], false],
-            0.2,
-            0,
-          ],
+          // Fully transparent hit-area so hovering/clicking anywhere inside a gram
+          // panchayat (not just on its border) triggers the highlight. It never paints
+          // anything - the highlight lives on the boundary line below, so the basemap
+          // stays visible.
+          "fill-opacity": 0,
         },
       });
 
@@ -3152,9 +3912,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         paint: {
           // Bright neon yellow at full opacity - one step deeper than the taluks' neon
           // purple, so the GP hierarchy reads clearly (orange districts -> purple taluks
-          // -> neon yellow gram panchayats).
+          // -> neon yellow gram panchayats). On hover/selection (feature-state) the
+          // border only thickens, the color stays yellow - no fill, no color change
+          // (same highlight as the other boundary layers, just with the GP color).
           "line-color": "#FFEA00",
-          "line-width": 2,
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
           "line-opacity": 1,
         },
       });
@@ -3366,10 +4135,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
-            2,
+            3,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -3490,10 +4259,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
-            2,
+            3,
+            1,
           ],
           "line-opacity": 1,
         },
@@ -3621,10 +4390,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "line-width": [
             "case",
             ["boolean", ["feature-state", "selected"], false],
-            5,
+            2.5,
             ["boolean", ["feature-state", "hover"], false],
-            8,
-            1.5,
+            3,
+            1,
           ],
           "line-opacity": 0.95,
         },
@@ -3663,6 +4432,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       map.addLayer(villageLabelLayer);
       map.addLayer(hoverLabelLayerSpec(villageLabelLayer));
 
+      // Village labels replace the parent hobli label while drilling down. Keeping both
+      // makes the hobli name (for example "Bikkodu") look like another village label and
+      // encourages clicks on a village polygon underneath it.
+      if (map.getLayer(TALUK_HOBLIES_LABELS_LAYER_ID)) {
+        map.setLayoutProperty(TALUK_HOBLIES_LABELS_LAYER_ID, "visibility", "none");
+      }
+      if (map.getLayer(`${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`)) {
+        map.setLayoutProperty(`${TALUK_HOBLIES_LABELS_LAYER_ID}-hover`, "visibility", "none");
+      }
+
       loadedVillagesHobliRef.current = normalized;
       applyBoundaryLayerVisibility(map);
     } catch (error) {
@@ -3683,16 +4462,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     talukName: string,
     districtName: string,
     stateName: string,
+    villageCode?: string,
     data?: GeoJSON.FeatureCollection
   ) => {
-    const normalized = villageName.trim().toLowerCase();
+    const normalized = `${villageCode ?? ""}:${villageName.trim().toLowerCase()}`;
     if (loadedCadastralsVillageRef.current === normalized) return; // already showing
     const generation = drillGenerationRef.current; // stale-load guard for undo/redo
 
     console.log(`Loading cadastrals for village: ${villageName}, hobli: ${hobliName}, taluk: ${talukName}, district: ${districtName}, state: ${stateName}`);
 
     const cacheBust = Date.now();
-    const url = `/api/datasets/village-cadastrals?village=${encodeURIComponent(villageName)}&hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}&_t=${cacheBust}`;
+    const villageCodeParam = villageCode ? `&villageCode=${encodeURIComponent(villageCode)}` : "";
+    const url = `/api/datasets/village-cadastrals?village=${encodeURIComponent(villageName)}${villageCodeParam}&hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}&_t=${cacheBust}`;
 
     try {
       let cadastralData: GeoJSON.FeatureCollection;
@@ -3998,6 +4779,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         snap.hoblies?.parent ?? "",
         snap.taluks?.parent ?? "",
         snap.state ?? "",
+        undefined,
         snap.cadastrals.data
       );
     }
@@ -4041,17 +4823,49 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     stateName: string,
     districtName: string
   ): Promise<boolean> => {
-    if (!selectStateByName(map, stateName)) return false;
+    // The states layer only exists once the India boundary has been clicked. Load it now
+    // so a district search works even on a fresh map (mirrors the state-search path), and
+    // poll briefly since querySourceFeatures can lag a moment behind addSource.
+    if (!map.getSource(STATE_SOURCE_ID) && loadIndiaStatesRef.current) {
+      try {
+        await loadIndiaStatesRef.current();
+      } catch (err) {
+        console.error("Failed to load states for district search:", err);
+        return false;
+      }
+    }
+    let stateSelected = false;
+    for (let i = 0; i < 20; i++) {
+      if (selectStateByName(map, stateName)) {
+        stateSelected = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!stateSelected) return false;
     selectedStateNameRef.current = stateName;
 
     await loadStateDistricts(map, stateName);
     const data = loadedDistrictsDataRef.current;
+    // Only states with district data in MinIO resolve (Karnataka today); others have
+    // nothing to select against.
     if (!data) return false;
 
-    const normalized = districtName.trim().toLowerCase();
-    const index = data.features.findIndex(
-      (f) => ((f.properties?.dtname as string | undefined) ?? "").trim().toLowerCase() === normalized
+    const normalized = normalizeNameForMatch(districtName);
+    // Exact district-name match first, then a unique prefix match so partial names like
+    // "Karnataka, Has" still resolve to Hassan (ambiguous prefixes do nothing).
+    let index = data.features.findIndex(
+      (f) => normalizeNameForMatch((f.properties?.dtname as string | undefined) ?? "") === normalized
     );
+    if (index === -1) {
+      const prefixMatches = data.features
+        .map((f, i) => ({
+          i,
+          name: normalizeNameForMatch((f.properties?.dtname as string | undefined) ?? ""),
+        }))
+        .filter(({ name }) => name.startsWith(normalized));
+      if (prefixMatches.length === 1) index = prefixMatches[0]!.i;
+    }
     if (index === -1) return false;
     const feature = data.features[index];
     if (!feature) return false;
@@ -4076,7 +4890,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     const actualDistrictName = (feature.properties?.dtname as string | undefined) ?? districtName;
     selectedDistrictNameRef.current = actualDistrictName;
-    await loadDistrictTaluks(map, actualDistrictName, stateName);
+    // A district search shows ONLY the searched district's boundary: drop any taluk layers
+    // left over from an earlier drill-down and hide the other districts' borders/labels.
+    // (Clicking a district on the map still drills into its taluks - that path is separate.)
+    clearDistrictTaluks(map);
+    focusDistrictBorders(map, actualDistrictName);
     return true;
   };
 
@@ -4092,12 +4910,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   ): Promise<boolean> => {
     if (!(await selectDistrictByName(map, stateName, districtName))) return false;
 
+    // selectDistrictByName stops at the district (no taluks by design) - load this
+    // district's taluks explicitly for the taluk-level search.
+    const actualDistrictName = selectedDistrictNameRef.current ?? districtName;
+    await loadDistrictTaluks(map, actualDistrictName, stateName);
     const data = loadedTaluksDataRef.current;
     if (!data) return false;
 
-    const normalized = talukName.trim().toLowerCase();
+    const normalized = normalizeNameForMatch(talukName);
     const index = data.features.findIndex(
-      (f) => ((f.properties?.KGISTalukName as string | undefined) ?? "").trim().toLowerCase() === normalized
+      (f) => normalizeNameForMatch((f.properties?.KGISTalukName as string | undefined) ?? "") === normalized
     );
     if (index === -1) return false;
     const feature = data.features[index];
@@ -4121,12 +4943,255 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     }
 
     const actualTalukName = (feature.properties?.KGISTalukName as string | undefined) ?? talukName;
-    const actualDistrictName = selectedDistrictNameRef.current ?? districtName;
     // Keep the name ref in sync so clicking a hobli after a search-selected taluk still
     // auto-loads its villages (mirrors the map-click path and selectDistrictByName).
     selectedTalukNameRef.current = actualTalukName;
-    await loadTalukHoblies(map, actualTalukName, actualDistrictName, stateName);
+    // A taluk search shows ONLY the searched taluk's boundary: drop any hobli layers left
+    // over from an earlier drill-down and hide the other taluks' borders/labels. (Clicking
+    // a taluk on the map still drills into its hoblies - that path is separate.)
+    clearTalukHoblies(map);
+    focusTalukBorders(map, actualTalukName);
+    reportDrillContext();
     return true;
+  };
+
+  // Selects a hobli by name within a taluk/district/state (e.g. from a
+  // "Karnataka, Hassan, Belur, Sakleshpur" search): resolves the chain down to the taluk
+  // via selectTalukByName, loads that taluk's hoblies, then finds and selects the matching
+  // hobli feature by name - mirroring a hobli click, but stopping at the hobli itself.
+  // Returns false if any part of the chain can't be resolved.
+  const selectHobliByName = async (
+    map: MapLibreMap,
+    stateName: string,
+    districtName: string,
+    talukName: string,
+    hobliName: string
+  ): Promise<boolean> => {
+    if (!(await selectTalukByName(map, stateName, districtName, talukName))) return false;
+
+    // selectTalukByName stops at the taluk (no hoblies by design) - load this taluk's
+    // hoblies explicitly for the hobli-level search.
+    const actualTalukName = selectedTalukNameRef.current ?? talukName;
+    const actualDistrictName = selectedDistrictNameRef.current ?? districtName;
+    await loadTalukHoblies(map, actualTalukName, actualDistrictName, stateName);
+    const data = loadedHobliesDataRef.current;
+    if (!data) return false;
+
+    const normalized = normalizeNameForMatch(hobliName);
+    // Exact hobli-name match first, then a unique prefix match (ambiguous prefixes do
+    // nothing), matching the district/taluk search behavior.
+    let index = data.features.findIndex(
+      (f) => normalizeNameForMatch((f.properties?.KGISHobliName as string | undefined) ?? "") === normalized
+    );
+    if (index === -1) {
+      const prefixMatches = data.features
+        .map((f, i) => ({
+          i,
+          name: normalizeNameForMatch((f.properties?.KGISHobliName as string | undefined) ?? ""),
+        }))
+        .filter(({ name }) => name.startsWith(normalized));
+      if (prefixMatches.length === 1) index = prefixMatches[0]!.i;
+    }
+    if (index === -1) return false;
+    const feature = data.features[index];
+    if (!feature) return false;
+
+    if (selectedHobliIdRef.current !== null && selectedHobliIdRef.current !== index) {
+      map.setFeatureState(
+        { source: TALUK_HOBLIES_SOURCE_ID, id: selectedHobliIdRef.current },
+        { selected: false }
+      );
+    }
+    selectedHobliIdRef.current = index;
+    map.setFeatureState({ source: TALUK_HOBLIES_SOURCE_ID, id: index }, { selected: true });
+
+    if (feature.geometry) {
+      map.fitBounds(boundsOfGeometry(feature.geometry), {
+        padding: 120,
+        duration: 800,
+        maxZoom: 14,
+      });
+    }
+
+    const actualHobliName = (feature.properties?.KGISHobliName as string | undefined) ?? hobliName;
+    selectedHobliNameRef.current = actualHobliName;
+    // A hobli search shows ONLY the searched hobli's boundary: drop any village layers
+    // left over from an earlier drill-down and hide the other hoblies' borders/labels.
+    // (Clicking a hobli on the map still drills into its villages - that path is separate.)
+    clearHobliVillages(map);
+    focusHobliBorders(map, actualHobliName);
+    return true;
+  };
+
+  // Selects a village by name within a hobli/taluk/district/state (e.g. from a
+  // "Karnataka, Hassan, Belur, Kasaba, Aduvalli" search): resolves the chain down to the
+  // hobli via selectHobliByName, loads that hobli's villages, then finds and selects the
+  // matching village feature by name - mirroring a village click, but stopping at the
+  // village itself (no cadastral auto-load). Returns false if any part of the chain can't
+  // be resolved.
+  const selectVillageByName = async (
+    map: MapLibreMap,
+    stateName: string,
+    districtName: string,
+    talukName: string,
+    hobliName: string,
+    villageName: string
+  ): Promise<boolean> => {
+    if (!(await selectHobliByName(map, stateName, districtName, talukName, hobliName))) return false;
+
+    // selectHobliByName stops at the hobli (no villages by design) - load this hobli's
+    // villages explicitly for the village-level search.
+    const actualHobliName = selectedHobliNameRef.current ?? hobliName;
+    const actualTalukName = selectedTalukNameRef.current ?? talukName;
+    const actualDistrictName = selectedDistrictNameRef.current ?? districtName;
+    await loadHobliVillages(map, actualHobliName, actualTalukName, actualDistrictName, stateName);
+    const data = loadedVillagesDataRef.current;
+    if (!data) return false;
+
+    const normalized = normalizeNameForMatch(villageName);
+    // Exact village-name match first, then a unique prefix match (ambiguous prefixes do
+    // nothing), matching the district/taluk/hobli search behavior.
+    const key = villageNameKey();
+    let index = data.features.findIndex(
+      (f) => normalizeNameForMatch((f.properties?.[key] as string | undefined) ?? "") === normalized
+    );
+    if (index === -1) {
+      const prefixMatches = data.features
+        .map((f, i) => ({
+          i,
+          name: normalizeNameForMatch((f.properties?.[key] as string | undefined) ?? ""),
+        }))
+        .filter(({ name }) => name.startsWith(normalized));
+      if (prefixMatches.length === 1) index = prefixMatches[0]!.i;
+    }
+    if (index === -1) return false;
+    const feature = data.features[index];
+    if (!feature) return false;
+
+    if (selectedVillageIdRef.current !== null && selectedVillageIdRef.current !== index) {
+      map.setFeatureState(
+        { source: HOBLI_VILLAGES_SOURCE_ID, id: selectedVillageIdRef.current },
+        { selected: false }
+      );
+    }
+    selectedVillageIdRef.current = index;
+    map.setFeatureState({ source: HOBLI_VILLAGES_SOURCE_ID, id: index }, { selected: true });
+
+    if (feature.geometry) {
+      map.fitBounds(boundsOfGeometry(feature.geometry), {
+        padding: 140,
+        duration: 800,
+        maxZoom: 15,
+      });
+    }
+
+    const actualVillageName = (feature.properties?.[key] as string | undefined) ?? villageName;
+    selectedVillageNameRef.current = actualVillageName;
+    // A village search shows ONLY the searched village's boundary: drop any cadastral
+    // layers left over from an earlier drill-down and hide the other villages'
+    // borders/labels. (Clicking a village on the map still drills into its cadastrals -
+    // that path is separate.)
+    clearVillageCadastrals(map);
+    focusVillageBorders(map, actualVillageName);
+    return true;
+  };
+
+  // Resolves a bare district-name query (e.g. "Hassan", without the "Karnataka" prefix) by
+  // checking the Karnataka district list: only Karnataka has district data loaded, so a name
+  // that matches one of its districts resolves to "Karnataka, <name>". Unknown names do
+  // nothing - the suggestions dropdown still offers the state-qualified label.
+  const resolveDistrictByNameOnly = async (map: MapLibreMap, name: string): Promise<boolean> => {
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) return false;
+    const districtNames = await getKarnatakaDistrictNames();
+    if (!districtNames || !districtNames.includes(normalized)) return false;
+    // selectDistrictByName loads the states layer itself if it isn't on the map yet.
+    await selectDistrictByName(map, "Karnataka", name);
+    return true;
+  };
+
+  // Resolves a bare hobli-name query (e.g. "Kasaba", without the state/district/taluk
+  // prefix) against the all-Karnataka hobli index. A name matching exactly one hobli
+  // resolves to its full "Karnataka, <district>, <taluk>, <hobli>" chain; when the name
+  // matches several ("Kasaba" appears in ~95 taluks), the hobli inside the taluk the user
+  // is currently looking at wins, and anything still ambiguous is left to the dropdown.
+  const resolveHobliByNameOnly = async (map: MapLibreMap, name: string): Promise<boolean> => {
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) return false;
+    const index = await getKarnatakaHoblis();
+    if (!index || index.length === 0) return false;
+    const matches = index.filter((entry) => entry.hobli.toLowerCase().includes(normalized));
+    if (matches.length === 0) return false;
+
+    let pick = matches.length === 1 ? matches[0] : undefined;
+    if (!pick) {
+      // Multiple matches - prefer the one inside the currently-selected taluk, if any.
+      const district = selectedDistrictNameRef.current;
+      const taluk = selectedTalukNameRef.current;
+      const nDistrict = district ? normalizeNameForMatch(district) : "";
+      const nTaluk = taluk ? normalizeNameForMatch(taluk) : "";
+      if (nDistrict && nTaluk) {
+        pick = matches.find(
+          (entry) =>
+            normalizeNameForMatch(entry.district) === nDistrict &&
+            normalizeNameForMatch(entry.taluk) === nTaluk
+        );
+      }
+      if (!pick && nTaluk) {
+        pick = matches.find((entry) => normalizeNameForMatch(entry.taluk) === nTaluk);
+      }
+    }
+    if (!pick) return false; // still ambiguous - the dropdown lists the candidates
+    await selectHobliByName(map, "Karnataka", pick.district, pick.taluk, pick.hobli);
+    return true;
+  };
+
+  // Resolves a bare village-name query (e.g. "Aduvalli", without the
+  // state/district/taluk/hobli prefix) against the all-Karnataka village index. A name
+  // matching exactly one village resolves to its full chain; when it matches several
+  // (village names repeat across hoblies), the one inside the hobli the user is currently
+  // looking at wins, then the currently-selected taluk, and anything still ambiguous is
+  // left to the dropdown.
+  const resolveVillageByNameOnly = async (map: MapLibreMap, name: string) => {
+    const normalized = normalizeNameForMatch(name);
+    if (!normalized) return;
+    const index = await getKarnatakaVillages();
+    if (!index || index.length === 0) return;
+    const matches = index.filter((entry) =>
+      normalizeNameForMatch(entry.village).includes(normalized)
+    );
+    if (matches.length === 0) return;
+
+    let pick = matches.length === 1 ? matches[0] : undefined;
+    if (!pick) {
+      // Multiple matches - prefer the one inside the currently-selected hobli, then taluk.
+      const hobli = selectedHobliNameRef.current;
+      const taluk = selectedTalukNameRef.current;
+      const district = selectedDistrictNameRef.current;
+      const nHobli = hobli ? normalizeNameForMatch(hobli) : "";
+      const nTaluk = taluk ? normalizeNameForMatch(taluk) : "";
+      const nDistrict = district ? normalizeNameForMatch(district) : "";
+      if (nHobli && nTaluk && nDistrict) {
+        pick = matches.find(
+          (entry) =>
+            normalizeNameForMatch(entry.hobli) === nHobli &&
+            normalizeNameForMatch(entry.taluk) === nTaluk &&
+            normalizeNameForMatch(entry.district) === nDistrict
+        );
+      }
+      if (!pick && nTaluk) {
+        pick = matches.find((entry) => normalizeNameForMatch(entry.taluk) === nTaluk);
+      }
+    }
+    if (!pick) return; // still ambiguous - the dropdown lists the candidates
+    await selectVillageByName(
+      map,
+      "Karnataka",
+      pick.district,
+      pick.taluk,
+      pick.hobli,
+      pick.village
+    );
   };
 
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
@@ -4988,11 +6053,32 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "hobli",
             "gram_panchayat",
           ];
+          // Gram panchayat features get their own order (Gram Panchayat, Taluk
+          // Panchayat, District, then No. of Villages) and never show the raw
+          // Source File path.
+          const isGpBoundary =
+            layerId === GP_BOUNDARIES_FILL_LAYER_ID ||
+            layerId === GP_BOUNDARIES_LINE_LAYER_ID;
+          const GP_ATTRIBUTE_ROW_ORDER = [
+            "gram_panchayat",
+            "taluk_panchayat",
+            "district",
+            "no_of_villages",
+          ];
           const rows: AttributeRow[] = Object.entries(props)
-            .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "")
+            .filter(
+              ([k, v]) =>
+                !(isGpBoundary && k === "source_file") &&
+                v !== null &&
+                v !== undefined &&
+                String(v).trim() !== ""
+            )
             .sort(([a], [b]) => {
-              const ia = ATTRIBUTE_ROW_ORDER.indexOf(a);
-              const ib = ATTRIBUTE_ROW_ORDER.indexOf(b);
+              const order = isGpBoundary
+                ? GP_ATTRIBUTE_ROW_ORDER
+                : ATTRIBUTE_ROW_ORDER;
+              const ia = order.indexOf(a);
+              const ib = order.indexOf(b);
               if (ia === -1 && ib === -1) return 0;
               if (ia === -1) return 1;
               if (ib === -1) return -1;
@@ -5147,6 +6233,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               boundaryResponse = await fetch("/geodata/india-boundary.geojson");
             }
             const boundaryData = await boundaryResponse.json();
+            indiaBoundaryDataRef.current = boundaryData;
 
             // Add the national boundary source. generateId assigns each feature a numeric id
             // so we can address it with setFeatureState for hover/selection below.
@@ -5169,10 +6256,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 "line-width": [
                   "case",
                   ["boolean", ["feature-state", "hover"], false],
-                  8,
+                  3,
                   ["boolean", ["feature-state", "selected"], false],
-                  5,
                   2.5,
+                  1.25,
                 ],
                 "line-opacity": 1,
               },
@@ -5328,22 +6415,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               },
             });
 
-            // State boundary lines - pure neon cyan at full opacity. On hover/selection
-            // (feature-state) the border only thickens, the color stays cyan - no fill,
+            // State boundary lines - magenta at full opacity. On hover/selection
+            // (feature-state) the border only thickens, the color stays magenta - no fill,
             // no color change (same highlight as the India nation boundary).
             map.addLayer({
               id: "states-borders-default",
               type: "line",
               source: STATE_SOURCE_ID,
               paint: {
-                "line-color": "#00FFFF",
+                "line-color": "#FF00FF",
                 "line-width": [
                   "case",
                   ["boolean", ["feature-state", "selected"], false],
-                  5,
+                  2.5,
                   ["boolean", ["feature-state", "hover"], false],
-                  8,
-                  2,
+                  3,
+                  1,
                 ],
                 "line-opacity": 1,
               },
@@ -5947,6 +7034,186 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
             });
 
+            // --- GBA (Greater Bengaluru Authority) hierarchy click-through:
+            // Authority -> Corporation -> Zone -> Ward. Each level's click loads the next
+            // level down (clearing any previously-loaded deeper levels first) and toggles
+            // off (clearing that deeper level) if the same feature is clicked again -
+            // mirrors the district/taluk click handlers' selected/toggle behavior below.
+            map.on("click", GBA_BOUNDARY_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              if (!e.features?.[0]) return;
+              // MapLibre fires every layer's click handler independently for one click,
+              // not just the topmost - a click on a corporation (which sits inside this
+              // boundary too) would otherwise also reach this handler and immediately
+              // toggle the corporations layer back off right after selecting it.
+              if (
+                map.getLayer(GBA_CORPORATIONS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_CORPORATIONS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              if (loadedGbaCorporationsRef.current) {
+                clearGbaZones(map);
+                clearGbaWards(map);
+                clearGbaCorporations(map);
+              } else {
+                // Immediate feedback that the click registered - the fetch itself is
+                // fast (cached after the first load), but with none of this the UI can
+                // feel unresponsive for however long it takes.
+                map.getCanvas().style.cursor = "wait";
+                void loadGbaCorporations(map).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              }
+            });
+
+            let hoveredGbaCorporationId: string | number | null = null;
+            map.on("mousemove", GBA_CORPORATIONS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaCorporationId !== null && hoveredGbaCorporationId !== feature.id) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+              }
+              hoveredGbaCorporationId = feature.id;
+              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_CORPORATIONS_FILL_LAYER_ID, () => {
+              if (hoveredGbaCorporationId !== null) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+              }
+              hoveredGbaCorporationId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_CORPORATIONS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a zone (inside this corporation) would otherwise also reach this
+              // handler and immediately toggle the zones layer back off - same sibling-
+              // layer issue as the boundary handler above.
+              if (
+                map.getLayer(GBA_ZONES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_ZONES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const corporationName = (feature.properties?.Name as string | undefined)?.trim();
+              if (!corporationName) return;
+
+              if (
+                selectedGbaCorporationIdRef.current === feature.id &&
+                loadedGbaZonesCorporationRef.current === corporationName.toLowerCase()
+              ) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedGbaCorporationIdRef.current = null;
+                clearGbaZones(map);
+                clearGbaWards(map);
+                return;
+              }
+
+              if (selectedGbaCorporationIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: selectedGbaCorporationIdRef.current }, { selected: false });
+              }
+              selectedGbaCorporationIdRef.current = feature.id;
+              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: true });
+              clearGbaZones(map);
+              clearGbaWards(map);
+              map.getCanvas().style.cursor = "wait";
+              void loadGbaZones(map, corporationName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredGbaZoneId: string | number | null = null;
+            map.on("mousemove", GBA_ZONES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaZoneId !== null && hoveredGbaZoneId !== feature.id) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+              }
+              hoveredGbaZoneId = feature.id;
+              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_ZONES_FILL_LAYER_ID, () => {
+              if (hoveredGbaZoneId !== null) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+              }
+              hoveredGbaZoneId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_ZONES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a ward (inside this zone) would otherwise also reach this
+              // handler and immediately toggle the wards layer back off - same sibling-
+              // layer issue as the boundary/corporation handlers above.
+              if (
+                map.getLayer(GBA_WARDS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_WARDS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const zoneName = ((feature.properties?.zone_name ?? feature.properties?.Name) as string | undefined)?.trim();
+              const corporation = loadedGbaZonesCorporationRef.current;
+              if (!zoneName || !corporation) return;
+
+              if (
+                selectedGbaZoneIdRef.current === feature.id &&
+                loadedGbaWardsZoneRef.current?.zone === zoneName.toLowerCase()
+              ) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedGbaZoneIdRef.current = null;
+                clearGbaWards(map);
+                return;
+              }
+
+              if (selectedGbaZoneIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: selectedGbaZoneIdRef.current }, { selected: false });
+              }
+              selectedGbaZoneIdRef.current = feature.id;
+              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: true });
+              clearGbaWards(map);
+              map.getCanvas().style.cursor = "wait";
+              void loadGbaWards(map, corporation, zoneName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredGbaWardId: string | number | null = null;
+            map.on("mousemove", GBA_WARDS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredGbaWardId !== null && hoveredGbaWardId !== feature.id) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+              }
+              hoveredGbaWardId = feature.id;
+              map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", GBA_WARDS_FILL_LAYER_ID, () => {
+              if (hoveredGbaWardId !== null) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+              }
+              hoveredGbaWardId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", GBA_WARDS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (selectedGbaWardIdRef.current !== null) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: selectedGbaWardIdRef.current }, { selected: false });
+              }
+              const isSame = selectedGbaWardIdRef.current === feature.id;
+              selectedGbaWardIdRef.current = isSame ? null : feature.id;
+              if (!isSame) {
+                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: feature.id }, { selected: true });
+              }
+            });
+
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
@@ -5989,6 +7256,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 );
                 selectedDistrictIdRef.current = null;
                 clearDistrictTaluks(map);
+                // A search may have focused the borders on this district - restore all of
+                // them once the district is deselected.
+                showAllDistrictBorders(map);
                 e.preventDefault();
                 if (e.originalEvent) {
                   e.originalEvent.stopPropagation();
@@ -6012,6 +7282,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 { source: STATE_DISTRICTS_SOURCE_ID, id: selectedDistrictIdRef.current },
                 { selected: true }
               );
+              // A search may have focused the borders on a single district - clicking a
+              // district restores the full boundary view before drilling into it.
+              showAllDistrictBorders(map);
               
               // Zoom to district
               if (feature.geometry) {
@@ -6244,11 +7517,48 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                     maxZoom: 13,
                   });
                 }
-                const folder = feature.properties?._storage_folder as string | undefined;
-                if (folder) void loadPoliceCoverage(map, folder);
+                const stationName = feature.properties?.station_name as string | undefined;
+                if (stationName) void loadPoliceCoverage(map, stationName);
               } else {
                 clearPoliceCoverage(map);
               }
+              e.preventDefault();
+              e.originalEvent?.stopPropagation();
+            });
+
+            // Specialized police categories often publish only an official location point.
+            // Keep those stations fully interactive even when no jurisdiction polygon exists.
+            let hoveredPolicePointId: string | number | null = null;
+            map.on("mousemove", STATE_POLICE_POINT_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredPolicePointId !== null && hoveredPolicePointId !== feature.id) {
+                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
+              }
+              hoveredPolicePointId = feature.id;
+              map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: feature.id }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", STATE_POLICE_POINT_LAYER_ID, () => {
+              if (hoveredPolicePointId !== null) {
+                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
+              }
+              hoveredPolicePointId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", STATE_POLICE_POINT_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined || feature.geometry.type !== "Point") return;
+              if (selectedPoliceIdRef.current !== null) {
+                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current }, { selected: false });
+              }
+              selectedPoliceIdRef.current = feature.id;
+              map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: feature.id }, { selected: true });
+              const coordinates = feature.geometry.coordinates as [number, number];
+              map.easeTo({ center: coordinates, zoom: Math.max(map.getZoom(), 14), duration: 800 });
+              const stationName = feature.properties?.station_name as string | undefined;
+              if (stationName) void loadPoliceCoverage(map, stationName);
               e.preventDefault();
               e.originalEvent?.stopPropagation();
             });
@@ -6325,6 +7635,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   { source: DISTRICT_TALUKS_SOURCE_ID, id: selectedTalukIdRef.current },
                   { selected: true }
                 );
+                // A search may have focused the borders on a single taluk - clicking a
+                // taluk restores the full boundary view before drilling into it.
+                showAllTalukBorders(map);
 
                 // Zoom to taluk boundary
                 if (feature.geometry) {
@@ -6364,6 +7677,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 // Deselected the taluk - clear its hobli boundaries and taluk name
                 selectedTalukNameRef.current = null;
                 clearTalukHoblies(map);
+                // A search may have focused the borders on this taluk - restore all of
+                // them once the taluk is deselected.
+                showAllTalukBorders(map);
               }
 
               // Prevent bubbling to district handler
@@ -6441,6 +7757,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   { source: TALUK_HOBLIES_SOURCE_ID, id: selectedHobliIdRef.current },
                   { selected: true }
                 );
+                // A search may have focused the borders on a single hobli - clicking a
+                // hobli restores the full boundary view before drilling into it.
+                showAllHobliBorders(map);
 
                 // Zoom to the hobli so the village boundaries it loads land centered
                 // in the viewport (mirrors the state/district/taluk drill-down levels).
@@ -6473,6 +7792,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               } else {
                 // Deselected the hobli - clear its village boundaries
                 clearHobliVillages(map);
+                // A search may have focused the borders on this hobli - restore all of
+                // them once the hobli is deselected.
+                showAllHobliBorders(map);
               }
 
               // Prevent bubbling to the taluk handler beneath this layer
@@ -6605,6 +7927,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   { source: HOBLI_VILLAGES_SOURCE_ID, id: selectedVillageIdRef.current },
                   { selected: true }
                 );
+                // A search may have focused the borders on a single village - clicking a
+                // village restores the full boundary view before drilling into it.
+                showAllVillageBorders(map);
 
                 // Zoom to the village so the cadastral parcels it loads land centered
                 // in the viewport (mirrors the other drill-down levels).
@@ -6637,8 +7962,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 const districtName = selectedDistrictNameRef.current;
                 const stateName = selectedStateNameRef.current;
                 if (villageName !== "Unknown Village" && hobliName && talukName && districtName && stateName) {
+                  const villageCode = String(
+                    feature.properties?.KGISVillageCode ??
+                      feature.properties?.UniqueVillageCode ??
+                      feature.properties?.KGISVill_1 ??
+                      ""
+                  ).split("_")[0];
                   console.log(`[Village Cadastrals] Requesting cadastrals for village="${villageName}", hobli="${hobliName}", taluk="${talukName}", district="${districtName}", state="${stateName}"`);
-                  void loadVillageCadastrals(map, villageName, hobliName, talukName, districtName, stateName);
+                  void loadVillageCadastrals(
+                    map,
+                    villageName,
+                    hobliName,
+                    talukName,
+                    districtName,
+                    stateName,
+                    villageCode || undefined
+                  );
                 }
               } else {
                 // Deselected the village - clear its cadastral boundaries
@@ -6696,6 +8035,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               indiaStatesLoading = false;
             }
             };
+            loadIndiaStatesRef.current = loadIndiaStates;
           } catch (error) {
             console.error("Failed to load India boundary:", error);
           }
@@ -6776,6 +8116,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === STATE_POLICE_FILL_LAYER_ID ||
         l.id === STATE_POLICE_LINE_LAYER_ID ||
         l.id === STATE_POLICE_LABEL_LAYER_ID ||
+        l.id === STATE_POLICE_POINT_LABEL_LAYER_ID ||
         l.id.startsWith("police-") ||
         l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
         l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
@@ -7174,55 +8515,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         return;
       }
 
-      BOUNDARY_LAYER_IDS.forEach((layerId) => {
-        if (map.getLayer(layerId)) map.removeLayer(layerId);
-      });
-      BOUNDARY_SOURCE_IDS.forEach((sourceId) => {
-        if (map.getSource(sourceId)) map.removeSource(sourceId);
-      });
-
-      // Clear any manually-toggled extra Bengaluru files too
-      extraLayerKeysRef.current.forEach((key) => {
-        const baseId = extraLayerIdFromKey(key);
-        if (map.getLayer(`${baseId}-fill`)) map.removeLayer(`${baseId}-fill`);
-        if (map.getLayer(`${baseId}-line`)) map.removeLayer(`${baseId}-line`);
-        if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
-      });
-      extraLayerKeysRef.current.clear();
-      loadedDistrictsStateRef.current = null;
-      loadedAssemblyStateRef.current = null;
-      selectedAssemblyIdRef.current = null;
-      loadedParliamentStateRef.current = null;
-      selectedParliamentIdRef.current = null;
-      loadedPoliceStateRef.current = null;
-      selectedPoliceIdRef.current = null;
-      loadedGpDistrictsStateRef.current = null;
-      selectedGpDistrictIdRef.current = null;
-      loadedGpTaluksDistrictRef.current = null;
-      selectedGpTalukIdRef.current = null;
-      loadedGpBoundariesTalukRef.current = null;
-      loadedCadastralsVillageRef.current = null;
-      loadedCadastralsDataRef.current = null;
-      selectedVillageNameRef.current = null;
-      // The states source survives the boundary wipe (it's not in BOUNDARY_SOURCE_IDS), so
-      // undo any village cutout that was punched into it.
-      restoreAncestorFills(map);
-      clearStateSelection(map);
-      // Bump the generation so a boundary fetch that was in flight when Escape was pressed
-      // can't re-add its layers over the cleared map.
-      drillGenerationRef.current++;
-      // A full clear is a reset - drop the drill history so a later Ctrl+Z doesn't restore
-      // a stale selection from before the Escape.
-      drillUndoStackRef.current = [];
-      drillRedoStackRef.current = [];
-      // The drawn AOI is also a user-added overlay - Escape clears it along with the
-      // loaded boundaries. (The attribute popup never reaches here: if it was open, the
-      // Escape priority block above already closed it and returned.)
-      clearCompletedAOI(map);
-
-      setUploadedFileName(null);
-      onWardSelectedRef.current?.(null);
-      onBoundariesClearedRef.current?.();
+      clearAllMapState(map);
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -7240,6 +8533,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const baseId = extraLayerIdFromKey(key);
     if (map.getLayer(`${baseId}-fill`)) map.removeLayer(`${baseId}-fill`);
     if (map.getLayer(`${baseId}-line`)) map.removeLayer(`${baseId}-line`);
+    if (map.getLayer(`${baseId}-label`)) map.removeLayer(`${baseId}-label`);
     if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
     extraLayerKeysRef.current.delete(key);
 
@@ -7268,6 +8562,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       source: `${baseId}-data`,
       filter: ["==", "$type", "Polygon"],
       paint: { "line-color": color, "line-width": 1.5 },
+    });
+    // Named labels so each individual polygon (e.g. a GBA zone's sub-area, a ward, an
+    // assembly constituency) can actually be identified on the map, not just its outline -
+    // parseNamedPolygonsFromKML already carries the KML Placemark's <name> as this property.
+    map.addLayer({
+      id: `${baseId}-label`,
+      type: "symbol",
+      source: `${baseId}-data`,
+      filter: ["==", "$type", "Polygon"],
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 11,
+        "text-anchor": "center",
+      },
+      paint: {
+        "text-color": color,
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.5,
+      },
     });
     extraLayerKeysRef.current.add(key);
     applyBoundaryLayerVisibility(map);
@@ -7327,10 +8641,30 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       const map = mapRef.current;
       if (!map) return;
 
+      // Clearing the search bar (or any other empty query) resets the map to its
+      // initial country view: deselects the searched state/district, removes every
+      // boundary layer the search loaded, and frames the whole of India again.
+      if (!query.trim()) {
+        clearAllMapState(map);
+        const indiaGeometry = indiaBoundaryDataRef.current?.features?.find(
+          (f) => f.geometry
+        )?.geometry;
+        if (indiaGeometry) {
+          map.fitBounds(boundsOfGeometry(indiaGeometry), {
+            padding: 60,
+            duration: 800,
+          });
+        }
+        return;
+      }
+
       // Supports:
       //  "<State>" - any state name from the default states layer, e.g. "Karnataka"
       //  "<State>, <District>" - e.g. "Karnataka, Hassan"
       //  "<State>, <District>, <Taluk>" - e.g. "Karnataka, Hassan, Belur"
+      //  "<State>, <District>, <Taluk>, <Hobli>" - e.g. "Karnataka, Hassan, Belur, Kasaba"
+      //  "<State>, <District>, <Taluk>, <Hobli>, <Village>" - e.g.
+      //    "Karnataka, Hassan, Belur, Kasaba, Aduvalli"
       //  "Bengaluru" (all zones) / "Bengaluru, <ward name>" (a single ward)
       //  "Bengaluru, <Region>, <File type>" (e.g. "Bengaluru, Central, Ward Boundary")
       const parts = query.split(",").map((part) => part.trim()).filter(Boolean);
@@ -7362,16 +8696,95 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       recordDrillAction(map);
 
       if (parts.length === 1) {
+        // "India" — the country itself, not a state: frame the national boundary that
+        // is already on the map (no data fetch needed).
+        if (place === "india") {
+          // Frame the national boundary. The India layers are hidden once the states
+          // load, so querySourceFeatures() can't be relied on - use the boundary data
+          // captured when the source was created. Also restore the full country view
+          // (undo any single-state border focus from an earlier state search).
+          showAllStateBorders(map);
+          const indiaGeometry = indiaBoundaryDataRef.current?.features?.find(
+            (f) => f.geometry
+          )?.geometry;
+          if (indiaGeometry) {
+            map.fitBounds(boundsOfGeometry(indiaGeometry), {
+              padding: 60,
+              duration: 800,
+            });
+          }
+          return;
+        }
+        // The states layer only exists once the India boundary has been clicked. If a
+        // state-name search arrives first (e.g. right after the page loads), load the
+        // states now, then select the state - so "search a state" works immediately.
+        if (!map.getSource(STATE_SOURCE_ID) && loadIndiaStatesRef.current) {
+          void (async () => {
+            try {
+              await loadIndiaStatesRef.current?.();
+              // querySourceFeatures can lag a moment behind addSource - poll briefly.
+              for (let i = 0; i < 20; i++) {
+                if (selectStateByName(map, parts[0] ?? "")) return;
+                await new Promise((r) => setTimeout(r, 100));
+              }
+              if (place === "karnataka") loadKarnatakaStateFromMinIO(map);
+              // Not a state — try resolving the single token as a district, then a
+              // hobli, then a village (e.g. "Hassan" → district, "Kasaba" → hobli,
+              // "Aduvalli" → village).
+              void resolveDistrictByNameOnly(map, parts[0] ?? "").then((resolved) => {
+                if (!resolved)
+                  void resolveHobliByNameOnly(map, parts[0] ?? "").then((resolved2) => {
+                    if (!resolved2) void resolveVillageByNameOnly(map, parts[0] ?? "");
+                  });
+              });
+            } catch (err) {
+              console.error("Failed to load states for search:", err);
+            }
+          })();
+          return;
+        }
         // Any state name (Karnataka included) already lives in the default
         // india_states.geojson layer â€” select it there instead of fetching a separate KMZ
         // from MinIO. Fall back to the Karnataka-specific KMZ only as a legacy safety net.
         if (selectStateByName(map, parts[0] ?? "")) return;
         if (place === "karnataka") loadKarnatakaStateFromMinIO(map);
+        // Not a state — try resolving the single token as a district (unique across India,
+        // e.g. "Hassan"), then a hobli (e.g. "Kasaba"), then a village (e.g. "Aduvalli").
+        // Ambiguous names are left to the dropdown, which lists every matching candidate.
+        void resolveDistrictByNameOnly(map, parts[0] ?? "").then((resolved) => {
+          if (!resolved)
+            void resolveHobliByNameOnly(map, parts[0] ?? "").then((resolved2) => {
+              if (!resolved2) void resolveVillageByNameOnly(map, parts[0] ?? "");
+            });
+        });
         return;
       }
 
       if (parts.length === 2) {
         void selectDistrictByName(map, parts[0] ?? "", parts[1] ?? "");
+        return;
+      }
+
+      if (parts.length === 5) {
+        void selectVillageByName(
+          map,
+          parts[0] ?? "",
+          parts[1] ?? "",
+          parts[2] ?? "",
+          parts[3] ?? "",
+          parts[4] ?? ""
+        );
+        return;
+      }
+
+      if (parts.length === 4) {
+        void selectHobliByName(
+          map,
+          parts[0] ?? "",
+          parts[1] ?? "",
+          parts[2] ?? "",
+          parts[3] ?? ""
+        );
         return;
       }
 
@@ -7404,13 +8817,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         mode === "parliamentary" ||
         mode === "gram_panchayat" ||
         mode === "police_station" ||
-        mode === "civic_amenities"
+        mode === "civic_amenities" ||
+        mode === "gba"
       ) {
         clearStateDistricts(map);
         clearDistrictTaluks(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
-        if (mode === "gram_panchayat" || mode === "civic_amenities") {
+        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba") {
           clearStateAssembly(map);
           clearStateParliament(map);
         } else if (mode === "assembly") {
@@ -7425,6 +8839,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           const selectedState = selectedStateNameRef.current;
           if (selectedState) void loadStatePolice(map, selectedState);
         }
+        if (mode === "gba") {
+          clearStatePolice(map);
+        }
       } else if (mode === "administrative") {
         clearStateAssembly(map);
         clearStateParliament(map);
@@ -7432,7 +8849,38 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearGpDistricts(map);
         clearCivicDistricts(map);
       }
+      // The GBA authority boundary is the entry point into its own hierarchy (Authority ->
+      // Corporation -> Zone -> Ward, drilled into by clicking, same as India -> States ->
+      // Districts). Every other mode fully tears down its drill-down on switching away
+      // (e.g. clearStateDistricts/clearDistrictTaluks above) rather than just hiding it, so
+      // GBA does the same for consistency - leaving "gba" mode clears every level, and
+      // re-entering it always starts fresh at the Authority boundary, not wherever the user
+      // last drilled down to.
+      if (mode === "gba") {
+        if (!loadedGbaBoundaryRef.current) void loadGbaBoundary(map);
+      } else {
+        clearGbaWards(map);
+        clearGbaZones(map);
+        clearGbaCorporations(map);
+        clearGbaBoundary(map);
+      }
       applyBoundaryLayerVisibility(map);
+    },
+    setPoliceType: (type: PoliceType) => {
+      policeTypeRef.current = type;
+      const map = mapRef.current;
+      const selectedState = selectedStateNameRef.current;
+      if (!map || !selectedState || boundaryLayerModeRef.current !== "police_station") return;
+      clearStatePolice(map);
+      void loadStatePolice(map, selectedState, type);
+    },
+    setPoliceDistrict: (district: string) => {
+      policeDistrictRef.current = district;
+      const map = mapRef.current;
+      const selectedState = selectedStateNameRef.current;
+      if (!map || !selectedState || boundaryLayerModeRef.current !== "police_station") return;
+      clearStatePolice(map);
+      void loadStatePolice(map, selectedState, policeTypeRef.current, district);
     },
     setDrawingTool: (tool: AOITool | null) => {
       const map = mapRef.current;

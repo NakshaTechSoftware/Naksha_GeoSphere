@@ -39,4 +39,13 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- GPS location - used for location-based mapping. Requested at first app
+         launch via the consent screen (NativePermissionsPlugin). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Voice / microphone - used for voice search. Requested at first app
+         launch via the consent screen (NativePermissionsPlugin). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { User, LogOut, Settings, HelpCircle } from "lucide-react";
-import { getSessionUser, signOutUser, type SessionUser } from "@/lib/session";
+import { bootstrapSession, getSessionUser, signOutUser, type SessionUser } from "@/lib/session";
 
 interface UserProfileProps {
   /** Explicit overrides — when omitted, the signed-in session user is used. */
@@ -27,7 +27,8 @@ export function UserProfile({
   menuPositionClassName,
 }: UserProfileProps) {
   const [isOpen, setIsOpen] = useState(false);
-  // The session lives in sessionStorage, which only exists on the client - reading it
+  // The session lives in client storage (sessionStorage on web, localStorage in the
+  // native app - see lib/session.ts), which only exists on the client - reading it
   // synchronously during render would make the server HTML ("Guest User") differ from
   // the client's first paint (the signed-in user), tripping React's hydration check and
   // throwing the whole page into the client-render fallback. So the session user is
@@ -35,7 +36,17 @@ export function UserProfile({
   // then this effect swaps in the real signed-in user.
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   useEffect(() => {
-    setSessionUser(getSessionUser());
+    let cancelled = false;
+    // Load the durable session (native app: persisted in SharedPreferences)
+    // before reading it, so the profile shows the signed-in account even after
+    // a fresh app open. On the web bootstrap is a no-op.
+    (async () => {
+      await bootstrapSession();
+      if (!cancelled) setSessionUser(getSessionUser());
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Explicit props win; otherwise show the signed-in user; fall back to a

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "@/styles/globals.css";
+import { ConsentGate } from "@/components/auth/ConsentGate";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -46,6 +47,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable} min-h-screen bg-polar-pearl font-sans text-obsidian-graphite antialiased`}>
         {children}
+        {/* First-open consent for the mobile app (GPS + voice). Renders nothing on
+            the web and nothing after the user has accepted once. */}
+        <ConsentGate />
       </body>
     </html>
   );

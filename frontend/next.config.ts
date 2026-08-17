@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  // Hide the floating Next.js dev-tools button (bottom-left "N" badge) that
+  // otherwise shows in the dev build the mobile app loads via the tunnel.
+  devIndicators: false,
   eslint: {
     ignoreDuringBuilds: true,
   },

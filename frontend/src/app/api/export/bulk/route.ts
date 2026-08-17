@@ -419,8 +419,18 @@ export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // The hierarchy walk emits progress from several concurrent workers; a
+      // worker can still be mid-emit when an error (or the done event) closes
+      // the stream. Enqueueing after close throws, so gate every send on this
+      // flag and swallow the first enqueue error.
+      let streamClosed = false;
       const send = (event: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        if (streamClosed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch {
+          streamClosed = true;
+        }
       };
       try {
         const layers = await collectLayers({
@@ -515,7 +525,12 @@ export async function POST(request: NextRequest) {
         console.error("[export/bulk] failed:", error);
         send({ type: "error", message: error instanceof Error ? error.message : "Export failed" });
       } finally {
-        controller.close();
+        streamClosed = true;
+        try {
+          controller.close();
+        } catch {
+          /* already closed (client aborted) - nothing more to send */
+        }
       }
     },
   });

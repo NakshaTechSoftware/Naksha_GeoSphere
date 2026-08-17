@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Download, Loader2, X } from "lucide-react";
 import type { AdminLevel, AttributeHierarchy } from "./IndiaMapViewer";
+import { saveExportFile } from "@/lib/nativeDownload";
 
 export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
 type BulkLevel = Exclude<AdminLevel, "state">;
@@ -49,6 +50,7 @@ type Progress = { message: string; current?: number; total?: number };
 type ModalState =
   | { status: "idle" }
   | { status: "loading"; progress?: Progress }
+  | { status: "success" }
   | { status: "error"; message: string };
 
 // Centered format-picker dialog opened from the attribute panel's "Export" action. For
@@ -82,6 +84,14 @@ export function ExportFeatureModal({
     onClose();
   };
 
+  // Once the export succeeds, show the confirmation for a moment, then close
+  // the dialog on its own.
+  useEffect(() => {
+    if (state.status !== "success") return;
+    const timer = setTimeout(() => onClose(), 2500);
+    return () => clearTimeout(timer);
+  }, [state.status, onClose]);
+
   const runSingleExport = async () => {
     if (!geometry) {
       setState({ status: "error", message: "This feature has no geometry to export." });
@@ -101,15 +111,15 @@ export function ExportFeatureModal({
       const disposition = response.headers.get("Content-Disposition") ?? "";
       const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${title || "export"}.${format}`;
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      onClose();
+      // Native app: writes to cache and opens the OS save/share sheet; web: a
+      // plain browser download. In the WebView the old <a download> click did
+      // nothing, so the file never reached the phone's file system.
+      await saveExportFile({
+        blob,
+        filename,
+        mimetype: response.headers.get("Content-Type") ?? undefined,
+      });
+      setState({ status: "success" });
     } catch (error) {
       setState({ status: "error", message: error instanceof Error ? error.message : "Export failed" });
     }
@@ -171,13 +181,19 @@ export function ExportFeatureModal({
             // The finished file is streamed from a dedicated download route rather
             // than embedded here - a whole-district export can be hundreds of MB,
             // past what's safe to hold as one base64 string/Blob in the browser.
-            const link = document.createElement("a");
-            link.href = event.downloadUrl;
-            link.download = event.filename;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            onClose();
+            // Fetch that stream, then save it through the shared helper so the
+            // native app lands it on the phone (web keeps the browser download).
+            const fileResponse = await fetch(event.downloadUrl);
+            if (!fileResponse.ok) {
+              throw new Error("Failed to download the exported file");
+            }
+            const blob = await fileResponse.blob();
+            await saveExportFile({
+              blob,
+              filename: event.filename,
+              mimetype: event.mimetype,
+            });
+            setState({ status: "success" });
             return;
           } else {
             throw new Error(event.message);
@@ -219,7 +235,13 @@ export function ExportFeatureModal({
           </button>
         </div>
 
-        {isLoading ? (
+        {state.status === "success" ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+            <CheckCircle2 className="h-9 w-9 text-green-500" />
+            <p className="text-base font-semibold text-slate-900">Export complete.</p>
+            <p className="text-xs text-slate-400">Your file has been saved.</p>
+          </div>
+        ) : isLoading ? (
           <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
             <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
             <div className="space-y-1">

@@ -17,6 +17,12 @@ import { booleanIntersects } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
+import {
+  beginGeojsonLoad,
+  endGeojsonLoad,
+  isGeojsonLoading,
+  subscribeGeojsonLoading,
+} from "../../lib/geojsonLoading";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
 import { STATE_FACTS } from "../../data/state-facts";
 
@@ -1627,6 +1633,73 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Shown briefly when the user picks the Terrain base layer but the India DEM file
+  // isn't on this server (dev machines without DEM_Terrain/). Prevents a flood of 500
+  // tile errors that would otherwise break the map style.
+  const [terrainUnavailable, setTerrainUnavailable] = useState(false);
+  useEffect(() => {
+    if (!terrainUnavailable) return;
+    const timer = setTimeout(() => setTerrainUnavailable(false), 5000);
+    return () => clearTimeout(timer);
+  }, [terrainUnavailable]);
+  const isTerrainDataAvailable = async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/terrain/status");
+      if (!res.ok) return false;
+      const data = (await res.json()) as { available?: boolean };
+      return data.available === true;
+    } catch {
+      return false;
+    }
+  };
+
+  // True while any GeoJSON / dataset fetch is in flight, so a loading indicator can be
+  // shown during slow boundary loads. Wired to the shared counter below - see
+  // lib/geojsonLoading.ts.
+  const [geojsonBusy, setGeojsonBusy] = useState(false);
+  useEffect(() => subscribeGeojsonLoading(() => setGeojsonBusy(isGeojsonLoading())), []);
+
+  // Counts in-flight GeoJSON/dataset fetches (see lib/geojsonLoading.ts) by wrapping
+  // window.fetch for the data URLs the map loads (API dataset routes, /geodata and
+  // /data indexes, .geojson/.json files). Terrain tile requests are excluded - they are
+  // raster tiles, not boundary data, and would make the indicator flicker constantly.
+  // Declared before the map-init effect so it is installed first.
+  useEffect(() => {
+    const originalFetch = window.fetch.bind(window);
+    const shouldTrack = (input: RequestInfo | URL): boolean => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      if (url.includes("/api/terrain/")) return false;
+      return (
+        url.includes("/api/datasets/") ||
+        url.includes("/geodata/") ||
+        url.includes("/data/karnataka_") ||
+        url.includes(".geojson") ||
+        url.endsWith(".json")
+      );
+    };
+    const wrappedFetch: typeof window.fetch = (input, init) => {
+      const track = shouldTrack(input);
+      if (track) beginGeojsonLoad();
+      const promise = originalFetch(input, init);
+      if (track) {
+        promise
+          .finally(() => endGeojsonLoad())
+          .catch(() => {
+            /* the caller handles failures; this just clears the counter */
+          });
+      }
+      return promise;
+    };
+    window.fetch = wrappedFetch;
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
@@ -8636,6 +8709,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     
     const map = mapRef.current;
 
+    // The Terrain base layer needs the India DEM file on the server. When it's missing,
+    // every /api/terrain tile request 500s and the style fails to load - so probe first
+    // and stay on the current layer with a friendly notice instead of switching.
+    if (layer === "terrain" && !(await isTerrainDataAvailable())) {
+      setTerrainUnavailable(true);
+      return;
+    }
+
     // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
     removeIndiaTerrain(map);
     
@@ -8667,10 +8748,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       .map((l) => l.id);
 
     // Identify custom sources we want to keep - same reasoning as customLayerIds above.
+    // The India national-boundary sources are kept too: STATE_BOUNDARY_LAYER_IDS keeps
+    // their layers (india-boundary-line/label), and removing a source while one of its
+    // layers still references it throws "Source ... cannot be removed while layer ... is
+    // using it".
     const customSourceIds = Object.keys(style.sources).filter(
       (sourceId) =>
         sourceId === STATE_SOURCE_ID ||
         sourceId === STATE_LABELS_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_LABELS_SOURCE_ID ||
         BOUNDARY_SOURCE_IDS.includes(sourceId) ||
         sourceId.startsWith("police-") ||
         sourceId.startsWith("kml-") ||
@@ -10036,6 +10123,32 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
         />
+      )}
+
+      {/* GeoJSON loading indicator - shown while boundary data fetches are in flight
+          (every resolution). Skipped during the initial map load, which has its own
+          full-screen "Loading map..." overlay. Captures all pointer/touch events while
+          visible (no pointer-events-none), so every user interaction is ignored until
+          the data finishes loading. */}
+      {geojsonBusy && !isLoading && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center">
+          <div className="flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 shadow-lg ring-1 ring-gray-200">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-atlas-cobalt border-t-transparent" />
+            <span className="text-xs font-medium text-gray-700">Loading data...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Terrain-unavailable notice - shown above the layers control when the user
+          picks Terrain but the India DEM file is missing on this server. */}
+      {terrainUnavailable && (
+        <div className="absolute bottom-24 left-6 z-30 max-w-72 rounded-xl bg-white/95 px-4 py-3 shadow-lg ring-1 ring-gray-200">
+          <p className="text-xs font-medium leading-relaxed text-gray-800">
+            Terrain view isn't available yet — the India DEM data file isn't on this
+            server. Add <span className="font-semibold">DEM_Terrain/India_DEM.tif</span>
+            (or set INDIA_DEM_PATH) to enable it.
+          </p>
+        </div>
       )}
     </div>
   );

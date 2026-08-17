@@ -13,226 +13,11 @@ import type {
   FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { booleanIntersects } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
-import {
-  WEATHER_TERRAIN_DEM_SOURCE_ID,
-  WEATHER_TERRAIN_LAYER_IDS,
-  applyWeatherTerrainWeatherMode,
-  ensureWeatherTerrain,
-  isWeatherTerrainReady,
-  resolveWeatherTerrainProvider,
-  setWeatherTerrainVisible,
-  type WeatherTerrainProvider,
-} from "../../lib/weather/weatherTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
-import { WeatherConditionIcon, WeatherCurrentHero } from "../weather/WeatherUI";
-import { ChevronDown, CloudRain, CloudSun, Compass, Droplets, Gauge, Leaf, Thermometer, Wind } from "lucide-react";
-import {
-  ApiRequestError,
-  ApiUnavailableError,
-  fetchAqiGrid,
-  fetchCurrentEnvironment,
-  fetchDailyForecast,
-  fetchFireDetections,
-  fetchGfsWeatherFieldFrame,
-  fetchGfsWindFrame,
-  fetchNationalAqiStationsGeoJson,
-} from "@/lib/api-client";
-import { formatIstTime, formatMetric } from "@/lib/environmentFormat";
-import { GfsWindCanvasAnimator, sampleInterpolatedVector } from "@/lib/weather/gfsWindCanvas";
-import { compassDirection } from "@/lib/weather/openMeteoFallback";
-import { AqiGridCanvasRenderer } from "@/lib/weather/aqiGridCanvas";
-import {
-  fieldLegendStops,
-  fieldUnit,
-  renderFieldToImageSource,
-  windSpeedValues,
-} from "@/lib/weather/gfsFieldRenderer";
-import {
-  GIBS_ATTRIBUTION,
-  GIBS_INSTRUMENT,
-  GIBS_NATIVE_MAX_ZOOM,
-  GIBS_NOMINAL_RESOLUTION_M,
-  GIBS_PRODUCT_NAME,
-  GIBS_TILE_SIZE,
-  gibsTileUrlTemplate,
-  probeGibsDate,
-  recentGibsDates,
-  resetGibsSatelliteResolution,
-  resolveGibsSatellite,
-  type ResolvedGibsSatellite,
-} from "@/lib/weather/nasaGibs";
-import {
-  computeIsobars,
-  cropGrid,
-  findPressureExtrema,
-  type IsobarLine,
-  type PressureExtremum,
-} from "@/lib/weather/pressureIsobars";
-import {
-  HIMAWARI_ATTRIBUTION,
-  HIMAWARI_CADENCE_MINUTES,
-  HIMAWARI_INSTRUMENT,
-  HIMAWARI_NATIVE_MAX_ZOOM,
-  HIMAWARI_NOMINAL_RESOLUTION_M,
-  HIMAWARI_PRODUCT_NAME,
-  HIMAWARI_TILE_SIZE,
-  himawariTileUrlTemplate,
-  recentHimawariFrames,
-} from "@/lib/weather/nasaHimawari";
-import {
-  GEO_HIMAWARI,
-  GEO_GOES_WEST,
-  GEO_GOES_EAST,
-  GEO_SATELLITES,
-  geoCloudTileUrlTemplate,
-  recentGeoFrames,
-  type GeoSatelliteDef,
-} from "@/lib/weather/nasaGeoCloudComposite";
-import {
-  IMERG_ATTRIBUTION,
-  IMERG_CADENCE_MINUTES,
-  IMERG_NATIVE_MAX_ZOOM,
-  IMERG_NOMINAL_RESOLUTION_KM,
-  IMERG_PRODUCT_NAME,
-  IMERG_TILE_SIZE,
-  imergTileUrlTemplate,
-  recentImergFrames,
-} from "@/lib/weather/nasaImerg";
-import {
-  NDVI_ATTRIBUTION,
-  NDVI_INSTRUMENT,
-  NDVI_NATIVE_MAX_ZOOM,
-  NDVI_NOMINAL_RESOLUTION_M,
-  NDVI_PRODUCT_NAME,
-  NDVI_TILE_SIZE,
-  ndviTileUrlTemplate,
-  resetNdviResolution,
-  resolveNdvi,
-  type ResolvedNdvi,
-} from "@/lib/weather/nasaVegetation";
-import {
-  VIIRS_LST_ATTRIBUTION,
-  VIIRS_LST_INSTRUMENT,
-  VIIRS_LST_NATIVE_MAX_ZOOM,
-  VIIRS_LST_NOMINAL_RESOLUTION_M,
-  VIIRS_LST_PRODUCT_NAME,
-  VIIRS_LST_TILE_SIZE,
-  VIIRS_LST_TILE_MATRIX_SET,
-  VIIRS_LST_FORMAT,
-  isDaytimeIst,
-  probeViirsLstDate,
-  recentViirsLstDates,
-  resolveViirsLst,
-  checkViirsLstCoverage,
-  viirsLstTileUrlTemplate,
-  type ResolvedViirsLst,
-  type ViirsLstDayNight,
-  type ViirsLstCoverageReport,
-  type ViirsLstProductInfo,
-  VIIRS_LST_PRODUCTS,
-} from "@/lib/weather/nasaViirsLst";
-import {
-  buildRainViewerTileUrl,
-  fetchRainViewerWeatherMaps,
-  formatRadarTimeIST,
-  RAINVIEWER_FRAME_INTERVAL_MS,
-  RAINVIEWER_REFRESH_INTERVAL_MS,
-  type RainViewerRadarFrame,
-} from "@/lib/weather/rainViewerProvider";
-
-import type {
-  AqiGridResponse,
-  CurrentEnvironmentResponse,
-  DailyForecastResponse,
-  FireDetection,
-  GeoJsonFeatureCollection,
-  GfsWeatherFieldFrameResponse,
-  GfsWindFrameResponse,
-} from "@/types/environment";
-
-// A single active all-India weather-map field. Exactly one is shown at a time.
-type WeatherMapMode =
-  | "none"
-  | "temperature"
-  | "rain"
-  | "wind"
-  | "clouds"
-  | "pressure"
-  | "air-quality"
-  | "satellite"
-  | "vegetation"
-  | "fire";
-
-// Sensible per-layer defaults instead of one hardcoded 92% for every product
-// (which washed out the satellite/terrain basemap under every raster). Rain's
-// no-rain pixels are already fully transparent so a higher opacity only ever
-// affects real precipitation; clouds and pressure keep enough basemap context
-// visible underneath, and pressure specifically stays subtle now that isobars
-// (mathematically derived contour lines) carry the primary analytical signal.
-/** Fixed internal display opacity for all weather overlay layers.
- *  These values are NOT user-configurable — opacity sliders have been removed. */
-const DISPLAY_OPACITY = {
-  // Band 13 Clean IR colorizes its ENTIRE footprint by brightness
-  // temperature, not just actual clouds (clear sky still gets a colour,
-  // just a warmer/darker one) - so unlike VIIRS true-color, there's no
-  // real per-pixel "no data" signal to make clear-sky areas transparent
-  // without guessing a threshold. Kept translucent instead, so the
-  // basemap/terrain and (now boundary-layer-order-fixed) admin boundaries
-  // stay visible underneath rather than being fully covered.
-  observedCloud: 0.7,
-  observedRain: 0.88,
-  trueColor: 1.00,
-  vegetation: 0.88,
-  pressure: 0.60,
-  windScalar: 0.50,
-  radar: 0.82,
-  fire: 1.00,
-  cloudFill: 0.60,
-  lst: 0.92,
-  aqi: 0.70,
-} as const;
-
-/** Wind speed/direction under the cursor (Ventusky-style inspector). */
-interface WindCursorState {
-  screenX: number;
-  screenY: number;
-  speedKmh: number | null; // null = no data at this point - never fabricated as 0
-  directionDeg: number | null;
-  compass: string | null;
-  loading: boolean;
-}
-
-/**
- * Meteorological wind direction (degrees the wind is blowing FROM, not
- * toward) from east/north vector components. u/v point in the direction the
- * wind is travelling, so the FROM bearing is the reverse: atan2(-u, -v).
- * 0=N, 90=E, 180=S, 270=W.
- */
-function windDirectionFromVector(u: number, v: number): number {
-  const deg = (Math.atan2(-u, -v) * 180) / Math.PI;
-  return (deg + 360) % 360;
-}
-
-/**
- * Where to insert a weather raster layer so administrative boundaries and
- * their labels stay legible on top of it. Naively inserting "before the
- * first symbol layer" only protects text labels - `india-boundary-line`
- * and `india-boundary-fill` are `line`/`fill` type, not `symbol`, so that
- * check alone lets a raster end up above the boundary outline itself while
- * still sitting below its label, silently burying the India outline (and
- * any state boundaries) under cloud/satellite/rain imagery. Anchoring on
- * the boundary line layer specifically (present from initial map load)
- * keeps every boundary layer, and everything added after it, above.
- */
-function findWeatherImageryInsertionPoint(map: MapLibreMap): string | undefined {
-  const layers = map.getStyle().layers ?? [];
-  const boundaryLine = layers.find((l) => l.id === "india-boundary-line");
-  if (boundaryLine) return boundaryLine.id;
-  return layers.find((l: any) => l.type === "symbol" || l.id?.includes("label"))?.id;
-}
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -946,7 +731,8 @@ export type BoundaryLayerMode =
   | "gram_panchayat"
   | "police_station"
   | "civic_amenities"
-  | "gba";
+  | "gba"
+  | "roads";
 
 export type PoliceType =
   | "all" | "law_and_order" | "women_police" | "traffic_police"
@@ -959,6 +745,7 @@ export interface IndiaMapViewerHandle {
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
   setPoliceType: (type: PoliceType) => void;
   setPoliceDistrict: (district: string) => void;
+  /** Loads the Karnataka or Bengaluru boundary when the query matches (case-insensitive). */
   search: (query: string) => void;
   listBengaluruFiles: () => Promise<Record<string, string[]>>;
   toggleBengaluruFile: (key: string, visible: boolean) => Promise<void>;
@@ -1005,6 +792,17 @@ const STATE_DISTRICTS_LINE_LAYER_ID = "state-districts-line";
 const STATE_DISTRICTS_LABELS_LAYER_ID = "state-districts-labels";
 const STATE_DISTRICTS_LABELS_SOURCE_ID = "state-districts-labels-data";
 
+// Karnataka's own outline - the shared entry point for both "gba" and "roads" modes (both
+// only ever cover Karnataka, but still start with a state-level click like every other mode
+// does, rather than jumping straight to their data). Filtered client-side out of the same
+// india_states.geojson the default India -> States flow uses (see loadKarnatakaStateBoundary),
+// not a dedicated fetch.
+const KARNATAKA_STATE_SOURCE_ID = "karnataka-state-data";
+const KARNATAKA_STATE_FILL_LAYER_ID = "karnataka-state-fill";
+const KARNATAKA_STATE_LINE_LAYER_ID = "karnataka-state-line";
+const KARNATAKA_STATE_LABELS_LAYER_ID = "karnataka-state-labels";
+const KARNATAKA_STATE_LABELS_SOURCE_ID = "karnataka-state-labels-data";
+
 // Source/layer ids for the GBA (Greater Bengaluru Authority) hierarchy: the single
 // authority boundary, then Corporation -> Zone -> Ward, each loaded on demand from the
 // dedicated gba-* API routes as the user drills down (mirrors the district/taluk pattern
@@ -1032,6 +830,59 @@ const GBA_WARDS_FILL_LAYER_ID = "gba-wards-fill";
 const GBA_WARDS_LINE_LAYER_ID = "gba-wards-line";
 const GBA_WARDS_LABELS_LAYER_ID = "gba-wards-labels";
 const GBA_WARDS_LABELS_SOURCE_ID = "gba-wards-labels-data";
+
+// Source/layer ids for the Roads hierarchy: District -> Taluk (reusing the existing
+// state-districts/district-taluks API data, but as their own dedicated layers so this mode
+// never interferes with "administrative" mode's own district/taluk layers), plus the 3
+// highway categories (National/State/District Road) shown together at whichever level -
+// district or taluk - is currently selected.
+const ROADS_DISTRICTS_SOURCE_ID = "roads-districts-data";
+const ROADS_DISTRICTS_FILL_LAYER_ID = "roads-districts-fill";
+const ROADS_DISTRICTS_LINE_LAYER_ID = "roads-districts-line";
+const ROADS_DISTRICTS_LABELS_LAYER_ID = "roads-districts-labels";
+const ROADS_DISTRICTS_LABELS_SOURCE_ID = "roads-districts-labels-data";
+
+const ROADS_TALUKS_SOURCE_ID = "roads-taluks-data";
+const ROADS_TALUKS_FILL_LAYER_ID = "roads-taluks-fill";
+const ROADS_TALUKS_LINE_LAYER_ID = "roads-taluks-line";
+const ROADS_TALUKS_LABELS_LAYER_ID = "roads-taluks-labels";
+const ROADS_TALUKS_LABELS_SOURCE_ID = "roads-taluks-labels-data";
+
+const ROADS_NATIONAL_HIGHWAY_SOURCE_ID = "roads-national-highway-data";
+const ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID = "roads-national-highway-fill";
+const ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID = "roads-national-highway-line";
+
+const ROADS_STATE_HIGHWAY_SOURCE_ID = "roads-state-highway-data";
+const ROADS_STATE_HIGHWAY_FILL_LAYER_ID = "roads-state-highway-fill";
+const ROADS_STATE_HIGHWAY_LINE_LAYER_ID = "roads-state-highway-line";
+
+const ROADS_DISTRICT_ROAD_SOURCE_ID = "roads-district-road-data";
+const ROADS_DISTRICT_ROAD_FILL_LAYER_ID = "roads-district-road-fill";
+const ROADS_DISTRICT_ROAD_LINE_LAYER_ID = "roads-district-road-line";
+
+// Local road network (Road Center Line) - shown only once a taluk is selected, same as the
+// highway categories, and only at taluk level: KGIS only ships this pre-split down to taluk
+// granularity (a few MB each after server-side simplification), the district-level files are
+// still 100-300MB+ raw, too large to hand to the browser as GeoJSON.
+const ROADS_LOCAL_ROADS_SOURCE_ID = "roads-local-roads-data";
+const ROADS_LOCAL_ROADS_LINE_LAYER_ID = "roads-local-roads-line";
+
+// Hobli/Village boundaries within the Roads hierarchy - the road data itself doesn't split
+// any finer than taluk (see loadRoadsHighways), but the administrative boundaries do, so
+// these reuse the same /api/datasets/taluk-hoblies and /api/datasets/hobli-villages data
+// "administrative" mode already uses, just into their own dedicated layers (so switching
+// modes never collides with administrative mode's own hobli/village drill position).
+const ROADS_HOBLIES_SOURCE_ID = "roads-hoblies-data";
+const ROADS_HOBLIES_FILL_LAYER_ID = "roads-hoblies-fill";
+const ROADS_HOBLIES_LINE_LAYER_ID = "roads-hoblies-line";
+const ROADS_HOBLIES_LABELS_SOURCE_ID = "roads-hoblies-labels-data";
+const ROADS_HOBLIES_LABELS_LAYER_ID = "roads-hoblies-labels";
+
+const ROADS_VILLAGES_SOURCE_ID = "roads-villages-data";
+const ROADS_VILLAGES_FILL_LAYER_ID = "roads-villages-fill";
+const ROADS_VILLAGES_LINE_LAYER_ID = "roads-villages-line";
+const ROADS_VILLAGES_LABELS_SOURCE_ID = "roads-villages-labels-data";
+const ROADS_VILLAGES_LABELS_LAYER_ID = "roads-villages-labels";
 
 // Source/layer ids for a selected state's assembly constituency boundaries, loaded on demand
 // from MinIO when the "Assembly Constituency Boundaries" filter option is active.
@@ -1213,6 +1064,16 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   GP_DISTRICTS_FILL_LAYER_ID,
   CIVIC_DISTRICTS_FILL_LAYER_ID,
   CIVIC_PINCODES_FILL_LAYER_ID,
+  // The India national boundary (visible until the states are loaded by clicking it) is
+  // clickable like every other administrative level - the transparent fill covers the
+  // whole country, and the cyan outline line is the visible edge.
+  "india-boundary-fill",
+  "india-boundary-line",
+  // GBA hierarchy levels, so the panel opens on them too.
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
   "states-fill-default",
 ];
 
@@ -1230,6 +1091,12 @@ const ATTRIBUTE_POPUP_ADMIN_LEVEL: Record<string, AdminLevel> = {
 
 // Friendly boundary-type names for the popup's badge, keyed by layer id.
 const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
+  "india-boundary-fill": "Country",
+  "india-boundary-line": "Country",
+  [GBA_BOUNDARY_FILL_LAYER_ID]: "GBA Boundary",
+  [GBA_CORPORATIONS_FILL_LAYER_ID]: "Corporation",
+  [GBA_ZONES_FILL_LAYER_ID]: "Zone",
+  [GBA_WARDS_FILL_LAYER_ID]: "Ward",
   "states-fill-default": "State",
   [STATE_DISTRICTS_FILL_LAYER_ID]: "District",
   [GP_DISTRICTS_FILL_LAYER_ID]: "District",
@@ -1274,6 +1141,17 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   taluk_panchayat: "Taluk Panchayat",
   no_of_villages: "No. of Villages",
   source_file: "Source File",
+  state: "State",
+  lok_sabha: "Lok Sabha (PC)",
+  mla: "Current MLA",
+  party: "Party",
+  election_year: "Election Year",
+  total_voters: "Total Voters",
+  polling_stations: "Polling Stations",
+  voter_turnout: "Voter Turnout",
+  districts: "Districts",
+  assembly_segments: "Assembly Segments",
+  mp: "Current MP",
 };
 
 // "st_nm" -> "St Nm" is wrong for display; keys without a known label get a sensible split:
@@ -1369,6 +1247,9 @@ const BOUNDARY_LAYER_IDS = [
   VILLAGE_CADASTRALS_FILL_LAYER_ID,
   VILLAGE_CADASTRALS_LINE_LAYER_ID,
   VILLAGE_CADASTRALS_LABELS_LAYER_ID,
+  KARNATAKA_STATE_FILL_LAYER_ID,
+  KARNATAKA_STATE_LINE_LAYER_ID,
+  KARNATAKA_STATE_LABELS_LAYER_ID,
   GBA_BOUNDARY_FILL_LAYER_ID,
   GBA_BOUNDARY_LINE_LAYER_ID,
   GBA_BOUNDARY_LABELS_LAYER_ID,
@@ -1381,6 +1262,25 @@ const BOUNDARY_LAYER_IDS = [
   GBA_WARDS_FILL_LAYER_ID,
   GBA_WARDS_LINE_LAYER_ID,
   GBA_WARDS_LABELS_LAYER_ID,
+  ROADS_DISTRICTS_FILL_LAYER_ID,
+  ROADS_DISTRICTS_LINE_LAYER_ID,
+  ROADS_DISTRICTS_LABELS_LAYER_ID,
+  ROADS_TALUKS_FILL_LAYER_ID,
+  ROADS_TALUKS_LINE_LAYER_ID,
+  ROADS_TALUKS_LABELS_LAYER_ID,
+  ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+  ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+  ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+  ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+  ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+  ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+  ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+  ROADS_HOBLIES_FILL_LAYER_ID,
+  ROADS_HOBLIES_LINE_LAYER_ID,
+  ROADS_HOBLIES_LABELS_LAYER_ID,
+  ROADS_VILLAGES_FILL_LAYER_ID,
+  ROADS_VILLAGES_LINE_LAYER_ID,
+  ROADS_VILLAGES_LABELS_LAYER_ID,
 ];
 const BOUNDARY_SOURCE_IDS = [
   "kml-data",
@@ -1409,6 +1309,8 @@ const BOUNDARY_SOURCE_IDS = [
   HOBLI_VILLAGES_SOURCE_ID,
   HOBLI_VILLAGES_LABELS_SOURCE_ID,
   VILLAGE_CADASTRALS_SOURCE_ID,
+  KARNATAKA_STATE_SOURCE_ID,
+  KARNATAKA_STATE_LABELS_SOURCE_ID,
   GBA_BOUNDARY_SOURCE_ID,
   GBA_BOUNDARY_LABELS_SOURCE_ID,
   GBA_CORPORATIONS_SOURCE_ID,
@@ -1417,6 +1319,18 @@ const BOUNDARY_SOURCE_IDS = [
   GBA_ZONES_LABELS_SOURCE_ID,
   GBA_WARDS_SOURCE_ID,
   GBA_WARDS_LABELS_SOURCE_ID,
+  ROADS_DISTRICTS_SOURCE_ID,
+  ROADS_DISTRICTS_LABELS_SOURCE_ID,
+  ROADS_TALUKS_SOURCE_ID,
+  ROADS_TALUKS_LABELS_SOURCE_ID,
+  ROADS_NATIONAL_HIGHWAY_SOURCE_ID,
+  ROADS_STATE_HIGHWAY_SOURCE_ID,
+  ROADS_DISTRICT_ROAD_SOURCE_ID,
+  ROADS_LOCAL_ROADS_SOURCE_ID,
+  ROADS_HOBLIES_SOURCE_ID,
+  ROADS_HOBLIES_LABELS_SOURCE_ID,
+  ROADS_VILLAGES_SOURCE_ID,
+  ROADS_VILLAGES_LABELS_SOURCE_ID,
 ];
 
 // Layer ids of the default india_states.geojson (neon-blue states) - shown both under the
@@ -1656,6 +1570,21 @@ function registerSatelliteProtocol(
 
     return { data: await response.arrayBuffer() };
   });
+}
+
+let pmtilesProtocolRegistered = false;
+
+// Registers the "pmtiles://" protocol (idempotent, same reasoning as the satellite protocol
+// above) used by the Roads hierarchy's "State" click-scope local-road-network layer - a
+// vector tile archive covering the whole state, so MapLibre only ever fetches whatever tiles
+// the current viewport/zoom actually needs, giving proper zoom-dependent detail (thinned out
+// zoomed out, full detail zoomed in) the way a single flat GeoJSON file can't.
+async function registerPmtilesProtocol(maplibregl: typeof import("maplibre-gl")) {
+  if (pmtilesProtocolRegistered) return;
+  pmtilesProtocolRegistered = true;
+  const { Protocol } = await import("pmtiles");
+  const protocol = new Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
 }
 
 // Which LayersControl base layer the explore map opens on. "satellite" keeps the default
@@ -2000,192 +1929,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  // Small non-blocking toast for drill-down layers that fail to load (e.g. no
-  // boundary data uploaded yet for a state/place) â€” surfaces what was
-  // previously only a console.warn/console.error, without blocking the map.
-  const [layerNotice, setLayerNotice] = useState<string | null>(null);
-  const layerNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showLayerNotice = useCallback((message: string) => {
-    setLayerNotice(message);
-    if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
-    layerNoticeTimeoutRef.current = setTimeout(() => setLayerNotice(null), 4500);
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
-    };
-  }, []);
-
-  // Weather click panel (left-side icon + dropdown + fixed right-side panel).
-  // selectedWeatherMetricsRef mirrors the state into the map's click-handler
-  // closures, which are only set up once on mount.
-  const [showWeatherMenu, setShowWeatherMenu] = useState(false);
-  const [selectedWeatherMetrics, setSelectedWeatherMetrics] = useState<Set<WeatherMetricKey>>(
-    new Set()
-  );
-  const [isRadarEnabled, setIsRadarEnabled] = useState(false);
-  const [radarStatus, setRadarStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
-    "idle"
-  );
-  // RainViewer composite: the fetched frame list + tile host, the active
-  // frame index, and playback state for the pastâ†’now animation.
-  const [radarFrames, setRadarFrames] = useState<RainViewerRadarFrame[]>([]);
-  const [radarHost, setRadarHost] = useState<string>("");
-  const [radarFrameIndex, setRadarFrameIndex] = useState(0);
-  const [isRadarPlaying, setIsRadarPlaying] = useState(false);
-
-  // Unified all-India weather map: exactly one field is active at a time.
-  const [weatherMode, setWeatherMode] = useState<WeatherMapMode>("none");
-  const [isWindEnabled, setIsWindEnabled] = useState(false);
-  const [windDensity, setWindDensity] = useState(0.6);
-  const [windFrames, setWindFrames] = useState<GfsWindFrameResponse[]>([]);
-  const [activeWindFrameIndex, setActiveWindFrameIndex] = useState(0);
-  const [isWindPlaying, setIsWindPlaying] = useState(false);
-  const [windStatus, setWindStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
-    "idle"
-  );
-  const [windStatusMessage, setWindStatusMessage] = useState<string | null>(null);
-
-  // Wind speed/direction under the cursor (Ventusky-style inspector). Kept as
-  // one small object in state - the decoded U/V grid itself stays in
-  // `windFrames`/refs, never duplicated into rapidly-changing state.
-  const [windCursor, setWindCursor] = useState<WindCursorState | null>(null);
-  const activeWindFrameRef = useRef<GfsWindFrameResponse | null>(null);
-  const windCursorRafRef = useRef<number | null>(null);
-  const pendingWindPointRef = useRef<{ x: number; y: number; lng: number; lat: number } | null>(null);
-
-  // Reset View: shows only once the map has been rotated/tilted away from
-  // the default north-up, flat orientation.
-  const [mapTransformDirty, setMapTransformDirty] = useState(false);
-  const mapTransformDirtyRef = useRef(false);
-
-  // Pressure isobars + H/L centers, derived mathematically from the active
-  // GFS pressure frame (see pressureIsobars.ts) - recomputed once per frame,
-  // never per render/pan/zoom.
-  const [pressureIsobars, setPressureIsobars] = useState<IsobarLine[]>([]);
-  const [pressureExtrema, setPressureExtrema] = useState<PressureExtremum[]>([]);
-  const [showPressureExtrema, setShowPressureExtrema] = useState(true);
-
-  // Scalar forecast fields (temperature / rain / clouds) rendered as a raster
-  // image source. `weatherFieldFrames` holds one frame per forecast hour.
-  const [weatherFieldFrames, setWeatherFieldFrames] = useState<GfsWeatherFieldFrameResponse[]>([]);
-  const [weatherFieldIndex, setWeatherFieldIndex] = useState(0);
-  const [isWeatherFieldPlaying, setIsWeatherFieldPlaying] = useState(false);
-  const [weatherFieldStatus, setWeatherFieldStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
-    "idle"
-  );
-  const [weatherFieldMessage, setWeatherFieldMessage] = useState<string | null>(null);
-
-  // Temperature: Surface Temperature (NASA VIIRS LST, default) vs Air
-  // Temperature Forecast (BharatFS - see the dedicated effect below).
-  const [temperatureProduct, setTemperatureProduct] = useState<"surface" | "forecast">("surface");
-
-  // Clouds/Rain: real satellite Observed imagery (Himawari IR / GPM IMERG,
-  // default - see the dedicated effects below) vs the NOAA GFS Forecast
-  // model field (existing pipeline). Same observed/forecast split as
-  // Temperature above, applied to the two other layers where a genuine
-  // observation product exists.
-  const [cloudProduct, setCloudProduct] = useState<"observed" | "forecast">("observed");
-  const [rainProduct, setRainProduct] = useState<"observed" | "forecast">("observed");
-
-  // Observed Cloud: Multi-geostationary composite (Himawari-9 + GOES-West + GOES-East).
-  // All three use the same Band 13 Clean Infrared product (10.3 µm thermal IR),
-  // so they blend seamlessly. Himawari covers Asia-Pacific, GOES-West covers
-  // Americas/Pacific, GOES-East covers Americas/Atlantic – together they give
-  // global cloud coverage.
-  const [himawariFrames, setHimawariFrames] = useState<string[]>([]);
-  const [himawariFrameIndex, setHimawariFrameIndex] = useState(0);
-  const [isHimawariPlaying, setIsHimawariPlaying] = useState(false);
-  const [himawariStatus, setHimawariStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  // GOES-West frames share the same timestamps as Himawari (10-min cadence).
-  const [goesWestFrames, setGoesWestFrames] = useState<string[]>([]);
-  const [goesWestStatus, setGoesWestStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  // GOES-East frames share the same timestamps as Himawari (10-min cadence).
-  const [goesEastFrames, setGoesEastFrames] = useState<string[]>([]);
-  const [goesEastStatus, setGoesEastStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  // GFS cloud fill: global cloud fraction from NOAA GFS model, rendered
-  // underneath geostationary tiles to fill gaps between satellite disks.
-  const [cloudFillFrame, setCloudFillFrame] = useState<any>(null);
-
-  // Observed Rain: NASA GIBS GPM IMERG 30-minute near-real-time precipitation.
-  const [imergFrames, setImergFrames] = useState<string[]>([]);
-  const [imergFrameIndex, setImergFrameIndex] = useState(0);
-  const [isImergPlaying, setIsImergPlaying] = useState(false);
-  const [imergStatus, setImergStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  const [lstDayNightSelection, setLstDayNightSelection] = useState<"auto" | ViirsLstDayNight>("auto");
-  const [lstPlatform, setLstPlatform] = useState<"auto" | "SNPP" | "NOAA20" | "NOAA21">("auto");
-  const [lstResolvedDay, setLstResolvedDay] = useState<ResolvedViirsLst | null | undefined>(undefined);
-  const [lstResolvedNight, setLstResolvedNight] = useState<ResolvedViirsLst | null | undefined>(undefined);
-  const [lstDate, setLstDate] = useState<string | null>(null);
-  const [lstAvailableDates, setLstAvailableDates] = useState<string[]>([]);
-  const [lstStatus, setLstStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  const [isLstPlaying, setIsLstPlaying] = useState(false);
-  const [lstCoverage, setLstCoverage] = useState<ViirsLstCoverageReport | null>(null);
-  const [showLstDebug, setShowLstDebug] = useState(false);
-
-  // NASA GIBS VIIRS true-color Satellite mode.
-  const [satelliteResolved, setSatelliteResolved] = useState<ResolvedGibsSatellite | null | undefined>(undefined);
-  const [satelliteDate, setSatelliteDate] = useState<string | null>(null);
-  const [isSatellitePlaying, setIsSatellitePlaying] = useState(false);
-  const [satelliteStatus, setSatelliteStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-
-  // NASA GIBS MODIS NDVI Vegetation mode.
-  const [ndviResolved, setNdviResolved] = useState<ResolvedNdvi | null | undefined>(undefined);
-  const [ndviStatus, setNdviStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-
-  // NASA FIRMS active-fire detections (Fire mode).
-  const [fireDetections, setFireDetections] = useState<FireDetection[]>([]);
-  const [fireStatus, setFireStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  const [fireMessage, setFireMessage] = useState<string | null>(null);
-  const [fireHours, setFireHours] = useState<24 | 48 | 72>(24);
-  const [selectedFireDetection, setSelectedFireDetection] = useState<
-    { detection: FireDetection; screenX: number; screenY: number } | null
-  >(null);
-
-  // Air Quality weather-map mode: official CPCB station points + modeled surface.
-  const [aqiGrid, setAqiGrid] = useState<AqiGridResponse | null>(null);
-  const [aqiStationsGeoJson, setAqiStationsGeoJson] = useState<GeoJsonFeatureCollection | null>(
-    null
-  );
-  const [aqiStatus, setAqiStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
-  const [aqiMessage, setAqiMessage] = useState<string | null>(null);
-
-  const [weatherPanel, setWeatherPanel] = useState<WeatherPanelState>({ status: "idle" });
-  const selectedWeatherMetricsRef = useRef(selectedWeatherMetrics);
-  const weatherRequestIdRef = useRef(0);
-  useEffect(() => {
-    selectedWeatherMetricsRef.current = selectedWeatherMetrics;
-    if (selectedWeatherMetrics.size === 0) {
-      weatherRequestIdRef.current += 1;
-      setWeatherPanel({ status: "idle" });
-    }
-  }, [selectedWeatherMetrics]);
-  const weatherMenuRef = useRef<HTMLDivElement>(null);
-  const windAnimatorRef = useRef<GfsWindCanvasAnimator | null>(null);
-  const aqiGridRendererRef = useRef<AqiGridCanvasRenderer | null>(null);
-  const windAutoFocusedRef = useRef(false);
-  const [weatherHoverCard] = useState<WeatherHoverCardData | null>(null);
-
-  // Notify the parent (ExplorePage) when the weather toolbar should show/hide.
-  // The toolbar appears beside the search bar when the weather menu is open or any weather mode is active.
-  useEffect(() => {
-    const visible = showWeatherMenu || weatherMode !== "none";
-    onWeatherToolbarChangeRef.current?.(visible);
-  }, [showWeatherMenu, weatherMode]);
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (weatherMenuRef.current && !weatherMenuRef.current.contains(e.target as Node)) {
-        setShowWeatherMenu(false);
-      }
-    };
-    // Use `click` (not `mousedown`) so a press on the horizontal Weather toolbar -
-    // which lives outside `weatherMenuRef` - still delivers its `onClick` (which
-    // sets the weather mode) before this handler closes the menu. With `mousedown`
-    // the menu-close re-render unmounted the toolbar before the `click` fired,
-    // making the toolbar's first product selection impossible to activate.
-    document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
-  }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
@@ -2310,6 +2053,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
     });
 
+    // Karnataka's own outline (shared entry point for "gba" and "roads") follows either
+    // mode, same pattern as the India boundary hiding once states load below.
+    const karnatakaStateVisible = mode === "gba" || mode === "roads";
+    [KARNATAKA_STATE_FILL_LAYER_ID, KARNATAKA_STATE_LINE_LAYER_ID, KARNATAKA_STATE_LABELS_LAYER_ID].forEach(
+      (layerId) => {
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, "visibility", karnatakaStateVisible ? "visible" : "none");
+        }
+      }
+    );
+
     // GBA hierarchy layers follow the "gba" mode directly, same pattern as the states/
     // districts/etc. groups above - shown only in "gba" mode, hidden (not unloaded) in
     // every other mode so switching modes and back doesn't lose the drill-down position.
@@ -2330,6 +2084,34 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     ].forEach((layerId) => {
       if (map.getLayer(layerId)) {
         map.setLayoutProperty(layerId, "visibility", gbaVisible ? "visible" : "none");
+      }
+    });
+
+    // Roads hierarchy layers follow the "roads" mode directly, same pattern as GBA above.
+    const roadsVisible = mode === "roads";
+    [
+      ROADS_DISTRICTS_FILL_LAYER_ID,
+      ROADS_DISTRICTS_LINE_LAYER_ID,
+      ROADS_DISTRICTS_LABELS_LAYER_ID,
+      ROADS_TALUKS_FILL_LAYER_ID,
+      ROADS_TALUKS_LINE_LAYER_ID,
+      ROADS_TALUKS_LABELS_LAYER_ID,
+      ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+      ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+      ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+      ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+      ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+      ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+      ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+      ROADS_HOBLIES_FILL_LAYER_ID,
+      ROADS_HOBLIES_LINE_LAYER_ID,
+      ROADS_HOBLIES_LABELS_LAYER_ID,
+      ROADS_VILLAGES_FILL_LAYER_ID,
+      ROADS_VILLAGES_LINE_LAYER_ID,
+      ROADS_VILLAGES_LABELS_LAYER_ID,
+    ].forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", roadsVisible ? "visible" : "none");
       }
     });
 
@@ -2799,6 +2581,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Currently-selected taluk name.
   const selectedTalukNameRef = useRef<string | null>(null);
 
+  // Whether Karnataka's own outline (the shared entry point for "gba" and "roads" modes) is
+  // currently loaded.
+  const loadedKarnatakaStateRef = useRef<boolean>(false);
+
   // GBA (Greater Bengaluru Authority) hierarchy: Authority -> Corporation -> Zone -> Ward.
   // Whether the (single) GBA authority boundary is currently loaded.
   const loadedGbaBoundaryRef = useRef<boolean>(false);
@@ -2827,7 +2613,77 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     zones: false,
     wards: false,
   });
+  // Same reasoning as gbaLoadingRef above, for loadIndiaStates - its own guard
+  // (`map.getSource(STATE_SOURCE_ID)`) only catches a *second* call once the first one has
+  // already reached addSource; two calls landing back-to-back (e.g. the boundary click firing
+  // while a search-triggered `loadIndiaStatesRef.current()` is still awaiting its fetch) both
+  // pass that check and both call addSource, throwing "Source already exists".
+  const loadingIndiaStatesRef = useRef(false);
 
+  // Roads hierarchy: District -> Taluk, each level showing National/State/District Road
+  // highways together. Mirrors the GBA refs above - loading guards prevent the same
+  // duplicate-source race, "loaded" refs track drill-down position, "selected" refs track
+  // which feature is highlighted.
+  const loadedRoadsDistrictsRef = useRef<boolean>(false);
+  // The loaded Karnataka districts GeoJSON, kept so the "State" button can enumerate every
+  // district name to fetch for the statewide combined view, without a separate list call.
+  const roadsDistrictsDataRef = useRef<GeoJSON.FeatureCollection | null>(null);
+  // "none" (default - neither button pressed): a district click is the lightweight original
+  // behavior, boundaries only - select the district and show its taluks, no highway fetch at
+  // all, so ordinary browsing (and the taluk/hobli/village click-through below it) stays fast.
+  // Double-clicking a district still loads its own highways on demand (see the dblclick
+  // handler). "district": the heavier, opt-in behavior - a single click also fetches and
+  // shows that district's full highways + local roads immediately. "state": a click instead
+  // loads every district's highways + the statewide local road network combined (see
+  // loadRoadsStatewide). Set via the "State"/"District" buttons next to the Roads filter
+  // option (clicking the active one again returns to "none") - since districts tile the
+  // whole state with no separate area to click as "the state" itself.
+  const roadsClickScopeRef = useRef<"none" | "district" | "state">("none");
+  const selectedRoadsDistrictIdRef = useRef<string | number | null>(null);
+  // Original-case name of the currently-selected district (District_Road/etc API calls and
+  // the taluks fetch need the real spelling, not the lowercased comparison key below).
+  const selectedRoadsDistrictNameRef = useRef<string | null>(null);
+  const loadedRoadsTaluksDistrictRef = useRef<string | null>(null);
+  const selectedRoadsTalukIdRef = useRef<string | number | null>(null);
+  // Original-case name of the currently-selected taluk (the hobli-villages fetch needs the
+  // real spelling, not loadedRoadsTaluksDistrictRef which holds the *district* name).
+  const selectedRoadsTalukNameRef = useRef<string | null>(null);
+  // Which admin unit's highway layers are currently loaded - "state" (every district
+  // combined), "district", or "taluk" level - plus the names needed to refetch/identify them.
+  const loadedRoadsHighwaysRef = useRef<{ level: "state" | "district" | "taluk"; district: string; taluk?: string } | null>(
+    null
+  );
+  const roadsLoadingRef = useRef<{ districts: boolean; taluks: boolean; highways: boolean }>({
+    districts: false,
+    taluks: false,
+    highways: false,
+  });
+  // The unfiltered highway/local-road data for whichever district/taluk is currently loaded,
+  // keyed by source id - kept so selecting a taluk/hobli/village can filter each source down
+  // to just the features intersecting that boundary (see applyRoadsBoundaryFilter) without
+  // re-fetching, and so deselecting one restores the parent level's view instead of refetching.
+  const roadsUnfilteredDataRef = useRef<Record<string, GeoJSON.FeatureCollection>>({});
+  // The selected taluk's/hobli's own polygon geometry - kept so deselecting a *child* level
+  // (hobli deselected -> back to taluk's clip; village deselected -> back to hobli's clip)
+  // knows which geometry to re-apply, rather than falling all the way back to "no filter".
+  const selectedRoadsTalukGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  const selectedRoadsHobliGeometryRef = useRef<GeoJSON.Geometry | null>(null);
+  // Bumped on every district/taluk/hobli/village click or dblclick. A dblclick handler's
+  // async chain (ensureRoadsLoadedForTaluk -> applyRoadsBoundaryFilter) captures this at the
+  // start and checks it again before applying the filter - if the user has since clicked
+  // something else, the generation has moved on and the stale result is dropped instead of
+  // clobbering whatever's now selected. Without this, double-clicking village B shortly after
+  // double-clicking village A could have A's filter land *after* B's (whichever fetch/promise
+  // happens to resolve last wins), which looked like "clicking the village shows the whole
+  // taluk's roads" - a real, if intermittent, bug.
+  const roadsSelectionGenerationRef = useRef(0);
+  // Roads hierarchy hoblies/villages - same shape as the taluk/hobli refs above, kept
+  // separate so switching to/from "administrative" mode never touches this drill position.
+  const loadedRoadsHobliesTalukRef = useRef<string | null>(null);
+  const selectedRoadsHobliIdRef = useRef<string | number | null>(null);
+  const selectedRoadsHobliNameRef = useRef<string | null>(null);
+  const loadedRoadsVillagesHobliRef = useRef<string | null>(null);
+  const selectedRoadsVillageIdRef = useRef<string | number | null>(null);
   // Name of the taluk whose hoblies are currently loaded, if any.
   const loadedHobliesTalukRef = useRef<string | null>(null);
   // Currently-selected hobli feature id.
@@ -2919,6 +2775,89 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (map.getSource(GBA_CORPORATIONS_LABELS_SOURCE_ID)) map.removeSource(GBA_CORPORATIONS_LABELS_SOURCE_ID);
     loadedGbaCorporationsRef.current = false;
     selectedGbaCorporationIdRef.current = null;
+  };
+
+  const clearKarnatakaStateBoundary = (map: MapLibreMap) => {
+    if (map.getLayer(KARNATAKA_STATE_FILL_LAYER_ID)) map.removeLayer(KARNATAKA_STATE_FILL_LAYER_ID);
+    if (map.getLayer(KARNATAKA_STATE_LINE_LAYER_ID)) map.removeLayer(KARNATAKA_STATE_LINE_LAYER_ID);
+    removeLabelLayer(map, KARNATAKA_STATE_LABELS_LAYER_ID);
+    if (map.getSource(KARNATAKA_STATE_SOURCE_ID)) map.removeSource(KARNATAKA_STATE_SOURCE_ID);
+    if (map.getSource(KARNATAKA_STATE_LABELS_SOURCE_ID)) map.removeSource(KARNATAKA_STATE_LABELS_SOURCE_ID);
+    loadedKarnatakaStateRef.current = false;
+  };
+
+  // Shared entry point for "gba" and "roads" modes - both cover only Karnataka, but still
+  // start with a click on the state's own outline like every other mode does, instead of
+  // jumping straight to GBA's boundary / the districts. Reuses the same india_states.geojson
+  // the default India -> States flow fetches, filtered down to just Karnataka's feature,
+  // rather than a dedicated statewide-boundary file.
+  const loadKarnatakaStateBoundary = async (map: MapLibreMap) => {
+    if (loadedKarnatakaStateRef.current) return;
+    clearKarnatakaStateBoundary(map);
+    try {
+      let statesResponse: Response;
+      try {
+        statesResponse = await fetch("/api/datasets/india-boundary?file=states");
+      } catch {
+        statesResponse = await fetch("/geodata/india-states.geojson");
+      }
+      if (!statesResponse.ok) statesResponse = await fetch("/geodata/india-states.geojson");
+      const statesData = (await statesResponse.json()) as GeoJSON.FeatureCollection;
+      const karnatakaData: GeoJSON.FeatureCollection = {
+        ...statesData,
+        features: statesData.features.filter(
+          (f) => (f.properties?.st_nm as string | undefined)?.trim().toLowerCase() === "karnataka"
+        ),
+      };
+
+      map.addSource(KARNATAKA_STATE_SOURCE_ID, { type: "geojson", data: karnatakaData, generateId: true });
+      map.addSource(KARNATAKA_STATE_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(karnatakaData, ["st_nm"]),
+      });
+      void fitBoundsToGeoJSON(map, karnatakaData);
+      map.addLayer({
+        id: KARNATAKA_STATE_FILL_LAYER_ID,
+        type: "fill",
+        source: KARNATAKA_STATE_SOURCE_ID,
+        // Fully transparent - border-only hit-area, matching every other boundary layer.
+        paint: { "fill-color": "#0891b2", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: KARNATAKA_STATE_LINE_LAYER_ID,
+        type: "line",
+        source: KARNATAKA_STATE_SOURCE_ID,
+        paint: {
+          "line-color": "#0891b2",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            3,
+            ["boolean", ["feature-state", "hover"], false],
+            3.5,
+            2,
+          ],
+        },
+      });
+      const stateLabelLayer: any = {
+        id: KARNATAKA_STATE_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: KARNATAKA_STATE_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", "st_nm"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 14,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#164e63", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(stateLabelLayer);
+      loadedKarnatakaStateRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load Karnataka state boundary:", error);
+    }
   };
 
   const clearGbaBoundary = (map: MapLibreMap) => {
@@ -3196,6 +3135,600 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       console.error(`Failed to load GBA wards for zone "${zone}":`, error);
     } finally {
       gbaLoadingRef.current.wards = false;
+    }
+  };
+
+  const clearRoadsHighways = (map: MapLibreMap) => {
+    const groups: [string, string, string][] = [
+      [ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID, ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID, ROADS_NATIONAL_HIGHWAY_SOURCE_ID],
+      [ROADS_STATE_HIGHWAY_FILL_LAYER_ID, ROADS_STATE_HIGHWAY_LINE_LAYER_ID, ROADS_STATE_HIGHWAY_SOURCE_ID],
+      [ROADS_DISTRICT_ROAD_FILL_LAYER_ID, ROADS_DISTRICT_ROAD_LINE_LAYER_ID, ROADS_DISTRICT_ROAD_SOURCE_ID],
+    ];
+    groups.forEach(([fillId, lineId, sourceId]) => {
+      if (map.getLayer(fillId)) map.removeLayer(fillId);
+      if (map.getLayer(lineId)) map.removeLayer(lineId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    });
+    if (map.getLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID)) map.removeLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID);
+    if (map.getSource(ROADS_LOCAL_ROADS_SOURCE_ID)) map.removeSource(ROADS_LOCAL_ROADS_SOURCE_ID);
+    loadedRoadsHighwaysRef.current = null;
+    roadsUnfilteredDataRef.current = {};
+  };
+
+  const clearRoadsVillages = (map: MapLibreMap) => {
+    if (map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID)) map.removeLayer(ROADS_VILLAGES_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_VILLAGES_LINE_LAYER_ID)) map.removeLayer(ROADS_VILLAGES_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_VILLAGES_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_VILLAGES_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_SOURCE_ID);
+    if (map.getSource(ROADS_VILLAGES_LABELS_SOURCE_ID)) map.removeSource(ROADS_VILLAGES_LABELS_SOURCE_ID);
+    // Whatever road filter (taluk/hobli/village clip - see applyRoadsBoundaryFilter) should be
+    // active after this clear is the caller's call, not this function's - the taluk/hobli
+    // click handlers set it explicitly right after invoking this, since only they know
+    // whether this is "deselecting one level, fall back to the parent's clip" or "switching
+    // to a different taluk entirely, the highway data itself is about to be replaced".
+    loadedRoadsVillagesHobliRef.current = null;
+    selectedRoadsVillageIdRef.current = null;
+  };
+
+  const clearRoadsHoblies = (map: MapLibreMap) => {
+    clearRoadsVillages(map);
+    if (map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID)) map.removeLayer(ROADS_HOBLIES_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_HOBLIES_LINE_LAYER_ID)) map.removeLayer(ROADS_HOBLIES_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_HOBLIES_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_HOBLIES_SOURCE_ID)) map.removeSource(ROADS_HOBLIES_SOURCE_ID);
+    if (map.getSource(ROADS_HOBLIES_LABELS_SOURCE_ID)) map.removeSource(ROADS_HOBLIES_LABELS_SOURCE_ID);
+    loadedRoadsHobliesTalukRef.current = null;
+    selectedRoadsHobliIdRef.current = null;
+    selectedRoadsHobliNameRef.current = null;
+    selectedRoadsHobliGeometryRef.current = null;
+  };
+
+  const clearRoadsTaluks = (map: MapLibreMap) => {
+    clearRoadsHighways(map);
+    clearRoadsHoblies(map);
+    selectedRoadsTalukGeometryRef.current = null;
+    if (map.getLayer(ROADS_TALUKS_FILL_LAYER_ID)) map.removeLayer(ROADS_TALUKS_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_TALUKS_LINE_LAYER_ID)) map.removeLayer(ROADS_TALUKS_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_TALUKS_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_TALUKS_SOURCE_ID)) map.removeSource(ROADS_TALUKS_SOURCE_ID);
+    if (map.getSource(ROADS_TALUKS_LABELS_SOURCE_ID)) map.removeSource(ROADS_TALUKS_LABELS_SOURCE_ID);
+    loadedRoadsTaluksDistrictRef.current = null;
+    selectedRoadsTalukIdRef.current = null;
+    selectedRoadsTalukNameRef.current = null;
+  };
+
+  const clearRoadsDistricts = (map: MapLibreMap) => {
+    clearRoadsTaluks(map);
+    if (map.getLayer(ROADS_DISTRICTS_FILL_LAYER_ID)) map.removeLayer(ROADS_DISTRICTS_FILL_LAYER_ID);
+    if (map.getLayer(ROADS_DISTRICTS_LINE_LAYER_ID)) map.removeLayer(ROADS_DISTRICTS_LINE_LAYER_ID);
+    removeLabelLayer(map, ROADS_DISTRICTS_LABELS_LAYER_ID);
+    if (map.getSource(ROADS_DISTRICTS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_SOURCE_ID);
+    if (map.getSource(ROADS_DISTRICTS_LABELS_SOURCE_ID)) map.removeSource(ROADS_DISTRICTS_LABELS_SOURCE_ID);
+    loadedRoadsDistrictsRef.current = false;
+    roadsDistrictsDataRef.current = null;
+    selectedRoadsDistrictIdRef.current = null;
+    selectedRoadsDistrictNameRef.current = null;
+  };
+
+  // Colors and API category ids for the 3 highway categories shown together at whichever
+  // level (district or taluk) is currently selected.
+  const ROADS_HIGHWAY_CATEGORIES: {
+    category: "national_highway" | "state_highway" | "district_road";
+    color: string;
+    sourceId: string;
+    fillLayerId: string;
+    lineLayerId: string;
+  }[] = [
+    {
+      category: "national_highway",
+      color: "#9333ea", // violet - was red, but that matched the village boundary color
+      sourceId: ROADS_NATIONAL_HIGHWAY_SOURCE_ID,
+      fillLayerId: ROADS_NATIONAL_HIGHWAY_FILL_LAYER_ID,
+      lineLayerId: ROADS_NATIONAL_HIGHWAY_LINE_LAYER_ID,
+    },
+    {
+      category: "state_highway",
+      color: "#f59e0b", // amber
+      sourceId: ROADS_STATE_HIGHWAY_SOURCE_ID,
+      fillLayerId: ROADS_STATE_HIGHWAY_FILL_LAYER_ID,
+      lineLayerId: ROADS_STATE_HIGHWAY_LINE_LAYER_ID,
+    },
+    {
+      category: "district_road",
+      color: "#65a30d", // olive green
+      sourceId: ROADS_DISTRICT_ROAD_SOURCE_ID,
+      fillLayerId: ROADS_DISTRICT_ROAD_FILL_LAYER_ID,
+      lineLayerId: ROADS_DISTRICT_ROAD_LINE_LAYER_ID,
+    },
+  ];
+
+  // Fetches and renders the 3 highway categories (National/State/District Road) together
+  // for either a district or a taluk (via /api/datasets/roads). A taluk genuinely missing a
+  // category comes back as an empty FeatureCollection (see the API route), which just adds
+  // an empty source - no special-casing needed here.
+  const loadRoadsHighways = async (map: MapLibreMap, level: "district" | "taluk", district: string, taluk?: string) => {
+    if (roadsLoadingRef.current.highways) return;
+    roadsLoadingRef.current.highways = true;
+    clearRoadsHighways(map);
+    try {
+      const results = await Promise.all(
+        ROADS_HIGHWAY_CATEGORIES.map(async ({ category }) => {
+          const params = new URLSearchParams({ district, category });
+          if (taluk) params.set("taluk", taluk);
+          const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+          if (!response.ok) return { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
+          return (await response.json()) as GeoJSON.FeatureCollection;
+        })
+      );
+
+      ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
+        const data = results[i]!;
+        roadsUnfilteredDataRef.current[sourceId] = data;
+        map.addSource(sourceId, { type: "geojson", data });
+        map.addLayer({
+          id: fillLayerId,
+          type: "fill",
+          source: sourceId,
+          // Fully transparent - border-only, matching every other boundary layer's style.
+          paint: { "fill-color": color, "fill-opacity": 0 },
+        });
+        map.addLayer({
+          id: lineLayerId,
+          type: "line",
+          source: sourceId,
+          paint: { "line-color": color, "line-width": 2 },
+        });
+      });
+
+      // The full local street network (Road Center Line) is only served pre-split - and
+      // pre-simplified down to a few MB each - at TALUK granularity; there's no district- or
+      // state-level file. A single taluk fetches directly; a whole district merges every one
+      // of its taluks' files client-side (still a reasonable ~20-40MB for a district's worth
+      // of taluks). Statewide would mean merging all 240 taluks (~825MB combined) - too much
+      // for a browser to fetch and render in one shot, so the "State" click-scope skips this
+      // and shows only the National/State/District Road highways.
+      let localRoadsFeatures: GeoJSON.Feature[] = [];
+      if (level === "taluk" && taluk) {
+        const params = new URLSearchParams({ district, taluk, category: "local_roads" });
+        const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+        if (response.ok) {
+          const data = (await response.json()) as GeoJSON.FeatureCollection;
+          localRoadsFeatures = data.features;
+        }
+      } else if (level === "district") {
+        const talukListResponse = await fetch(
+          `/api/datasets/district-taluks?district=${encodeURIComponent(district)}&state=Karnataka`
+        );
+        if (talukListResponse.ok) {
+          const talukListData = (await talukListResponse.json()) as GeoJSON.FeatureCollection;
+          const talukNames = talukListData.features
+            .map((f) => (f.properties?.KGISTalukName as string | undefined)?.trim())
+            .filter((name): name is string => Boolean(name));
+          const perTaluk = await Promise.all(
+            talukNames.map(async (t) => {
+              const params = new URLSearchParams({ district, taluk: t, category: "local_roads" });
+              const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+              if (!response.ok) return [] as GeoJSON.Feature[];
+              const data = (await response.json()) as GeoJSON.FeatureCollection;
+              return data.features;
+            })
+          );
+          localRoadsFeatures = perTaluk.flat();
+        }
+      }
+
+      const localRoadsData: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: localRoadsFeatures };
+      roadsUnfilteredDataRef.current[ROADS_LOCAL_ROADS_SOURCE_ID] = localRoadsData;
+      map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, { type: "geojson", data: localRoadsData });
+      map.addLayer({
+        id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_LOCAL_ROADS_SOURCE_ID,
+        // Bright cyan - the original dark slate blended into the satellite basemap's own
+        // dark urban texture and became unreadable once zoomed into a dense city taluk.
+        // Distinct from the district/taluk boundary blue and the red/amber/olive highway
+        // colors, so it reads clearly at any zoom without being confused for either.
+        paint: { "line-color": "#22d3ee", "line-width": 1, "line-opacity": 0.9 },
+      });
+
+      loadedRoadsHighwaysRef.current = { level, district, taluk };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load ${level}-level highways for "${taluk ?? district}":`, error);
+    } finally {
+      roadsLoadingRef.current.highways = false;
+    }
+  };
+
+  // Double-clicking a hobli or village needs the taluk-level highway/local-road data loaded
+  // first before it can filter it down (see applyRoadsBoundaryFilter) - but it may already be
+  // loaded (the user double-clicked the taluk on the way down), so this only fetches if it
+  // isn't. Lets every level's double-click "just show me the roads" work on its own, without
+  // requiring the taluk to have been double-clicked first.
+  const ensureRoadsLoadedForTaluk = async (map: MapLibreMap, district: string, taluk: string) => {
+    const alreadyLoaded =
+      loadedRoadsHighwaysRef.current?.level === "taluk" &&
+      loadedRoadsHighwaysRef.current?.taluk?.toLowerCase() === taluk.toLowerCase();
+    if (alreadyLoaded) return;
+    await loadRoadsHighways(map, "taluk", district, taluk);
+  };
+
+  // Fetches every district's National/State/District Road highways (merged into one
+  // statewide view) and adds the statewide local road network as a PMTiles vector tile layer
+  // - triggered by the "State" button next to the Roads filter option (not a map click -
+  // districts tile the whole state with no separate area to click as "the state" itself).
+  // The local road network is a separate, offline-built vector tile archive (see
+  // /api/datasets/roads-statewide-local and registerPmtilesProtocol) rather than a flat
+  // GeoJSON merge of the 240 per-taluk files (~788MB raw) - MapLibre only fetches whatever
+  // tiles the current viewport/zoom needs, so it's thinned out zoomed out and fully detailed
+  // zoomed in, not one huge fetch with a single fixed level of detail everywhere.
+  const loadRoadsStatewide = async (map: MapLibreMap) => {
+    if (roadsLoadingRef.current.highways) return;
+    const districtNames = (roadsDistrictsDataRef.current?.features ?? [])
+      .map((f) => (f.properties?.dtname as string | undefined)?.trim())
+      .filter((name): name is string => Boolean(name));
+    if (districtNames.length === 0) return;
+
+    roadsLoadingRef.current.highways = true;
+    clearRoadsHighways(map);
+    try {
+      const results = await Promise.all(
+        ROADS_HIGHWAY_CATEGORIES.map(async ({ category }) => {
+          const perDistrict = await Promise.all(
+            districtNames.map(async (district) => {
+              const params = new URLSearchParams({ district, category });
+              const response = await fetch(`/api/datasets/roads?${params.toString()}`);
+              if (!response.ok) return [] as GeoJSON.Feature[];
+              const data = (await response.json()) as GeoJSON.FeatureCollection;
+              return data.features;
+            })
+          );
+          return { type: "FeatureCollection", features: perDistrict.flat() } as GeoJSON.FeatureCollection;
+        })
+      );
+
+      ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
+        const data = results[i]!;
+        roadsUnfilteredDataRef.current[sourceId] = data;
+        map.addSource(sourceId, { type: "geojson", data });
+        map.addLayer({
+          id: fillLayerId,
+          type: "fill",
+          source: sourceId,
+          paint: { "fill-color": color, "fill-opacity": 0 },
+        });
+        map.addLayer({
+          id: lineLayerId,
+          type: "line",
+          source: sourceId,
+          // Thinner than the district/taluk-level line-width (2) - at statewide zoom, every
+          // district's highways drawn at full width turns into visual clutter.
+          paint: { "line-color": color, "line-width": 1 },
+        });
+      });
+
+      // Not added to roadsUnfilteredDataRef - it's a vector tile source (no .setData()), and
+      // applyRoadsBoundaryFilter is never reached while level is "state" anyway (taluk/hobli/
+      // village aren't selectable without a district first, which "state" scope bypasses).
+      map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, {
+        type: "vector",
+        url: "pmtiles:///api/datasets/roads-statewide-local",
+      });
+      map.addLayer({
+        id: ROADS_LOCAL_ROADS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_LOCAL_ROADS_SOURCE_ID,
+        "source-layer": "local_roads",
+        paint: { "line-color": "#22d3ee", "line-width": 0.6, "line-opacity": 0.75 },
+      });
+
+      loadedRoadsHighwaysRef.current = { level: "state", district: "Karnataka" };
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load statewide highways:", error);
+    } finally {
+      roadsLoadingRef.current.highways = false;
+    }
+  };
+
+  // Narrows every currently-loaded highway/local-road source down to just the features that
+  // intersect `boundaryGeometry` (pass null to restore the full taluk-wide view). Used at
+  // every level below "taluk" - selecting a taluk clips to that taluk's own polygon,
+  // selecting a hobli clips to the hobli's, selecting a village clips to the village's - each
+  // one replacing whatever clip was active before, not stacking on top of it. Filters
+  // client-side against the data already fetched for the taluk (roadsUnfilteredDataRef)
+  // rather than a fresh request - there's no separate taluk/hobli/village-level road file to
+  // fetch, the road data itself doesn't split any finer than taluk.
+  const applyRoadsBoundaryFilter = (map: MapLibreMap, boundaryGeometry: GeoJSON.Geometry | null) => {
+    for (const [sourceId, fullData] of Object.entries(roadsUnfilteredDataRef.current)) {
+      const source = map.getSource(sourceId);
+      if (!source || !("setData" in source)) continue;
+      const data: GeoJSON.FeatureCollection = boundaryGeometry
+        ? {
+            type: "FeatureCollection",
+            features: fullData.features.filter((feature) => {
+              try {
+                return booleanIntersects(feature, boundaryGeometry);
+              } catch {
+                // Malformed/degenerate geometry (rare) - exclude rather than crash the filter.
+                return false;
+              }
+            }),
+          }
+        : fullData;
+      (source as GeoJSONSource).setData(data);
+    }
+  };
+
+  // True only when the currently-loaded highways are a *taluk's own* clipped view (i.e. that
+  // taluk was double-clicked, or a hobli/village below it was). District-wide ("district"
+  // click-scope) and statewide ("state" click-scope) views are intentionally NOT clipped by
+  // drilling through taluk/hobli/village boundaries with a plain single click - those clicks
+  // are boundaries-only by spec, and re-clipping or clearing the highways on every such click
+  // would otherwise silently narrow (or wipe out) a district/state view the user explicitly
+  // asked to see in full. Taluk/hobli/village select/deselect handlers gate their
+  // clearRoadsHighways()/applyRoadsBoundaryFilter() calls on this so they only ever touch an
+  // already taluk-scoped view, never a wider one.
+  const isRoadsHighwaysTalukScoped = () => loadedRoadsHighwaysRef.current?.level === "taluk";
+
+  // Fetches and renders Karnataka's district boundaries as the entry point into the Roads
+  // hierarchy, reusing /api/datasets/state-districts but into dedicated layers so this mode
+  // never collides with "administrative" mode's own district layer.
+  const loadRoadsDistricts = async (map: MapLibreMap) => {
+    if (roadsLoadingRef.current.districts) return;
+    roadsLoadingRef.current.districts = true;
+    clearRoadsDistricts(map);
+    try {
+      const response = await fetch(`/api/datasets/state-districts?state=Karnataka`);
+      if (!response.ok) throw new Error(`state-districts failed (${response.status})`);
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+      roadsDistrictsDataRef.current = data;
+
+      map.addSource(ROADS_DISTRICTS_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_DISTRICTS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["dtname"]),
+      });
+      map.addLayer({
+        id: ROADS_DISTRICTS_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_DISTRICTS_SOURCE_ID,
+        paint: { "fill-color": "#0ea5e9", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_DISTRICTS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_DISTRICTS_SOURCE_ID,
+        paint: {
+          "line-color": "#0ea5e9",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const districtLabelLayer: any = {
+        id: ROADS_DISTRICTS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_DISTRICTS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "dtname" here.
+          "text-field": ["get", "dtname"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#075985", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(districtLabelLayer);
+      loadedRoadsDistrictsRef.current = true;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error("Failed to load Roads districts:", error);
+    } finally {
+      roadsLoadingRef.current.districts = false;
+    }
+  };
+
+  // Fetches and renders a district's taluk boundaries, reusing /api/datasets/district-taluks
+  // into dedicated layers, triggered by clicking a district in the Roads hierarchy.
+  const loadRoadsTaluks = async (map: MapLibreMap, districtName: string) => {
+    if (roadsLoadingRef.current.taluks) return;
+    roadsLoadingRef.current.taluks = true;
+    clearRoadsTaluks(map);
+    try {
+      const url = `/api/datasets/district-taluks?district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No taluk data available for district "${districtName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      map.addSource(ROADS_TALUKS_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_TALUKS_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["KGISTalukName", "subdist_nm", "name"]),
+      });
+      map.addLayer({
+        id: ROADS_TALUKS_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_TALUKS_SOURCE_ID,
+        paint: { "fill-color": "#0369a1", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_TALUKS_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_TALUKS_SOURCE_ID,
+        paint: {
+          "line-color": "#0369a1",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const talukLabelLayer: any = {
+        id: ROADS_TALUKS_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_TALUKS_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "KGISTalukName" here.
+          "text-field": ["get", "KGISTalukName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#0c4a6e", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(talukLabelLayer);
+      loadedRoadsTaluksDistrictRef.current = districtName.trim().toLowerCase();
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads taluks for "${districtName}":`, error);
+    } finally {
+      roadsLoadingRef.current.taluks = false;
+    }
+  };
+
+  // Fetches and renders a taluk's hobli boundaries, reusing /api/datasets/taluk-hoblies
+  // (the same generic administrative data "administrative" mode uses) into dedicated Roads
+  // layers - the road data itself has no hobli-level split, this is boundary context only.
+  const loadRoadsHoblies = async (map: MapLibreMap, talukName: string, districtName: string) => {
+    const normalized = talukName.trim().toLowerCase();
+    if (loadedRoadsHobliesTalukRef.current === normalized) return;
+    try {
+      const url = `/api/datasets/taluk-hoblies?taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No hobli data available for taluk "${talukName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      clearRoadsHoblies(map);
+      map.addSource(ROADS_HOBLIES_SOURCE_ID, { type: "geojson", data, generateId: true });
+      map.addSource(ROADS_HOBLIES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, ["KGISHobliName", "hobli_name", "name"]),
+      });
+      map.addLayer({
+        id: ROADS_HOBLIES_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_HOBLIES_SOURCE_ID,
+        paint: { "fill-color": "#eab308", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_HOBLIES_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_HOBLIES_SOURCE_ID,
+        paint: {
+          "line-color": "#eab308",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const hobliLabelLayer: any = {
+        id: ROADS_HOBLIES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_HOBLIES_LABELS_SOURCE_ID,
+        layout: {
+          // labelAnchorFeatures outputs the property under nameKeys[0] - "KGISHobliName" here.
+          "text-field": ["get", "KGISHobliName"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 9.5,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#713f12", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(hobliLabelLayer);
+      loadedRoadsHobliesTalukRef.current = normalized;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads hoblies for "${talukName}":`, error);
+    }
+  };
+
+  // Fetches and renders a hobli's village boundaries, reusing /api/datasets/hobli-villages
+  // into dedicated Roads layers - same reasoning as loadRoadsHoblies above.
+  const loadRoadsVillages = async (map: MapLibreMap, hobliName: string, talukName: string, districtName: string) => {
+    const normalized = hobliName.trim().toLowerCase();
+    if (loadedRoadsVillagesHobliRef.current === normalized) return;
+    try {
+      const url = `/api/datasets/hobli-villages?hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=Karnataka`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`No village data available for hobli "${hobliName}"`);
+        return;
+      }
+      const data = (await response.json()) as GeoJSON.FeatureCollection;
+
+      clearRoadsVillages(map);
+      map.addSource(ROADS_VILLAGES_SOURCE_ID, { type: "geojson", data, generateId: true });
+      const firstProps = data.features[0]?.properties ?? {};
+      const villageNameKey = VILLAGE_NAME_KEYS.find((key) => typeof firstProps[key] === "string") ?? "name";
+      map.addSource(ROADS_VILLAGES_LABELS_SOURCE_ID, {
+        type: "geojson",
+        data: labelAnchorFeatures(data, [villageNameKey]),
+      });
+      map.addLayer({
+        id: ROADS_VILLAGES_FILL_LAYER_ID,
+        type: "fill",
+        source: ROADS_VILLAGES_SOURCE_ID,
+        paint: { "fill-color": "#ff073a", "fill-opacity": 0 },
+      });
+      map.addLayer({
+        id: ROADS_VILLAGES_LINE_LAYER_ID,
+        type: "line",
+        source: ROADS_VILLAGES_SOURCE_ID,
+        paint: {
+          "line-color": "#ff073a",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            2.5,
+            ["boolean", ["feature-state", "hover"], false],
+            3,
+            1,
+          ],
+        },
+      });
+      const villageLabelLayer: any = {
+        id: ROADS_VILLAGES_LABELS_LAYER_ID,
+        type: "symbol" as const,
+        source: ROADS_VILLAGES_LABELS_SOURCE_ID,
+        layout: {
+          "text-field": ["get", villageNameKey],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 9,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: { "text-color": "#7f1d1d", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      };
+      map.addLayer(villageLabelLayer);
+      loadedRoadsVillagesHobliRef.current = normalized;
+      selectedRoadsHobliNameRef.current = hobliName;
+      applyBoundaryLayerVisibility(map);
+    } catch (error) {
+      console.error(`Failed to load Roads villages for "${hobliName}":`, error);
     }
   };
 
@@ -7445,7 +7978,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (cancelled || !containerRef.current) return;
 
         registerSatelliteProtocol(maplibregl, () => mapRef.current);
-        registerViirsNoDataProtocol(maplibregl);
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {
@@ -7658,38 +8190,34 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           });
         });
 
-        map.on("contextmenu", (e) => {
-          // While an AOI drawing tool is armed, right-click cancels the in-progress shape.
-          if (drawingToolRef.current) {
-            if (drawSessionRef.current) {
-              e.preventDefault();
-              cancelDrawing(map);
-            }
-            return;
-          }
-
-          // Otherwise: report the attribute info of the deepest boundary feature under the
-          // cursor (state / district / taluk / hobli / village / cadastral parcel) so the
-          // caller's side panel can render it. The native browser context menu is suppressed
-          // only when a feature was actually hit.
-          attributeInfoOpenRef.current = false;
-
+        // Reports the attribute info of the deepest boundary feature under the cursor
+        // (country / state / district / taluk / hobli / village / cadastral parcel / GBA
+        // level / Bengaluru overlay) so the caller's side panel can render it. Returns
+        // true when a feature was hit and reported. Opened on LEFT click - alongside the
+        // layer's own drill-down action - so the panel appears everywhere without needing
+        // a right-click (the right-click now only cancels in-progress AOI drawings).
+        const reportAttributeInfo = (e: MapMouseEvent): boolean => {
           // queryRenderedFeatures throws if any listed layer doesn't exist yet - and most
           // drill-down layers (districts/taluks/hoblies/villages/cadastrals) only appear
-          // once loaded - so query only the layers currently on the map.
-          const layers = ATTRIBUTE_POPUP_LAYER_IDS.filter((id) => map.getLayer(id));
+          // once loaded - so query only the layers currently on the map. The
+          // manually-toggled Bengaluru KML/KMZ overlays use dynamic layer ids, so their
+          // fill layers are appended alongside the static list.
+          const extraLayerIds = Array.from(extraLayerKeysRef.current).map(
+            (key) => `${extraLayerIdFromKey(key)}-fill`
+          );
+          const layers = [...ATTRIBUTE_POPUP_LAYER_IDS, ...extraLayerIds].filter((id) =>
+            map.getLayer(id)
+          );
           const features = layers.length > 0
             ? queryRenderedFeaturesSafe(map, e.point, { layers })
             : [];
           const feature = features[0];
-          if (!feature || !feature.properties) {
-            onAttributeInfoRef.current?.(null);
-            return;
-          }
-          e.preventDefault();
+          if (!feature || !feature.properties) return false;
 
           const layerId = feature.layer?.id ?? "";
-          const typeLabel = ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ?? "Feature";
+          const typeLabel =
+            ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ??
+            (extraLayerIds.includes(layerId) ? "Boundary" : "Feature");
           const props = feature.properties;
 
           // Display title: the first known name-key property, else the boundary type.
@@ -7704,6 +8232,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "KGISVillageName",
             "village_name",
             "vill_nm",
+            // GBA levels carry their names under these keys ("Name" for the authority
+            // and corporations, zone_name/ward_name for the deeper two levels).
+            "Name",
+            "zone_name",
+            "ward_name",
             "name",
           ];
           const title =
@@ -7733,10 +8266,56 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "district",
             "no_of_villages",
           ];
+          // Assembly/parliamentary constituency files are KML-derived and carry
+          // Google-Earth noise properties - a giant HTML "description" blob,
+          // "extrude" and "altitudeMode" - that add nothing to the panel, so drop
+          // them for both KML-based layers.
+          const isKmlBoundaryLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const KML_DROPPED_KEYS = ["description", "extrude", "altitudeMode"];
+          // Assembly constituency features carry their 2023 election facts merged in
+          // by the state-assembly API route - present them in the canonical order
+          // (state, district, Lok Sabha, MLA, party, then the election stats).
+          const isAssemblyLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
+          const ASSEMBLY_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "district",
+            "lok_sabha",
+            "mla",
+            "party",
+            "election_year",
+            "total_voters",
+            "polling_stations",
+            "voter_turnout",
+          ];
+          // Parliamentary constituency features carry their 2024 election facts merged in
+          // by the state-parliament API route - present them in the canonical order
+          // (state, districts, assembly segments, MP, party, then the election stats).
+          const isParliamentLayer =
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const PARLIAMENT_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "districts",
+            "assembly_segments",
+            "mp",
+            "party",
+            "election_year",
+            "total_voters",
+            "voter_turnout",
+          ];
           const rows: AttributeRow[] = Object.entries(props)
             .filter(
               ([k, v]) =>
                 !(isGpBoundary && k === "source_file") &&
+                !(isKmlBoundaryLayer && KML_DROPPED_KEYS.includes(k)) &&
                 v !== null &&
                 v !== undefined &&
                 String(v).trim() !== ""
@@ -7744,7 +8323,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             .sort(([a], [b]) => {
               const order = isGpBoundary
                 ? GP_ATTRIBUTE_ROW_ORDER
-                : ATTRIBUTE_ROW_ORDER;
+                : isAssemblyLayer
+                  ? ASSEMBLY_ATTRIBUTE_ROW_ORDER
+                  : isParliamentLayer
+                    ? PARLIAMENT_ATTRIBUTE_ROW_ORDER
+                    : ATTRIBUTE_ROW_ORDER;
               const ia = order.indexOf(a);
               const ib = order.indexOf(b);
               if (ia === -1 && ib === -1) return 0;
@@ -7757,6 +8340,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               value: String(v),
             }));
 
+          // The states file's features carry a redundant "layer" property (e.g.
+          // "state") that just duplicates the panel's badge - drop that row for
+          // state features.
+          if (layerId === "states-fill-default") {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if (rows[i]!.label === "Layer") rows.splice(i, 1);
+            }
+          }
+
           // Karnataka's on-platform hierarchy counts, cross-checked against the remote MinIO
           // bucket (see scripts/count-karnataka-hierarchy.mjs). Shown only for the state
           // feature itself, as extra read-only rows below its native attributes.
@@ -7766,11 +8358,63 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             { label: "Hoblis", value: "852", bold: true },
             { label: "Villages", value: "30,335", bold: true },
           ];
-          const isKarnatakaState =
-            layerId === "states-fill-default" &&
-            typeof props.st_nm === "string" &&
-            props.st_nm.trim().toLowerCase() === "karnataka";
-          if (isKarnatakaState) rows.push(...KARNATAKA_HIERARCHY);
+          const isStateLayer = layerId === "states-fill-default";
+          const stateName =
+            typeof props.st_nm === "string" ? props.st_nm.trim() : "";
+          if (isStateLayer && stateName.toLowerCase() === "karnataka") {
+            rows.push(...KARNATAKA_HIERARCHY);
+          }
+
+          // Per-state / UT reference facts (revenue divisions, assembly seats, area,
+          // population, density, literacy) appended below each state feature's native
+          // attributes - see STATE_FACTS in src/data/state-facts.ts.
+          const stateFacts = isStateLayer ? STATE_FACTS[stateName] : undefined;
+          if (stateFacts) {
+            rows.push(
+              {
+                label: "Revenue Divisions",
+                value: stateFacts.revenueDivisions,
+                bold: true,
+              },
+              {
+                label: "Assembly Seats",
+                value: stateFacts.assemblySeats,
+                bold: true,
+              },
+              { label: "Total Area", value: stateFacts.totalArea, bold: true },
+              { label: "Population", value: stateFacts.population, bold: true },
+              { label: "Density", value: stateFacts.density, bold: true },
+              {
+                label: "Literacy Rate",
+                value: stateFacts.literacy,
+                bold: true,
+              },
+            );
+          }
+
+          // The India national boundary's properties carry data-provenance metadata
+          // (source / note) that's noise in the attribute panel - drop those rows, and
+          // report the country's admin composition (28 states + 8 union territories, the
+          // 36 LGD state/UT polygons the boundary was dissolved from) instead, shown right
+          // below Country Code.
+          const isIndiaBoundaryLayer =
+            layerId === "india-boundary-fill" || layerId === "india-boundary-line";
+          if (isIndiaBoundaryLayer) {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              const label = rows[i]!.label;
+              if (label === "Source" || label === "Note") rows.splice(i, 1);
+            }
+            rows.push(
+              { label: "States", value: "28" },
+              { label: "Union Territories", value: "8" },
+              { label: "Capital", value: "New Delhi" },
+              { label: "Population", value: "~1.44 Billion" },
+              { label: "Total Area", value: "3,287,263 sq km" },
+              { label: "Region", value: "South Asia" },
+              { label: "Time Zone", value: "IST (UTC +5:30)" },
+              { label: "Calling Code", value: "+91" },
+            );
+          }
 
           // Cadastral parcels carry no owner names - those come from Bhoomi, keyed by the
           // parcel's administrative chain plus survey/surnoc/hissa. Hand that key to the
@@ -7829,6 +8473,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             properties: props,
             hierarchy,
           });
+          return true;
+        };
+
+        // Right-click keeps only its AOI-drawing role: while a drawing tool is armed it
+        // cancels the in-progress shape. (The attribute-info panel itself now opens on
+        // left click, see the map-level click handler below.)
+        map.on("contextmenu", (e) => {
+          if (drawingToolRef.current && drawSessionRef.current) {
+            e.preventDefault();
+            cancelDrawing(map);
+          }
+        });
+
+        // Left-click opens the attribute-info panel for the deepest boundary feature under
+        // the cursor, in addition to whatever the layer's own click handler does (clicking
+        // India still loads the states AND shows the country panel; clicking a district
+        // still drills into its taluks AND shows the district panel). A click on empty map
+        // leaves an open panel untouched - Escape or the panel's X button dismiss it.
+        map.on("click", (e) => {
+          if (drawingToolRef.current) return;
+          reportAttributeInfo(e);
         });
 
         // Weather widget: while at least one metric is checked in the left-side
@@ -8049,9 +8714,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // set synchronously at entry (before any await) to serialize the loads.
             let indiaStatesLoading = false;
             const loadIndiaStates = async () => {
-              if (indiaStatesLoading || map.getSource(STATE_SOURCE_ID)) return;
-              indiaStatesLoading = true;
-             try {
+              // Guard against re-entry: the boundary click handler can fire again after the
+              // states are already loaded (e.g. a second click on the country), which would
+              // otherwise throw "Source already exists".
+              if (map.getSource(STATE_SOURCE_ID)) return;
+            try {
             let statesResponse: Response;
             try {
               statesResponse = await fetch("/api/datasets/india-boundary?file=states");
@@ -8623,6 +9290,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
+              // MapLibre invokes every layer's click handler independently for a single
+              // click (it doesn't stop at the topmost layer) - a click on a loaded gram
+              // panchayat boundary, which sits geometrically inside this taluk's polygon
+              // too, would otherwise also reach this handler and toggle the taluk's GP
+              // boundaries off right as the user inspects the panchayat's attribute info.
+              // If the click actually landed on a GP boundary, let the attribute-info
+              // panel handle it and leave the loaded boundaries untouched.
+              if (
+                map.getLayer(GP_BOUNDARIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, {
+                  layers: [GP_BOUNDARIES_FILL_LAYER_ID],
+                }).length > 0
+              ) {
+                return;
+              }
+
               const talukName =
                 (feature.properties?.kgis_civil_taluk_name as string | undefined) ??
                 (feature.properties?.taluk_panchayat as string | undefined);
@@ -8713,6 +9396,69 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
               hoveredGpBoundaryId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+
+            // Karnataka's own outline - the shared entry point for "gba" and "roads" modes
+            // (see loadKarnatakaStateBoundary). A click reveals whichever mode is currently
+            // active is actually after: GBA's own boundary, or the Roads districts.
+            let hoveredKarnatakaStateId: string | number | null = null;
+            map.on("mousemove", KARNATAKA_STATE_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredKarnatakaStateId !== null && hoveredKarnatakaStateId !== feature.id) {
+                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+              }
+              hoveredKarnatakaStateId = feature.id;
+              map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", KARNATAKA_STATE_FILL_LAYER_ID, () => {
+              if (hoveredKarnatakaStateId !== null) {
+                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+              }
+              hoveredKarnatakaStateId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            map.on("click", KARNATAKA_STATE_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              if (!e.features?.[0]) return;
+              const mode = boundaryLayerModeRef.current;
+              if (mode === "gba") {
+                // A click on the GBA boundary (inside Karnataka) would otherwise also reach
+                // this handler and immediately toggle it back off.
+                if (
+                  map.getLayer(GBA_BOUNDARY_FILL_LAYER_ID) &&
+                  queryRenderedFeaturesSafe(map, e.point, { layers: [GBA_BOUNDARY_FILL_LAYER_ID] }).length > 0
+                ) {
+                  return;
+                }
+                if (loadedGbaBoundaryRef.current) {
+                  clearGbaWards(map);
+                  clearGbaZones(map);
+                  clearGbaCorporations(map);
+                  clearGbaBoundary(map);
+                } else {
+                  map.getCanvas().style.cursor = "wait";
+                  void loadGbaBoundary(map).finally(() => {
+                    if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                  });
+                }
+              } else if (mode === "roads") {
+                if (
+                  map.getLayer(ROADS_DISTRICTS_FILL_LAYER_ID) &&
+                  queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_DISTRICTS_FILL_LAYER_ID] }).length > 0
+                ) {
+                  return;
+                }
+                if (loadedRoadsDistrictsRef.current) {
+                  clearRoadsDistricts(map);
+                } else {
+                  map.getCanvas().style.cursor = "wait";
+                  void loadRoadsDistricts(map).finally(() => {
+                    if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                  });
+                }
+              }
             });
 
             // --- GBA (Greater Bengaluru Authority) hierarchy click-through:
@@ -8893,6 +9639,381 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!isSame) {
                 map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: feature.id }, { selected: true });
               }
+            });
+
+            // --- Roads hierarchy: District -> Taluk, each level showing National/State/
+            // District Road highways together (see loadRoadsHighways). Mirrors the GBA
+            // handlers above - sibling-layer guards stop a click on a taluk (which sits
+            // geometrically inside its district) from also toggling the district off.
+            let hoveredRoadsDistrictId: string | number | null = null;
+            map.on("mousemove", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsDistrictId !== null && hoveredRoadsDistrictId !== feature.id) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+              }
+              hoveredRoadsDistrictId = feature.id;
+              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_DISTRICTS_FILL_LAYER_ID, () => {
+              if (hoveredRoadsDistrictId !== null) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+              }
+              hoveredRoadsDistrictId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            // Behavior depends on roadsClickScopeRef (the "State"/"District" buttons):
+            // "state" - any click loads the statewide combined view, nothing else, districts
+            // aren't individually selectable. "district" - a click selects the district and
+            // shows its taluks + its own full highways together, immediately. "none"
+            // (default) - a click is boundaries-only (fast, no highway fetch); the district's
+            // highways load on double-click instead (see the dblclick handler below), the
+            // same lightweight behavior ordinary browsing and the taluk/hobli/village levels
+            // already have. A real double-click always fires click, click, dblclick in
+            // sequence, so by the time dblclick lands the district is already selected via
+            // this handler - the two aren't racing each other.
+            map.on("click", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              if (roadsClickScopeRef.current === "state") {
+                roadsSelectionGenerationRef.current++;
+                map.getCanvas().style.cursor = "wait";
+                void loadRoadsStatewide(map).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+                return;
+              }
+              // A click on a taluk (inside this district) would otherwise also reach this
+              // handler and immediately toggle the taluks back off.
+              if (
+                map.getLayer(ROADS_TALUKS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_TALUKS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const districtName = (feature.properties?.dtname as string | undefined)?.trim();
+              if (!districtName) return;
+              const normalized = districtName.toLowerCase();
+              roadsSelectionGenerationRef.current++;
+
+              if (
+                selectedRoadsDistrictIdRef.current === feature.id &&
+                loadedRoadsTaluksDistrictRef.current === normalized
+              ) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsDistrictIdRef.current = null;
+                selectedRoadsDistrictNameRef.current = null;
+                clearRoadsTaluks(map); // cascades into clearRoadsHighways too
+                return;
+              }
+
+              if (selectedRoadsDistrictIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: selectedRoadsDistrictIdRef.current }, { selected: false });
+              }
+              selectedRoadsDistrictIdRef.current = feature.id;
+              selectedRoadsDistrictNameRef.current = districtName;
+              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: true });
+              map.getCanvas().style.cursor = "wait";
+              if (roadsClickScopeRef.current === "district") {
+                // Opt-in heavier behavior - fetch this district's full highways right away
+                // together with its taluk boundaries.
+                void Promise.all([
+                  loadRoadsTaluks(map, districtName),
+                  loadRoadsHighways(map, "district", districtName),
+                ]).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              } else {
+                // Default "none" scope - boundaries only, no highway fetch.
+                void loadRoadsTaluks(map, districtName).finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+              }
+            });
+            map.on("dblclick", ROADS_DISTRICTS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // Only meaningful in the default "none" scope - "district" scope already loads
+              // highways on single click, and "state" scope's click means something else
+              // entirely, so a double-click there would just repeat the same click handler
+              // twice (harmless, but this avoids the redundant fetch and the zoom it'd cause
+              // if preventDefault() below didn't run for it).
+              if (roadsClickScopeRef.current !== "none") return;
+              // Cancels MapLibre's built-in double-click-to-zoom for this interaction -
+              // otherwise the map would zoom in at the same time as loading the roads.
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_TALUKS_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_TALUKS_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const districtName = (feature?.properties?.dtname as string | undefined)?.trim() ?? selectedRoadsDistrictNameRef.current;
+              if (!districtName) return;
+              roadsSelectionGenerationRef.current++;
+              map.getCanvas().style.cursor = "wait";
+              void loadRoadsHighways(map, "district", districtName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+
+            let hoveredRoadsTalukId: string | number | null = null;
+            map.on("mousemove", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsTalukId !== null && hoveredRoadsTalukId !== feature.id) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+              }
+              hoveredRoadsTalukId = feature.id;
+              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_TALUKS_FILL_LAYER_ID, () => {
+              if (hoveredRoadsTalukId !== null) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+              }
+              hoveredRoadsTalukId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            // Single click: select the taluk and show its hobli boundaries only - no road
+            // data (the district-wide highways stay however they were, if the district was
+            // ever double-clicked). Double click: show this taluk's own highways + local
+            // road network, clipped to its polygon (see the dblclick handler below).
+            map.on("click", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a hobli (inside this taluk) would otherwise also reach this
+              // handler and immediately toggle the taluk (and its hoblies) back off.
+              if (
+                map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_HOBLIES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const talukName = (feature.properties?.KGISTalukName as string | undefined)?.trim();
+              const districtName = selectedRoadsDistrictNameRef.current;
+              if (!talukName || !districtName) return;
+              roadsSelectionGenerationRef.current++;
+
+              if (selectedRoadsTalukIdRef.current === feature.id) {
+                // Toggle off - deselect the taluk and drop back to just the district's
+                // taluk list (the district itself is still selected). Only clear the
+                // highways if they were this taluk's own clipped view (double-clicked) - a
+                // district-wide ("District" click-scope) or statewide view should stay put,
+                // this is a boundaries-only click.
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsTalukIdRef.current = null;
+                selectedRoadsTalukNameRef.current = null;
+                selectedRoadsTalukGeometryRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
+                clearRoadsHoblies(map);
+                if (isRoadsHighwaysTalukScoped()) clearRoadsHighways(map);
+                return;
+              }
+
+              if (selectedRoadsTalukIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: selectedRoadsTalukIdRef.current }, { selected: false });
+              }
+              selectedRoadsTalukIdRef.current = feature.id;
+              selectedRoadsTalukNameRef.current = talukName;
+              selectedRoadsTalukGeometryRef.current = feature.geometry;
+              selectedRoadsHobliGeometryRef.current = null;
+              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
+              // A different taluk's roads may still be showing from a previous double-click -
+              // drop them now that a new taluk is selected, so they don't linger clipped to
+              // the wrong polygon. Only when they were taluk-scoped to begin with - a
+              // district-wide/statewide view is untouched by this boundaries-only click.
+              if (isRoadsHighwaysTalukScoped()) clearRoadsHighways(map);
+              map.getCanvas().style.cursor = "wait";
+              void loadRoadsHoblies(map, talukName, districtName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+            map.on("dblclick", ROADS_TALUKS_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_HOBLIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_HOBLIES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const talukName = (feature?.properties?.KGISTalukName as string | undefined)?.trim() ?? selectedRoadsTalukNameRef.current;
+              const talukGeometry = feature?.geometry ?? selectedRoadsTalukGeometryRef.current;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              if (!talukName || !districtName || !talukGeometry) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              // Clip to this taluk's own polygon once loaded - the taluk-level file's road
+              // geometries aren't necessarily clipped exactly to the administrative boundary
+              // (a road can run slightly past it), same reasoning as the hobli/village clips.
+              void loadRoadsHighways(map, "taluk", districtName, talukName)
+                .then(() => {
+                  // The user may have clicked something else while this was in flight - a
+                  // stale filter landing now would clobber whatever's actually selected.
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, talukGeometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+            });
+
+            let hoveredRoadsHobliId: string | number | null = null;
+            map.on("mousemove", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsHobliId !== null && hoveredRoadsHobliId !== feature.id) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+              }
+              hoveredRoadsHobliId = feature.id;
+              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_HOBLIES_FILL_LAYER_ID, () => {
+              if (hoveredRoadsHobliId !== null) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+              }
+              hoveredRoadsHobliId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            // Single click: select the hobli and show its village boundaries only. Double
+            // click: clip the highway/local-road layers to this hobli's own polygon (loading
+            // the taluk's road data first if it hasn't been double-clicked yet - see
+            // ensureRoadsLoadedForTaluk).
+            map.on("click", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              // A click on a village (inside this hobli) would otherwise also reach this
+              // handler and immediately toggle the hobli (and its villages) back off.
+              if (
+                map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_VILLAGES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              const hobliName = (feature.properties?.KGISHobliName as string | undefined)?.trim();
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!hobliName || !districtName || !talukName) return;
+              roadsSelectionGenerationRef.current++;
+
+              if (selectedRoadsHobliIdRef.current === feature.id) {
+                // Toggle off - deselect the hobli and fall back to the taluk's own clip (or
+                // no roads at all, if the taluk was never double-clicked). Only touches the
+                // highways if they're already taluk-scoped - a district-wide/statewide view
+                // is untouched by this boundaries-only click.
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
+                selectedRoadsHobliIdRef.current = null;
+                selectedRoadsHobliGeometryRef.current = null;
+                clearRoadsVillages(map);
+                if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
+                return;
+              }
+
+              if (selectedRoadsHobliIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: selectedRoadsHobliIdRef.current }, { selected: false });
+              }
+              selectedRoadsHobliIdRef.current = feature.id;
+              selectedRoadsHobliGeometryRef.current = feature.geometry;
+              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
+              // A different hobli's clip may still be active from a previous double-click -
+              // fall back to the taluk's (or no filter) until this hobli is double-clicked.
+              // Only when the highways are already taluk-scoped - see isRoadsHighwaysTalukScoped.
+              if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsTalukGeometryRef.current);
+              map.getCanvas().style.cursor = "wait";
+              void loadRoadsVillages(map, hobliName, talukName, districtName).finally(() => {
+                if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+              });
+            });
+            map.on("dblclick", ROADS_HOBLIES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              if (
+                map.getLayer(ROADS_VILLAGES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, { layers: [ROADS_VILLAGES_FILL_LAYER_ID] }).length > 0
+              ) {
+                return;
+              }
+              const feature = e.features?.[0];
+              const hobliGeometry = feature?.geometry ?? selectedRoadsHobliGeometryRef.current;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!hobliGeometry || !districtName || !talukName) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              void ensureRoadsLoadedForTaluk(map, districtName, talukName)
+                .then(() => {
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, hobliGeometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
+            });
+
+            let hoveredRoadsVillageId: string | number | null = null;
+            map.on("mousemove", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (hoveredRoadsVillageId !== null && hoveredRoadsVillageId !== feature.id) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+              }
+              hoveredRoadsVillageId = feature.id;
+              map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: true });
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", ROADS_VILLAGES_FILL_LAYER_ID, () => {
+              if (hoveredRoadsVillageId !== null) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+              }
+              hoveredRoadsVillageId = null;
+              if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+            });
+            // Single click: just select/highlight the village (it's the leaf level, nothing
+            // loads below it) and fall back to the hobli's own clip if a different village's
+            // roads were showing. Double click: clip the highway/local-road layers to this
+            // village's own polygon.
+            map.on("click", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              const feature = e.features?.[0];
+              if (!feature || feature.id === undefined) return;
+              if (selectedRoadsVillageIdRef.current !== null) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: selectedRoadsVillageIdRef.current }, { selected: false });
+              }
+              const isSame = selectedRoadsVillageIdRef.current === feature.id;
+              selectedRoadsVillageIdRef.current = isSame ? null : feature.id;
+              if (!isSame) {
+                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
+              }
+              roadsSelectionGenerationRef.current++;
+              // Only touches the highways if they're already taluk-scoped - a district-wide/
+              // statewide view is untouched by this boundaries-only click.
+              if (isRoadsHighwaysTalukScoped()) applyRoadsBoundaryFilter(map, selectedRoadsHobliGeometryRef.current);
+            });
+            map.on("dblclick", ROADS_VILLAGES_FILL_LAYER_ID, (e) => {
+              if (drawingToolRef.current) return;
+              e.preventDefault();
+              const feature = e.features?.[0];
+              if (!feature) return;
+              const districtName = selectedRoadsDistrictNameRef.current;
+              const talukName = selectedRoadsTalukNameRef.current;
+              if (!districtName || !talukName) return;
+              const generation = ++roadsSelectionGenerationRef.current;
+              map.getCanvas().style.cursor = "wait";
+              void ensureRoadsLoadedForTaluk(map, districtName, talukName)
+                .then(() => {
+                  if (generation !== roadsSelectionGenerationRef.current) return;
+                  applyRoadsBoundaryFilter(map, feature.geometry);
+                })
+                .finally(() => {
+                  if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
+                });
             });
 
             map.on("click", STATE_DISTRICTS_FILL_LAYER_ID, (e) => {
@@ -9712,8 +10833,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             }
             } catch (error) {
               console.error("Failed to load India state boundaries:", error);
-            } finally {
-              indiaStatesLoading = false;
             }
             };
             loadIndiaStatesRef.current = loadIndiaStates;
@@ -9774,6 +10893,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     
     const map = mapRef.current;
 
+    // The Terrain base layer needs the India DEM file on the server. When it's missing,
+    // every /api/terrain tile request 500s and the style fails to load - so probe first
+    // and stay on the current layer with a friendly notice instead of switching.
+    if (layer === "terrain" && !(await isTerrainDataAvailable())) {
+      setTerrainUnavailable(true);
+      return;
+    }
+
     // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
     removeIndiaTerrain(map);
     
@@ -9781,7 +10908,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const style = map.getStyle();
     const currentLayers = style.layers;
     
-    // Identify custom layers we want to keep
+    // Identify custom layers we want to keep. Reuses the same BOUNDARY_LAYER_IDS/
+    // STATE_BOUNDARY_LAYER_IDS lists every mode's own load/clear functions are already kept
+    // in sync with, instead of a separate hand-maintained list here - that list had drifted
+    // out of date (missing the entire GBA, Roads, Gram Panchayat and Civic Amenities
+    // hierarchies, plus the new Karnataka state layer), so switching the base map (satellite/
+    // default/terrain) was silently deleting whichever of those was currently loaded.
     const customLayerIds = currentLayers
       .filter((l) => 
         l.id === "states-fill-default" ||
@@ -9811,16 +10943,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
         l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
         l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID ||
-        l.id === RAINVIEWER_RADAR_LAYER_ID ||
-        l.id === GFS_WIND_LAYER_ID ||
-        l.id === GFS_WIND_SPEED_LAYER_ID ||
-        l.id === GIBS_SATELLITE_LAYER_ID ||
-        l.id === VIIRS_LST_LAYER_ID ||
-        l.id === HIMAWARI_LAYER_ID ||
-        l.id === GOES_WEST_LAYER_ID ||
-        l.id === GOES_EAST_LAYER_ID ||
-        l.id === GFS_CLOUD_FILL_LAYER_ID ||
-        (WEATHER_TERRAIN_LAYER_IDS as readonly string[]).includes(l.id) ||
         l.id.startsWith("kml-") ||
         l.id.startsWith("bengaluru-") ||
         l.id.startsWith("extra-") ||
@@ -9828,16 +10950,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       )
       .map((l) => l.id);
 
-    // Identify custom sources we want to keep
+    // Identify custom sources we want to keep - same reasoning as customLayerIds above.
+    // The India national-boundary sources are kept too: STATE_BOUNDARY_LAYER_IDS keeps
+    // their layers (india-boundary-line/label), and removing a source while one of its
+    // layers still references it throws "Source ... cannot be removed while layer ... is
+    // using it".
     const customSourceIds = Object.keys(style.sources).filter(
       (sourceId) =>
         sourceId === STATE_SOURCE_ID ||
         sourceId === STATE_LABELS_SOURCE_ID ||
-        sourceId === STATE_DISTRICTS_SOURCE_ID ||
-        sourceId === STATE_DISTRICTS_LABELS_SOURCE_ID ||
-        sourceId === STATE_ASSEMBLY_SOURCE_ID ||
-        sourceId === STATE_PARLIAMENT_SOURCE_ID ||
-        sourceId === STATE_POLICE_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_LABELS_SOURCE_ID ||
+        BOUNDARY_SOURCE_IDS.includes(sourceId) ||
         sourceId.startsWith("police-") ||
         sourceId === DISTRICT_TALUKS_SOURCE_ID ||
         sourceId === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
@@ -9846,16 +10970,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         sourceId === HOBLI_VILLAGES_SOURCE_ID ||
         sourceId === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
         sourceId === VILLAGE_CADASTRALS_SOURCE_ID ||
-        sourceId === RAINVIEWER_RADAR_SOURCE_ID ||
-        sourceId === GFS_WIND_SOURCE_ID ||
-        sourceId === GFS_WIND_SPEED_SOURCE_ID ||
-        sourceId === GIBS_SATELLITE_SOURCE_ID ||
-        sourceId === VIIRS_LST_SOURCE_ID ||
-        sourceId === HIMAWARI_SOURCE_ID ||
-        sourceId === GOES_WEST_SOURCE_ID ||
-        sourceId === GOES_EAST_SOURCE_ID ||
-        sourceId === GFS_CLOUD_FILL_SOURCE_ID ||
-        sourceId === WEATHER_TERRAIN_DEM_SOURCE_ID ||
         sourceId === "kml-data" ||
         sourceId === "bengaluru-data" ||
         sourceId.startsWith("extra-") ||
@@ -9930,388 +11044,114 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     applyCadastralColors(map, layer === "satellite");
   };
 
-  // â”€â”€ RainViewer composite radar overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Adds a raster XYZ source for the active RainViewer frame and keeps it below
-  // the admin boundaries / AOI layers but above the satellite basemap.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const cleanup = () => {
-      if (map.getLayer(RAINVIEWER_RADAR_LAYER_ID)) map.removeLayer(RAINVIEWER_RADAR_LAYER_ID);
-      if (map.getSource(RAINVIEWER_RADAR_SOURCE_ID)) map.removeSource(RAINVIEWER_RADAR_SOURCE_ID);
-    };
-
-    if (!isRadarEnabled || radarHost === "" || radarFrames.length === 0) {
-      cleanup();
-      return;
-    }
-
-    const frame = radarFrames[radarFrameIndex];
-    if (!frame) {
-      cleanup();
-      return;
-    }
-
-    const applyRadarOverlay = () => {
-      try {
-        const tileUrl = buildRainViewerTileUrl(radarHost, frame.path, "{z}", "{x}", "{y}");
-        const existingSource = map.getSource(RAINVIEWER_RADAR_SOURCE_ID) as
-          | { setTiles?: (tiles: string[]) => void }
-          | undefined;
-
-        if (!existingSource) {
-          map.addSource(RAINVIEWER_RADAR_SOURCE_ID, {
-            type: "raster",
-            tiles: [tileUrl],
-            tileSize: 512,
-            attribution: "RainViewer",
-          });
-          map.addLayer(
-            {
-              id: RAINVIEWER_RADAR_LAYER_ID,
-              type: "raster",
-              source: RAINVIEWER_RADAR_SOURCE_ID,
-              paint: {
-                "raster-opacity": DISPLAY_OPACITY.radar,
-                "raster-fade-duration": 150,
-              },
-            },
-            getRadarInsertBeforeId(map)
-          );
-        } else {
-          // Swapping the tile template reloads only the changed frame tiles.
-          existingSource.setTiles?.([tileUrl]);
-        }
-      } catch (error) {
-        console.error("Failed to apply RainViewer radar overlay:", error);
-        setRadarStatus("unavailable");
-      }
-    };
-
-    if (!map.isStyleLoaded()) {
-      map.once("load", applyRadarOverlay);
-      return () => {
-        map.off("load", applyRadarOverlay);
-      };
-    }
-
-    applyRadarOverlay();
-  }, [isRadarEnabled, radarHost, radarFrames, radarFrameIndex]);
-
-  // Pastâ†’now animation playback.
-  useEffect(() => {
-    if (!isRadarEnabled || !isRadarPlaying || radarFrames.length === 0) return;
-    const intervalId = window.setInterval(() => {
-      setRadarFrameIndex((prev) => {
-        if (radarFrames.length === 0) return prev;
-        return (prev + 1) % radarFrames.length;
-      });
-    }, RAINVIEWER_FRAME_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [isRadarEnabled, isRadarPlaying, radarFrames.length]);
-
-  const radarGoPrev = () => {
-    setIsRadarPlaying(false);
-    setRadarFrameIndex((prev) =>
-      radarFrames.length ? (prev - 1 + radarFrames.length) % radarFrames.length : 0
+  // Reports the map's current state/district/taluk chain to the caller (via
+  // onDrillContextChange), so the search bar can scope bare hobli-name suggestions to the
+  // taluk the user is currently looking at. Null when any level is missing.
+  const reportDrillContext = () => {
+    const state = selectedStateNameRef.current;
+    const district = selectedDistrictNameRef.current;
+    const taluk = selectedTalukNameRef.current;
+    onDrillContextChangeRef.current?.(
+      state && district && taluk ? { state, district, taluk } : null
     );
   };
-  const radarGoNext = () => {
-    setIsRadarPlaying(false);
-    setRadarFrameIndex((prev) => (radarFrames.length ? (prev + 1) % radarFrames.length : 0));
-  };
-  const radarTogglePlay = () => {
-    setIsRadarPlaying((prev) => {
-      const next = !prev;
-      // When pausing, snap to the latest ("now") frame.
-      if (!next) {
-        setRadarFrameIndex(() => (radarFrames.length ? radarFrames.length - 1 : 0));
-      }
-      return next;
+
+  // Resets the map to its initial state: removes every loaded boundary layer (state
+  // drill-down, constituency, police, GP, civic, extra Bengaluru files, uploaded files),
+  // clears the state/district selection and any drawn AOI, and resets the drill history.
+  // Shared by the Escape key and by clearing the search bar so both clear the same thing.
+  const clearAllMapState = (map: MapLibreMap) => {
+    BOUNDARY_LAYER_IDS.forEach((layerId) => {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
     });
-  };
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const activeWindFrame = windFrames[activeWindFrameIndex] ?? null;
-    if (!map) return;
-
-    const removeWindSpeedSurface = () => {
-      if (map.getLayer(GFS_WIND_SPEED_LAYER_ID)) map.removeLayer(GFS_WIND_SPEED_LAYER_ID);
-      if (map.getSource(GFS_WIND_SPEED_SOURCE_ID)) map.removeSource(GFS_WIND_SPEED_SOURCE_ID);
-    };
-
-    let handleViewportChange: (() => void) | null = null;
-
-    const cleanupMapListeners = () => {
-      if (handleViewportChange) {
-        map.off("move", handleViewportChange);
-        map.off("zoom", handleViewportChange);
-        map.off("rotate", handleViewportChange);
-        map.off("pitch", handleViewportChange);
-        map.off("resize", handleViewportChange);
-        handleViewportChange = null;
+    // The label-grow "-hover" duplicates (see hoverLabelLayerSpec) aren't part of
+    // BOUNDARY_LAYER_IDS, and a district/taluk search may have set a filter on them - so
+    // sweep every one too, or the searched label keeps rendering after the clear (they
+    // ignore label collisions). The India boundary's own hover label is the only one kept,
+    // since it belongs to the initial view this clear returns to.
+    for (const layer of [...map.getStyle().layers]) {
+      if (layer.id.endsWith("-hover") && layer.id !== "india-boundary-label-hover") {
+        if (map.getLayer(layer.id)) map.removeLayer(layer.id);
       }
-    };
-
-    const destroyWindAnimator = () => {
-      windAnimatorRef.current?.destroy();
-      windAnimatorRef.current = null;
-    };
-
-    const applyWindOverlay = () => {
-      cleanupMapListeners();
-      destroyWindAnimator();
-      removeWindSpeedSurface();
-
-      if (!isWindEnabled || !activeWindFrame) {
-        return;
-      }
-
-      // Smooth wind-speed colour field underneath the particle canvas, from
-      // the SAME U/V data the particles animate from (section 19: continuous
-      // speed surface + streamlines must agree, since both read one frame).
-      try {
-        const speeds = windSpeedValues(activeWindFrame.u, activeWindFrame.v);
-        const result = renderFieldToImageSource({
-          width: activeWindFrame.width,
-          height: activeWindFrame.height,
-          dx: activeWindFrame.dx,
-          dy: activeWindFrame.dy,
-          bounds: activeWindFrame.bounds,
-          values: speeds,
-          variable: "wind",
-        });
-        if (result) {
-          removeWindSpeedSurface();
-          map.addSource(GFS_WIND_SPEED_SOURCE_ID, {
-            type: "image",
-            url: result.url,
-            coordinates: result.coordinates,
-          });
-          const firstLabelId = findWeatherImageryInsertionPoint(map);
-          map.addLayer(
-            {
-              id: GFS_WIND_SPEED_LAYER_ID,
-              type: "raster",
-              source: GFS_WIND_SPEED_SOURCE_ID,
-              paint: {
-                "raster-opacity": 0.8,
-                "raster-fade-duration": 0,
-                "raster-resampling": "linear",
-              },
-            },
-            firstLabelId
-          );
-          // Re-apply terrain muting now that gfs-wind-speed-layer actually
-          // exists, so the detail hillshade floats directly above it instead
-          // of the "no target yet" top-of-stack fallback.
-          applyWeatherTerrainWeatherMode(map, "wind");
-        }
-      } catch (error) {
-        console.error("Failed to render wind-speed surface:", error);
-      }
-
-      try {
-        const overlayHost = map.getContainer().parentElement ?? map.getContainer();
-        if (getComputedStyle(overlayHost).position === "static") {
-          overlayHost.style.position = "relative";
-        }
-
-        if (!windAnimatorRef.current) {
-          windAnimatorRef.current = new GfsWindCanvasAnimator(activeWindFrame, {
-            onInvalidate: () => map.triggerRepaint(),
-          });
-        } else {
-          windAnimatorRef.current.setFrame(activeWindFrame);
-        }
-        // Set the map BEFORE resizing so screen-space particle spawning
-        // uses the correct projection.  The animator keeps the last valid
-        // wind field alive during zoom — it does NOT clear on viewport change.
-        windAnimatorRef.current.setMap(map);
-        windAnimatorRef.current.setDensity(windDensity);
-        windAnimatorRef.current.attachTo(overlayHost);
-        windAnimatorRef.current.getCanvas().style.opacity = String(DISPLAY_OPACITY.windScalar);
-        const syncAnimatorCanvasToMap = () => {
-          if (!windAnimatorRef.current) return;
-          windAnimatorRef.current.resize(
-            map.getContainer().clientWidth,
-            map.getContainer().clientHeight,
-            window.devicePixelRatio || 1
-          );
-          // Do NOT clear() here — the animation loop continuously redraws.
-          // Clearing on every move/zoom wipes particles between frames,
-          // causing the sparse/empty appearance during zoom.
-        };
-
-        syncAnimatorCanvasToMap();
-        handleViewportChange = () => syncAnimatorCanvasToMap();
-        map.on("move", handleViewportChange);
-        map.on("zoom", handleViewportChange);
-        map.on("rotate", handleViewportChange);
-        map.on("pitch", handleViewportChange);
-        map.on("resize", handleViewportChange);
-        windAnimatorRef.current.start();
-        setWindStatus("ready");
-      } catch (error) {
-        console.error("Failed to apply NOAA GFS wind overlay:", error);
-        setWindStatus("unavailable");
-      }
-    };
-
-    if (!map.isStyleLoaded()) {
-      map.once("load", applyWindOverlay);
-      return () => {
-        map.off("load", applyWindOverlay);
-        cleanupMapListeners();
-        destroyWindAnimator();
-        removeWindSpeedSurface();
-      };
     }
-
-    applyWindOverlay();
-    return () => {
-      cleanupMapListeners();
-      destroyWindAnimator();
-      removeWindSpeedSurface();
-    };
-  }, [activeWindFrameIndex, isWindEnabled, windDensity, windFrames]);
-
-  // Keeps a ref to the currently-visualized wind frame in sync, so the
-  // mousemove handler below (registered once per Wind ON/OFF toggle, not
-  // once per frame) always samples the live frame without going stale and
-  // without needing to re-attach the map listener on every frame change.
-  useEffect(() => {
-    activeWindFrameRef.current = windFrames[activeWindFrameIndex] ?? null;
-  }, [windFrames, activeWindFrameIndex]);
-
-  // ── Wind speed/direction under the cursor (Ventusky-style inspector) ───────
-  // Samples the SAME decoded GFS U/V grid the particle animation reads from
-  // (gfsWindCanvas.ts's sampleInterpolatedVector - bilinear interpolation
-  // between the 4 surrounding grid cells, exactly what the particles use to
-  // move). No separate data source, no per-mousemove network request: this
-  // is a pure client-side lookup into data already in memory.
-  const sampleWindAtPending = useCallback(() => {
-    windCursorRafRef.current = null;
-    const pending = pendingWindPointRef.current;
-    if (!pending) return;
-    const frame = activeWindFrameRef.current;
-    if (!frame) {
-      // Wind enabled but the frame hasn't loaded yet - loading state, not a fake value.
-      setWindCursor({
-        screenX: pending.x,
-        screenY: pending.y,
-        speedKmh: null,
-        directionDeg: null,
-        compass: null,
-        loading: true,
-      });
-      return;
-    }
-    const vector = sampleInterpolatedVector(frame, pending.lng, pending.lat);
-    if (!vector) {
-      // Genuinely no data at this point (e.g. near the grid's latitude edge) - never fabricate 0.
-      setWindCursor({
-        screenX: pending.x,
-        screenY: pending.y,
-        speedKmh: null,
-        directionDeg: null,
-        compass: null,
-        loading: false,
-      });
-      return;
-    }
-    const speedMs = Math.sqrt(vector.u * vector.u + vector.v * vector.v);
-    // Direction is meaningless at (near-)zero wind speed - atan2(0,0) would
-    // otherwise report a spurious "N" for genuinely calm air.
-    const hasDirection = speedMs > 0.15; // ~0.5 km/h
-    const directionDeg = hasDirection ? windDirectionFromVector(vector.u, vector.v) : null;
-    setWindCursor({
-      screenX: pending.x,
-      screenY: pending.y,
-      speedKmh: speedMs * 3.6,
-      directionDeg,
-      compass: directionDeg != null ? compassDirection(directionDeg) : null,
-      loading: false,
+    BOUNDARY_SOURCE_IDS.forEach((sourceId) => {
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
     });
-  }, []);
 
-  const scheduleWindSample = useCallback(
-    (screenX: number, screenY: number, lng: number, lat: number) => {
-      pendingWindPointRef.current = { x: screenX, y: screenY, lng, lat };
-      if (windCursorRafRef.current != null) return; // one pending RAF only
-      windCursorRafRef.current = window.requestAnimationFrame(sampleWindAtPending);
-    },
-    [sampleWindAtPending]
-  );
-
-  const handleWindMouseMove = useCallback(
-    (e: MapMouseEvent) => {
-      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
-    },
-    [scheduleWindSample]
-  );
-
-  const handleWindMouseLeave = useCallback(() => {
-    pendingWindPointRef.current = null;
-    if (windCursorRafRef.current != null) {
-      window.cancelAnimationFrame(windCursorRafRef.current);
-      windCursorRafRef.current = null;
+    // Clear any manually-toggled extra Bengaluru files too
+    extraLayerKeysRef.current.forEach((key) => {
+      const baseId = extraLayerIdFromKey(key);
+      if (map.getLayer(`${baseId}-fill`)) map.removeLayer(`${baseId}-fill`);
+      if (map.getLayer(`${baseId}-line`)) map.removeLayer(`${baseId}-line`);
+      if (map.getLayer(`${baseId}-label`)) map.removeLayer(`${baseId}-label`);
+      if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
+    });
+    extraLayerKeysRef.current.clear();
+    loadedDistrictsStateRef.current = null;
+    loadedAssemblyStateRef.current = null;
+    selectedAssemblyIdRef.current = null;
+    loadedParliamentStateRef.current = null;
+    selectedParliamentIdRef.current = null;
+    loadedPoliceStateRef.current = null;
+    selectedPoliceIdRef.current = null;
+    loadedGpDistrictsStateRef.current = null;
+    selectedGpDistrictIdRef.current = null;
+    loadedGpTaluksDistrictRef.current = null;
+    selectedGpTalukIdRef.current = null;
+    loadedGpBoundariesTalukRef.current = null;
+    loadedCadastralsVillageRef.current = null;
+    loadedCadastralsDataRef.current = null;
+    selectedVillageNameRef.current = null;
+    // The GBA layers are already swept by the generic BOUNDARY_LAYER_IDS/SOURCE_IDS pass
+    // above, but call the dedicated clear functions too so their ref state resets the same
+    // way every other level's does - keeps this one path the single source of truth for
+    // "what does the GBA hierarchy look like right now" instead of splitting it in two.
+    clearGbaWards(map);
+    clearGbaZones(map);
+    clearGbaCorporations(map);
+    clearGbaBoundary(map);
+    selectedGbaWardIdRef.current = null;
+    // The states source survives the boundary wipe (it's not in BOUNDARY_SOURCE_IDS), so
+    // undo any village cutout that was punched into it.
+    restoreAncestorFills(map);
+    clearStateSelection(map);
+    // Return the map to its initial India-boundary view: drop the India states layer too
+    // (it only loads after the boundary is clicked or a state is searched), so the
+    // national outline + "India" label are what remain, exactly as on first load.
+    for (const layerId of [
+      "states-fill-default",
+      "states-borders-default",
+      "states-labels-default",
+      "states-labels-default-hover",
+    ]) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
     }
-    setWindCursor(null);
-  }, []);
-
-  // Mobile/tablet: tap-to-inspect (no persistent hover). Reuses the same
-  // sampler as desktop mousemove. Draw AOI takes priority - if a drawing
-  // tool is armed, the tap belongs to AOI drawing, not the wind inspector.
-  const handleWindClick = useCallback(
-    (e: MapMouseEvent) => {
-      if (drawingToolRef.current) return;
-      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
-    },
-    [scheduleWindSample]
-  );
-
-  // Attaches/detaches exactly one set of listeners per Wind ON/OFF toggle -
-  // stable function references throughout (useCallback above), so `off()`
-  // always removes the exact listener `on()` added. Wind OFF tears down
-  // every trace: listeners, pending RAF, pending sample point, tooltip state.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isWindEnabled) {
-      setWindCursor(null);
-      if (windCursorRafRef.current != null) {
-        window.cancelAnimationFrame(windCursorRafRef.current);
-        windCursorRafRef.current = null;
-      }
-      pendingWindPointRef.current = null;
-      return;
+    for (const sourceId of [STATE_SOURCE_ID, STATE_LABELS_SOURCE_ID]) {
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
     }
+    loadedStatesDataRef.current = null;
+    selectedStateNameRef.current = null;
+    // The India boundary layers were hidden the moment the states loaded - show them
+    // again now that the states are gone.
+    applyBoundaryLayerVisibility(map);
+    // Bump the generation so a boundary fetch that was in flight when the clear happened
+    // can't re-add its layers over the cleared map.
+    drillGenerationRef.current++;
+    // A full clear is a reset - drop the drill history so a later Ctrl+Z doesn't restore
+    // a stale selection from before the clear.
+    drillUndoStackRef.current = [];
+    drillRedoStackRef.current = [];
+    // The drawn AOI is also a user-added overlay - clear it along with the loaded
+    // boundaries. (The attribute popup never reaches here: if it was open, the Escape
+    // priority block already closed it and returned.)
+    clearCompletedAOI(map);
 
-    map.on("mousemove", handleWindMouseMove);
-    map.on("mouseout", handleWindMouseLeave);
-    map.on("click", handleWindClick);
-
-    return () => {
-      map.off("mousemove", handleWindMouseMove);
-      map.off("mouseout", handleWindMouseLeave);
-      map.off("click", handleWindClick);
-      if (windCursorRafRef.current != null) {
-        window.cancelAnimationFrame(windCursorRafRef.current);
-        windCursorRafRef.current = null;
-      }
-      pendingWindPointRef.current = null;
-      setWindCursor(null);
-    };
-  }, [isWindEnabled, handleWindMouseMove, handleWindMouseLeave, handleWindClick]);
-
-  // Reset View: bearing/pitch only, center and zoom (and every other piece of
-  // app state - AOI, weather mode, wind, selected location) are left alone.
-  // A single easeTo call - no source/layer/engine recreation of any kind.
-  const handleResetView = useCallback(() => {
-    mapRef.current?.easeTo({ bearing: 0, pitch: 0, duration: 500 });
-  }, []);
+    setUploadedFileName(null);
+    onWardSelectedRef.current?.(null);
+    onBoundariesClearedRef.current?.();
+    // The map is back to its initial state - no drill context for scoped suggestions.
+    onDrillContextChangeRef.current?.(null);
+  };
 
   // Pressing Escape clears any loaded boundary (Karnataka, Bengaluru wards, or a manually
   // uploaded KML/KMZ) so the user can freshly load a new one. While an AOI drawing tool is
@@ -10700,13 +11540,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         mode === "gram_panchayat" ||
         mode === "police_station" ||
         mode === "civic_amenities" ||
-        mode === "gba"
+        mode === "gba" ||
+        mode === "roads"
       ) {
         clearStateDistricts(map);
         clearDistrictTaluks(map);
         clearGpDistricts(map);
         clearCivicDistricts(map);
-        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba") {
+        if (mode === "gram_panchayat" || mode === "civic_amenities" || mode === "gba" || mode === "roads") {
           clearStateAssembly(map);
           clearStateParliament(map);
         } else if (mode === "assembly") {
@@ -10721,7 +11562,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           const selectedState = selectedStateNameRef.current;
           if (selectedState) void loadStatePolice(map, selectedState);
         }
-        if (mode === "gba") {
+        if (mode === "gba" || mode === "roads") {
           clearStatePolice(map);
         }
       } else if (mode === "administrative") {
@@ -10731,20 +11572,29 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearGpDistricts(map);
         clearCivicDistricts(map);
       }
-      // The GBA authority boundary is the entry point into its own hierarchy (Authority ->
-      // Corporation -> Zone -> Ward, drilled into by clicking, same as India -> States ->
-      // Districts). Every other mode fully tears down its drill-down on switching away
-      // (e.g. clearStateDistricts/clearDistrictTaluks above) rather than just hiding it, so
-      // GBA does the same for consistency - leaving "gba" mode clears every level, and
-      // re-entering it always starts fresh at the Authority boundary, not wherever the user
-      // last drilled down to.
-      if (mode === "gba") {
-        if (!loadedGbaBoundaryRef.current) void loadGbaBoundary(map);
+      // Both "gba" and "roads" share Karnataka's own outline as their entry point (see
+      // loadKarnatakaStateBoundary) - a click on it reveals GBA's boundary or the districts,
+      // same as India -> States -> Districts does elsewhere. Every other mode fully tears
+      // down its drill-down on switching away (e.g. clearStateDistricts/clearDistrictTaluks
+      // above) rather than just hiding it, so these two do the same for consistency - leaving
+      // either mode clears every level, and re-entering it always starts fresh at Karnataka's
+      // outline, not wherever the user last drilled down to.
+      if (mode === "gba" || mode === "roads") {
+        if (!loadedKarnatakaStateRef.current) void loadKarnatakaStateBoundary(map);
       } else {
+        clearKarnatakaStateBoundary(map);
+      }
+      if (mode !== "gba") {
         clearGbaWards(map);
         clearGbaZones(map);
         clearGbaCorporations(map);
         clearGbaBoundary(map);
+      }
+      if (mode !== "roads") {
+        clearRoadsHighways(map);
+        clearRoadsTaluks(map);
+        clearRoadsDistricts(map);
+        roadsClickScopeRef.current = "none";
       }
       applyBoundaryLayerVisibility(map);
     },
@@ -10763,6 +11613,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (!map || !selectedState || boundaryLayerModeRef.current !== "police_station") return;
       clearStatePolice(map);
       void loadStatePolice(map, selectedState, policeTypeRef.current, district);
+    },
+    setRoadsClickScope: (scope: "none" | "district" | "state") => {
+      const map = mapRef.current;
+      if (roadsClickScopeRef.current === scope) return;
+      roadsClickScopeRef.current = scope;
+      // Whatever was selected/loaded under the old scope (a district + its taluks, or the
+      // statewide view) doesn't necessarily make sense under the new one - clear it so the
+      // next click starts fresh instead of leaving a stale mix on the map (e.g. a
+      // district's own highways still showing after switching to "State" scope).
+      if (map && boundaryLayerModeRef.current === "roads") {
+        clearRoadsDistricts(map); // cascades into clearRoadsTaluks/clearRoadsHighways too
+      }
     },
     setDrawingTool: (tool: AOITool | null) => {
       const map = mapRef.current;
@@ -11655,1705 +12517,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
         />
-      )}
-
-      {/* Reset View - only shown once the map has been rotated/tilted away
-          from the default north-up, flat orientation. Sits above the scale
-          bar (bottom-right, native MapLibre control). */}
-      {!isLoading && !loadError && mapTransformDirty && (
-        <button
-          type="button"
-          onClick={handleResetView}
-          aria-label="Reset map view to north-up"
-          title="Reset view"
-          className="absolute bottom-16 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-white"
-        >
-          <Compass className="h-4 w-4" />
-        </button>
-      )}
-
-      {/* Wind speed/direction under the cursor (Ventusky-style). Zero listeners/
-          state when Wind is off - `windCursor` is only ever set while the
-          mousemove/click listeners above are attached. */}
-      {isWindEnabled &&
-        windCursor &&
-        (() => {
-          const TOOLTIP_WIDTH = 148;
-          const TOOLTIP_HEIGHT = windCursor.loading || windCursor.speedKmh == null ? 50 : 78;
-          const OFFSET = 14;
-          const containerWidth = containerRef.current?.clientWidth ?? 0;
-          const containerHeight = containerRef.current?.clientHeight ?? 0;
-
-          let left = windCursor.screenX + OFFSET;
-          let top = windCursor.screenY - OFFSET - TOOLTIP_HEIGHT;
-
-          if (containerWidth && left + TOOLTIP_WIDTH > containerWidth - 8) {
-            left = windCursor.screenX - OFFSET - TOOLTIP_WIDTH;
-          }
-          if (top < 8) {
-            top = windCursor.screenY + OFFSET;
-          }
-          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - TOOLTIP_WIDTH - 8));
-          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - TOOLTIP_HEIGHT - 8));
-
-          const activeFrame = windFrames[activeWindFrameIndex];
-
-          return (
-            <div
-              className="pointer-events-none absolute z-30 rounded-xl border border-white/60 bg-white/90 px-3 py-2 shadow-lg backdrop-blur-md"
-              style={{ left, top, width: TOOLTIP_WIDTH }}
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Wind</p>
-              {windCursor.loading ? (
-                <p className="mt-0.5 text-xs text-slate-500">Loading wind data...</p>
-              ) : windCursor.speedKmh == null ? (
-                <p className="mt-0.5 text-xs text-slate-500">No wind data</p>
-              ) : (
-                <>
-                  <p className="mt-0.5 text-base font-semibold text-obsidian-graphite">
-                    {windCursor.speedKmh.toFixed(1)} km/h
-                  </p>
-                  {windCursor.compass != null && windCursor.directionDeg != null && (
-                    <p className="text-xs text-slate-500">
-                      {windCursor.compass} · {Math.round(windCursor.directionDeg)}°
-                    </p>
-                  )}
-                  {activeFrame && (
-                    <p className="mt-0.5 text-[10px] text-slate-400">
-                      {formatIstTime(activeFrame.forecastTime)}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          );
-        })()}
-
-      {/* Fire detection click popup - compact real FIRMS metadata, explicitly
-          not a fire perimeter (see the note in the panel itself). Dismissible
-          via the close button; also cleared automatically on mode change. */}
-      {weatherMode === "fire" &&
-        selectedFireDetection &&
-        (() => {
-          const POPUP_WIDTH = 220;
-          const POPUP_HEIGHT = 168;
-          const OFFSET = 14;
-          const containerWidth = containerRef.current?.clientWidth ?? 0;
-          const containerHeight = containerRef.current?.clientHeight ?? 0;
-          const { detection } = selectedFireDetection;
-
-          let left = selectedFireDetection.screenX + OFFSET;
-          let top = selectedFireDetection.screenY - OFFSET - POPUP_HEIGHT;
-          if (containerWidth && left + POPUP_WIDTH > containerWidth - 8) {
-            left = selectedFireDetection.screenX - OFFSET - POPUP_WIDTH;
-          }
-          if (top < 8) top = selectedFireDetection.screenY + OFFSET;
-          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - POPUP_WIDTH - 8));
-          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - POPUP_HEIGHT - 8));
-
-          const confidenceLabel =
-            detection.confidence == null
-              ? "—"
-              : detection.confidence >= 90
-              ? "High"
-              : detection.confidence >= 50
-              ? "Nominal"
-              : "Low";
-
-          return (
-            <div
-              className="absolute z-30 rounded-xl border border-white/60 bg-white/95 px-3.5 py-3 shadow-xl backdrop-blur-md"
-              style={{ left, top, width: POPUP_WIDTH }}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-600">
-                  Active Fire Detection
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFireDetection(null)}
-                  aria-label="Close"
-                  className="-mr-1 -mt-1 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                >
-                  ×
-                </button>
-              </div>
-              <dl className="mt-1.5 space-y-1 text-xs">
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Acquired</dt>
-                  <dd className="font-medium text-slate-900">{formatIstTime(detection.acquiredAt)}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Satellite</dt>
-                  <dd className="font-medium text-slate-900">{detection.satellite}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Confidence</dt>
-                  <dd className="font-medium text-slate-900">{confidenceLabel}</dd>
-                </div>
-                {detection.frp != null && (
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">FRP</dt>
-                    <dd className="font-medium text-slate-900">{detection.frp.toFixed(1)} MW</dd>
-                  </div>
-                )}
-                <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Source</dt>
-                  <dd className="font-medium text-slate-900">NASA FIRMS / VIIRS</dd>
-                </div>
-              </dl>
-              <p className="mt-2 border-t border-slate-100 pt-1.5 text-[10px] leading-snug text-slate-400">
-                This is an active-fire satellite detection, not a mapped fire perimeter.
-              </p>
-            </div>
-          );
-        })()}
-
-      {/* Non-blocking notice for a drill-down layer that failed to load (e.g.
-          no boundary data uploaded yet for this state/place) â€” small and
-          dismisses itself, never covers the map. */}
-      {layerNotice && (
-        <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2">
-          <div className="pointer-events-auto rounded-lg bg-gray-900/90 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
-            {layerNotice}
-          </div>
-        </div>
-      )}
-
-      {/* Weather menu: select which live metrics to include. When at least one
-          metric is enabled, left-clicking the map opens/updates the fixed
-          right-side weather panel and boundary drill-down is paused. */}
-      {!isLoading && !loadError && (
-        <div ref={weatherMenuRef} className="absolute left-4 top-20 z-20">
-          <button
-            type="button"
-            onClick={() => setShowWeatherMenu((prev) => !prev)}
-            aria-haspopup="menu"
-            aria-expanded={showWeatherMenu}
-            aria-label="Weather details"
-            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
-              isWeatherControlActive
-                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
-                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-            }`}
-          >
-            <CloudSun className="h-4 w-4" />
-            Weather
-            <ChevronDown
-              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
-                showWeatherMenu ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-              {(showWeatherMenu ||
-                isRadarEnabled ||
-                isWindEnabled ||
-                weatherMode !== "none" ||
-                selectedWeatherMetrics.size > 0) && (
-            <div
-              role="menu"
-              className="absolute left-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm"
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
-                Weather
-              </p>
-
-              <div className="mt-4">
-                {(weatherMode === "rain" || weatherMode === "clouds") && (
-                  <div role="tablist" className="flex gap-1 rounded-xl bg-gray-100 p-1">
-                    {(["observed", "forecast"] as const).map((product) => {
-                      const active =
-                        weatherMode === "rain" ? rainProduct === product : cloudProduct === product;
-                      return (
-                        <button
-                          key={product}
-                          type="button"
-                          role="tab"
-                          aria-selected={active}
-                          onClick={() =>
-                            weatherMode === "rain" ? setRainProduct(product) : setCloudProduct(product)
-                          }
-                          className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
-                            active
-                              ? "bg-white text-obsidian-graphite shadow-sm"
-                              : "text-slate-500 hover:text-obsidian-graphite"
-                          }`}
-                        >
-                          {product}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {weatherMode === "clouds" && cloudProduct === "observed" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Instrument</span>
-                      <span className="text-right font-medium text-slate-900">Multi-Geo Composite</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Satellites</span>
-                      <span className="text-right font-medium text-slate-900">
-                        Himawari-9 + GOES-West + GOES-East
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Product</span>
-                      <span className="text-right font-medium text-slate-900">{HIMAWARI_PRODUCT_NAME}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Coverage</span>
-                      <span className="text-right font-medium text-slate-900">Asia-Pacific, Americas, Atlantic</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Resolution</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {HIMAWARI_NOMINAL_RESOLUTION_M} m (nominal)
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Observed</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {himawariFrames[himawariFrameIndex]
-                          ? formatIstTime(himawariFrames[himawariFrameIndex]!)
-                          : "Resolving..."}
-                      </span>
-                    </div>
-                    {/* Satellite availability indicators */}
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
-                        himawariStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                      }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${himawariStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
-                        Himawari
-                      </span>
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
-                        goesWestStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                      }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${goesWestStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
-                        GOES-West
-                      </span>
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
-                        goesEastStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                      }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${goesEastStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
-                        GOES-East
-                      </span>
-                    </div>
-                    {himawariStatus === "ready" && himawariFrames.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsHimawariPlaying(false);
-                              setHimawariFrameIndex((i) =>
-                                i === 0 ? himawariFrames.length - 1 : i - 1
-                              );
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Prev
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsHimawariPlaying((current) => !current)}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            {isHimawariPlaying ? "Pause" : "Play"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsHimawariPlaying(false);
-                              setHimawariFrameIndex((i) => (i + 1) % himawariFrames.length);
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Next
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          {himawariFrames.length} frames · every {HIMAWARI_CADENCE_MINUTES} min (real
-                          timestamps only)
-                        </p>
-                      </div>
-                    )}
-                    {himawariStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Resolving satellite frames...</p>
-                    )}
-                    {himawariStatus === "unavailable" && (
-                      <p className="text-xs text-amber-700">
-                        Satellite imagery is temporarily unavailable.
-                      </p>
-                    )}
-                    <p className="text-[11px] text-slate-400">{HIMAWARI_ATTRIBUTION}</p>
-                    <p className="text-[11px] text-slate-400">
-                      Multi-geostationary IR composite (Band 13, 10.3 µm). Himawari covers Asia-Pacific, GOES-West covers Americas/Pacific, GOES-East covers Americas/Atlantic. Gaps near Africa/Europe reflect no geostationary coverage from these three satellites.
-                    </p>
-                  </div>
-                )}
-
-                {weatherMode === "rain" && rainProduct === "observed" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Product</span>
-                      <span className="text-right font-medium text-slate-900">{IMERG_PRODUCT_NAME}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Resolution</span>
-                      <span className="text-right font-medium text-slate-900">
-                        ~{IMERG_NOMINAL_RESOLUTION_KM} km (nominal)
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Observed</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {imergFrames[imergFrameIndex] ? formatIstTime(imergFrames[imergFrameIndex]!) : "Resolving..."}
-                      </span>
-                    </div>
-                    {imergStatus === "ready" && imergFrames.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsImergPlaying(false);
-                              setImergFrameIndex((i) => (i === 0 ? imergFrames.length - 1 : i - 1));
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Prev
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsImergPlaying((current) => !current)}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            {isImergPlaying ? "Pause" : "Play"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsImergPlaying(false);
-                              setImergFrameIndex((i) => (i + 1) % imergFrames.length);
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Next
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          {imergFrames.length} frames · every {IMERG_CADENCE_MINUTES} min (real timestamps
-                          only)
-                        </p>
-                      </div>
-                    )}
-                    {imergStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Resolving latest GPM IMERG frames...</p>
-                    )}
-                    {imergStatus === "unavailable" && (
-                      <p className="text-xs text-amber-700">
-                        Satellite precipitation is temporarily unavailable.
-                      </p>
-                    )}
-                    <p className="text-[11px] text-slate-400">{IMERG_ATTRIBUTION}</p>
-                    <p className="text-[11px] text-slate-400">
-                      Real satellite-derived precipitation - typically runs 3-6h behind now (genuine
-                      NRT processing latency, not a bug).
-                    </p>
-                  </div>
-                )}
-
-                {((weatherMode === "rain" && rainProduct === "forecast") ||
-                  (weatherMode === "clouds" && cloudProduct === "forecast") ||
-                  weatherMode === "pressure") && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Active</span>
-                      <span className="text-right font-medium capitalize text-slate-900">
-                        {weatherMode}
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Model</span>
-                      <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Valid</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {weatherFieldFrames[weatherFieldIndex]
-                          ? formatIstShortDateTime(
-                              weatherFieldFrames[weatherFieldIndex]!.forecastTime
-                            )
-                          : "Loading..."}
-                      </span>
-                    </div>
-
-                    {weatherFieldStatus === "ready" && weatherFieldFrames.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-slate-500">Frame</span>
-                          <span className="font-medium text-slate-900">
-                            {formatIstShortDateTime(
-                              weatherFieldFrames[weatherFieldIndex]?.forecastTime ?? ""
-                            )}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setWeatherFieldIndex((current) =>
-                                current === 0 ? weatherFieldFrames.length - 1 : current - 1
-                              )
-                            }
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Prev
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsWeatherFieldPlaying((current) => !current)}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            {isWeatherFieldPlaying ? "Pause" : "Play"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setWeatherFieldIndex(
-                                (current) => (current + 1) % weatherFieldFrames.length
-                              )
-                            }
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Next
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          {weatherFieldIndex + 1} / {weatherFieldFrames.length} frames · GFS forecast
-                        </p>
-                      </div>
-                    )}
-                    {weatherFieldStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Loading NOAA GFS forecast...</p>
-                    )}
-                    {weatherFieldStatus === "unavailable" && (
-                      <p className="text-xs text-amber-700">
-                        {weatherFieldMessage ?? "NOAA GFS forecast is temporarily unavailable."}
-                      </p>
-                    )}
-
-                    <WeatherFieldLegend mode={weatherMode} />
-
-                    {weatherMode === "pressure" && (
-                      <label className="flex items-center gap-2 text-xs text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={showPressureExtrema}
-                          onChange={(event) => setShowPressureExtrema(event.target.checked)}
-                          className="accent-atlas-cobalt"
-                        />
-                        Show H/L centers
-                      </label>
-                    )}
-                  </div>
-                )}
-
-                {weatherMode === "temperature" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div>
-                      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Mode
-                      </p>
-                      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-                        <button
-                          type="button"
-                          onClick={() => setTemperatureProduct("surface")}
-                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
-                            temperatureProduct === "surface"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "text-slate-500 hover:text-slate-900"
-                          }`}
-                        >
-                          Surface Temperature
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTemperatureProduct("forecast")}
-                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
-                            temperatureProduct === "forecast"
-                              ? "bg-white text-slate-900 shadow-sm"
-                              : "text-slate-500 hover:text-slate-900"
-                          }`}
-                        >
-                          Air Temperature Forecast
-                        </button>
-                      </div>
-                    </div>
-
-                    {temperatureProduct === "surface" ? (
-                      <>
-                        <div>
-                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Platform
-                          </p>
-                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-                            {(["auto", "SNPP", "NOAA20", "NOAA21"] as const).map((option) => (
-                              <button
-                                key={option}
-                                type="button"
-                                onClick={() => setLstPlatform(option)}
-                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
-                                  lstPlatform === option
-                                    ? "bg-white text-slate-900 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-900"
-                                }`}
-                              >
-                                {option === "auto" ? "Auto" : option}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div>
-                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Observation
-                          </p>
-                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-                            {(["auto", "day", "night"] as const).map((option) => (
-                              <button
-                                key={option}
-                                type="button"
-                                onClick={() => setLstDayNightSelection(option)}
-                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
-                                  lstDayNightSelection === option
-                                    ? "bg-white text-slate-900 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-900"
-                                }`}
-                              >
-                                {option}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {lstCoverage && (
-                          <div className="rounded-xl bg-amber-50 border border-amber-200 p-2.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-medium text-amber-800">Coverage over India</span>
-                              <span className="text-xs font-mono text-amber-700">
-                                {lstCoverage.coveragePercent}% ({lstCoverage.tilesValid}/{lstCoverage.tilesChecked} tiles)
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-amber-700 mt-1">
-                              VIIRS is a polar-orbiting sensor with swath gaps. Blank regions = no satellite pass / cloud / invalid QA.
-                              Not interpolated or fabricated.
-                            </p>
-                          </div>
-                        )}
-
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Satellite</span>
-                          <span className="text-right font-medium text-slate-900">
-                            {lstResolved ? lstResolved.satelliteLabel : "Resolving..."}
-                          </span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Platform</span>
-                          <span className="text-right font-medium text-slate-900">
-                            {lstResolved ? lstResolved.platform : "—"}
-                          </span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Instrument</span>
-                          <span className="text-right font-medium text-slate-900">{VIIRS_LST_INSTRUMENT}</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Product</span>
-                          <span className="text-right font-medium text-slate-900">
-                            {VIIRS_LST_PRODUCT_NAME} ({lstEffectiveDayNight === "day" ? "Day" : "Night"})
-                          </span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Resolution</span>
-                          <span className="text-right font-medium text-slate-900">
-                            {VIIRS_LST_NOMINAL_RESOLUTION_M} m (nominal, Level 7 / maxzoom 7)
-                          </span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Observation</span>
-                          <span className="text-right font-medium text-slate-900">{lstDate ?? "Loading..."}</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Source</span>
-                          <span className="text-right font-medium text-slate-900">NASA GIBS</span>
-                        </div>
-
-
-                        {lstStatus === "ready" && lstAvailableDates.length > 0 && (
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsLstPlaying(false);
-                                  stepLstDate(-1);
-                                }}
-                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                              >
-                                Prev Day
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setIsLstPlaying((current) => !current)}
-                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                              >
-                                {isLstPlaying ? "Pause" : "Play"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsLstPlaying(false);
-                                  stepLstDate(1);
-                                }}
-                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                              >
-                                Next Day
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsLstPlaying(false);
-                                if (lstAvailableDates[0]) setLstDate(lstAvailableDates[0]);
-                              }}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                            >
-                              Latest
-                            </button>
-                          </div>
-                        )}
-                        {lstStatus === "loading" && (
-                          <p className="text-xs text-slate-500">Loading latest VIIRS surface temperature...</p>
-                        )}
-                        {lstStatus === "unavailable" && (
-                          <div className="space-y-2">
-                            <p className="text-xs text-amber-700">Surface temperature temporarily unavailable.</p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setLstResolvedDay(undefined);
-                                setLstResolvedNight(undefined);
-                              }}
-                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                            >
-                              Retry
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Debug panel */}
-                        <div className="border-t border-slate-200 pt-2 mt-2">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={showLstDebug}
-                              onChange={(e) => setShowLstDebug(e.target.checked)}
-                              className="rounded border-slate-300 accent-atlas-cobalt"
-                            />
-                            <span className="text-xs text-slate-600">Debug pixel inspector (dev only)</span>
-                          </label>
-                          {showLstDebug && lstResolved && (
-                            <div className="mt-2 p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono space-y-1 text-slate-700">
-                              <div><strong>Layer:</strong> {lstResolved.layer}</div>
-                              <div><strong>Platform:</strong> {lstResolved.platform}</div>
-                              <div><strong>Day/Night:</strong> {lstResolved.dayNight}</div>
-                              <div><strong>Date:</strong> {lstResolved.date}</div>
-                              <div><strong>TileMatrixSet:</strong> {VIIRS_LST_TILE_MATRIX_SET}</div>
-                              <div><strong>Tile Size:</strong> {VIIRS_LST_TILE_SIZE}×{VIIRS_LST_TILE_SIZE}</div>
-                              <div><strong>Native Max Zoom:</strong> {VIIRS_LST_NATIVE_MAX_ZOOM}</div>
-                              <div><strong>Format:</strong> {VIIRS_LST_FORMAT}</div>
-                              <div><strong>Nominal Resolution:</strong> {VIIRS_LST_NOMINAL_RESOLUTION_M} m</div>
-                              <div><strong>Projection:</strong> Web Mercator (EPSG:3857)</div>
-                              <div><strong>Product Name:</strong> {VIIRS_LST_PRODUCT_NAME}</div>
-                              <div><strong>Attribution:</strong> {VIIRS_LST_ATTRIBUTION}</div>
-                              <hr className="border-slate-200 my-1" />
-                              <div className="text-amber-700"><strong>NOTE:</strong> GIBS serves pre-colorized browse images.</div>
-                              <div className="text-amber-700">No raw Kelvin/Celsius values available per pixel.</div>
-                              <div className="text-amber-700">Click-to-inspect shows "Pixel temperature lookup unavailable".</div>
-                              <div className="text-amber-700">Cloud/invalid pixels = transparent (not fabricated).</div>
-                              {lstCoverage && (
-                                <>
-                                  <hr className="border-slate-200 my-1" />
-                                  <div><strong>Coverage:</strong> {lstCoverage.coveragePercent}% over India</div>
-                                  <div><strong>Valid tiles:</strong> {lstCoverage.tilesValid}/{lstCoverage.tilesChecked}</div>
-                                  <div><strong>India bounds:</strong> {lstCoverage.indiaBounds.west}°–{lstCoverage.indiaBounds.east}°E, {lstCoverage.indiaBounds.south}°–{lstCoverage.indiaBounds.north}°N</div>
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        <p className="text-[11px] text-slate-400">
-                          Land Surface Temperature (soil/vegetation/roofs/roads), not air temperature. Colour scale is
-                          NASA&apos;s official LST palette. Cloud-covered/invalid areas are transparent - not fabricated.
-                        </p>
-                        <p className="text-[11px] text-slate-400">{VIIRS_LST_ATTRIBUTION}</p>
-                      </>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Model</span>
-                          <span className="text-right font-medium text-slate-900">BharatFS</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Resolution</span>
-                          <span className="text-right font-medium text-slate-900">~6 km</span>
-                        </div>
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-slate-500">Variable</span>
-                          <span className="text-right font-medium text-slate-900">2 m Air Temperature</span>
-                        </div>
-                        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                          BharatFS data access not configured. No official machine-readable BharatFS API/GRIB
-                          distribution was found during research - see the report for what access would be needed.
-                          Surface Temperature (NASA VIIRS) remains fully available above.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {weatherMode === "satellite" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Satellite</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {satelliteResolved ? satelliteResolved.product.satelliteLabel : "Resolving..."}
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Instrument</span>
-                      <span className="text-right font-medium text-slate-900">{GIBS_INSTRUMENT}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Product</span>
-                      <span className="text-right font-medium text-slate-900">{GIBS_PRODUCT_NAME}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Resolution</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {GIBS_NOMINAL_RESOLUTION_M} m (nominal)
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Observation</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {satelliteDate ?? "Loading..."}
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Source</span>
-                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
-                    </div>
-
-
-                    {satelliteStatus === "ready" && satelliteAvailableDates.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsSatellitePlaying(false);
-                              stepSatelliteDate(-1);
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Prev
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsSatellitePlaying((current) => !current)}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            {isSatellitePlaying ? "Pause" : "Play"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsSatellitePlaying(false);
-                              stepSatelliteDate(1);
-                            }}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                          >
-                            Next
-                          </button>
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          {satelliteAvailableDates.length} recent day
-                          {satelliteAvailableDates.length === 1 ? "" : "s"} available · Status: Latest available
-                        </p>
-                      </div>
-                    )}
-                    {satelliteStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Resolving latest NASA GIBS imagery...</p>
-                    )}
-                    {satelliteStatus === "unavailable" && (
-                      <div className="space-y-2">
-                        <p className="text-xs text-amber-700">
-                          Satellite imagery is temporarily unavailable (NOAA-21/NOAA-20/SNPP all unreachable).
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            resetGibsSatelliteResolution();
-                            setSatelliteResolved(undefined);
-                          }}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                    <p className="text-[11px] text-slate-400">{GIBS_ATTRIBUTION}</p>
-                    <p className="text-[11px] text-slate-400">
-                      VIIRS is polar-orbiting: it images the Earth in swaths through the day, not
-                      all at once. Black areas are regions today&apos;s pass hasn&apos;t covered yet
-                      (or cloud/no-data) - not a rendering error.
-                    </p>
-                  </div>
-                )}
-
-                {weatherMode === "vegetation" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Instrument</span>
-                      <span className="text-right font-medium text-slate-900">{NDVI_INSTRUMENT}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Product</span>
-                      <span className="text-right font-medium text-slate-900">{NDVI_PRODUCT_NAME}</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Resolution</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {NDVI_NOMINAL_RESOLUTION_M} m (nominal)
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Composite period</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {ndviResolved ? ndviResolved.date : "Resolving..."}
-                      </span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Source</span>
-                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
-                    </div>
-
-
-                    {ndviStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Resolving latest NDVI composite...</p>
-                    )}
-                    {ndviStatus === "unavailable" && (
-                      <div className="space-y-2">
-                        <p className="text-xs text-amber-700">
-                          Vegetation imagery is temporarily unavailable (no recent composite reachable).
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            resetNdviResolution();
-                            setNdviResolved(undefined);
-                          }}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                    <p className="text-[11px] text-slate-400">{NDVI_ATTRIBUTION}</p>
-                    <p className="text-[11px] text-slate-400">
-                      Brown/tan = sparse vegetation · green = dense vegetation.
-                    </p>
-                  </div>
-                )}
-
-                {weatherMode === "fire" && (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Source</span>
-                      <span className="text-right font-medium text-slate-900">NASA FIRMS</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Detections</span>
-                      <span className="text-right font-medium text-slate-900">{fireDetections.length}</span>
-                    </div>
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="text-slate-500">Time window</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {([24, 48, 72] as const).map((hours) => (
-                          <button
-                            key={hours}
-                            type="button"
-                            onClick={() => setFireHours(hours)}
-                            className={`flex-1 rounded-xl border px-2 py-1.5 text-xs font-medium transition-colors ${
-                              fireHours === hours
-                                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
-                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                            }`}
-                          >
-                            {hours}h
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full" style={{ background: "#ffd700" }} /> Low
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full" style={{ background: "#ff9900" }} /> Moderate
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full" style={{ background: "#e81e1e" }} /> High
-                      </span>
-                      <span>confidence</span>
-                    </div>
-                    {fireStatus === "loading" && (
-                      <p className="text-xs text-slate-500">Loading NASA FIRMS detections...</p>
-                    )}
-                    {fireStatus === "unavailable" && (
-                      <p className="text-xs text-amber-700">
-                        {fireMessage ?? "NASA FIRMS is temporarily unavailable."}
-                      </p>
-                    )}
-                    {fireStatus === "ready" && fireDetections.length === 0 && (
-                      <p className="text-xs text-slate-500">No active fires detected near this view.</p>
-                    )}
-                    <p className="text-[11px] text-slate-400">
-                      VIIRS NOAA-21 + NOAA-20 NRT · pans/zooms refresh detections automatically.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-                <div className="mt-4 border-t border-slate-200/80 pt-4">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                    Click Map · Details
-                  </p>
-                  <p className="mb-3 text-xs text-slate-500">
-                    Enable metrics, then click the map to open current conditions + a 5-day
-                    forecast in the right-side panel.
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {WEATHER_METRICS.map(({ key, label, Icon }) => (
-                      <label
-                        key={key}
-                        className={`flex cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors ${
-                          selectedWeatherMetrics.has(key)
-                            ? "border-atlas-cobalt bg-atlas-cobalt/11 text-atlas-cobalt"
-                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          className="accent-atlas-cobalt"
-                          checked={selectedWeatherMetrics.has(key)}
-                          onChange={() =>
-                            setSelectedWeatherMetrics((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(key)) next.delete(key);
-                              else next.add(key);
-                              return next;
-                            })
-                          }
-                        />
-                        <Icon className="h-4 w-4 flex-shrink-0 text-slate-400" />
-                        <span className="truncate">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-4 border-t border-slate-200/80 pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Radar</p>
-                    <p className="text-xs text-slate-500">Observed India composite</p>
-                  </div>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
-                    <input
-                      type="checkbox"
-                      className="accent-atlas-cobalt"
-                      checked={isRadarEnabled}
-                      onChange={(event) => setIsRadarEnabled(event.target.checked)}
-                    />
-                    <span className="font-medium">On</span>
-                  </label>
-                </div>
-
-                <div className="mt-3 space-y-3 text-sm text-slate-700">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="text-slate-500">Coverage</span>
-                    <span className="text-right font-medium text-slate-900">
-                      India Radar Composite
-                    </span>
-                  </div>
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="text-slate-500">Source</span>
-                    <span className="text-right font-medium text-slate-900">
-                      RainViewer composite
-                    </span>
-                  </div>
-                </div>
-
-                {isRadarEnabled && radarStatus === "ready" && radarFrames.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-500">Valid</span>
-                      <span className="font-medium text-slate-900">
-                        {formatRadarTimeIST(radarFrames[radarFrameIndex]?.time ?? 0)} IST
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={radarGoPrev}
-                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        Prev
-                      </button>
-                      <button
-                        type="button"
-                        onClick={radarTogglePlay}
-                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        {isRadarPlaying ? "Pause" : "Play"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={radarGoNext}
-                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                      >
-                        Next
-                      </button>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      {radarFrameIndex + 1} / {radarFrames.length} frames · past → now
-                    </p>
-                  </div>
-                )}
-
-                {isRadarEnabled && radarStatus === "loading" && (
-                  <p className="mt-3 text-xs text-slate-500">Loading India radar composite...</p>
-                )}
-                {isRadarEnabled && radarStatus === "ready" && (
-                  <p className="mt-3 text-xs text-slate-500">
-                    Composite of multiple radars. Coverage varies by region; gaps are normal.
-                  </p>
-                )}
-                {isRadarEnabled && radarStatus === "unavailable" && (
-                  <p className="mt-3 text-xs text-amber-700">
-                    Radar is temporarily unavailable. The base map keeps working.
-                  </p>
-                )}
-              </div>
-
-              {weatherMode === "wind" && (
-                <div className="mt-4 border-t border-slate-200/80 pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Wind</p>
-                      <p className="text-xs text-slate-500">Animated NOAA GFS flow field</p>
-                    </div>
-                  </div>
-
-                <div className="mt-3 space-y-3 text-sm text-slate-700">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="text-slate-500">Model</span>
-                    <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
-                  </div>
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="text-slate-500">Valid</span>
-                    <span className="text-right font-medium text-slate-900">
-                      {windFrames[activeWindFrameIndex]
-                        ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
-                        : "Loading..."}
-                    </span>
-                  </div>
-                  <div>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className="text-slate-500">Particle Density</span>
-                      <span className="font-medium text-slate-900">
-                        {Math.round(windDensity * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={20}
-                      max={100}
-                      value={Math.round(windDensity * 100)}
-                      onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
-                      className="w-full accent-atlas-cobalt"
-                    />
-                  </div>
-                </div>
-
-                {isWindEnabled && windStatus === "loading" && (
-                  <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
-                )}
-                {isWindEnabled && windStatus === "ready" && (
-                  <p className="mt-3 text-xs text-slate-500">
-                    Live particles are projected directly from the NOAA U/V wind field.
-                  </p>
-                )}
-                {isWindEnabled && windStatus === "unavailable" && (
-                  <p className="mt-3 text-xs text-amber-700">
-                    {windStatusMessage ?? "NOAA GFS wind is temporarily unavailable."}
-                  </p>
-                )}
-              </div>
-              )}
-
-              {weatherMode === "air-quality" && (
-                <div className="mt-4 border-t border-slate-200/80 pt-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Air Quality</p>
-                      <p className="text-xs text-slate-500">Modeled US AQI surface + official CPCB stations</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Modeled Surface</span>
-                      <span className="text-right font-medium text-slate-900">Open-Meteo</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Official Stations</span>
-                      <span className="text-right font-medium text-slate-900">CPCB / data.gov.in</span>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-slate-500">Valid</span>
-                      <span className="text-right font-medium text-slate-900">
-                        {aqiGrid
-                          ? new Intl.DateTimeFormat("en-IN", {
-                              hour: "numeric",
-                              minute: "2-digit",
-                              timeZone: "Asia/Kolkata",
-                            }).format(new Date(aqiGrid.fetchedAt))
-                          : "Loading..."}
-                      </span>
-                    </div>
-
-                    {aqiStatus === "loading" && (
-                      <p className="mt-3 text-xs text-slate-500">Loading air quality data...</p>
-                    )}
-                    {aqiStatus === "unavailable" && (
-                      <p className="mt-3 text-xs text-amber-700">
-                        {aqiMessage ?? "Air quality data is temporarily unavailable."}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-            </div>
-          )}
-        </div>
-      )}
-
-      {/*
-      {!isLoading && !loadError && (
-        <div ref={windControlRef} className="absolute left-4 top-52 z-20">
-          <button
-            type="button"
-            onClick={() => setShowWindPanel((prev) => !prev)}
-            aria-haspopup="menu"
-            aria-expanded={showWindPanel}
-            aria-label="Wind overlay"
-            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
-              showWindPanel || isWindEnabled
-                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
-                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-            }`}
-          >
-            <Wind className="h-4 w-4" />
-            Wind
-            <ChevronDown
-              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
-                showWindPanel ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-          {(showWindPanel || isWindEnabled) && (
-            <div className="absolute left-0 top-full z-30 mt-2 w-72 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
-                Weather
-              </p>
-              <label className="mt-3 flex cursor-pointer items-center gap-3 text-sm text-slate-800">
-                <input
-                  type="checkbox"
-                  className="accent-atlas-cobalt"
-                  checked={isWindEnabled}
-                  onChange={(event) => setIsWindEnabled(event.target.checked)}
-                />
-                <span className="font-medium">Wind</span>
-              </label>
-
-              <div className="mt-4 space-y-3 text-sm text-slate-700">
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-slate-500">Model</span>
-                  <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
-                </div>
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-slate-500">Valid</span>
-                  <span className="text-right font-medium text-slate-900">
-                    {windFrames[activeWindFrameIndex]
-                      ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
-                      : "Loading..."}
-                  </span>
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-slate-500">Particle Density</span>
-                    <span className="font-medium text-slate-900">
-                      {Math.round(windDensity * 100)}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={20}
-                    max={100}
-                    value={Math.round(windDensity * 100)}
-                    onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
-                    className="w-full accent-atlas-cobalt"
-                  />
-                </div>
-              </div>
-
-              {isWindEnabled && windStatus === "loading" && (
-                <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
-              )}
-              {isWindEnabled && windStatus === "unavailable" && (
-                <p className="mt-3 text-xs text-amber-700">
-                  NOAA GFS wind is temporarily unavailable.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      */}
-
-      {isWindEnabled && windFrames.length >= 3 && !isLoading && !loadError && (
-        <div className="absolute bottom-6 left-1/2 z-20 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 rounded-3xl border border-white/70 bg-white/92 p-4 shadow-2xl backdrop-blur-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
-                Wind Forecast
-              </p>
-              <p className="text-sm font-medium text-slate-900">NOAA GFS 0.25°</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
-                onClick={() =>
-                  setActiveWindFrameIndex((current) =>
-                    current === 0 ? windFrames.length - 1 : current - 1
-                  )
-                }
-              >
-                â—€
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
-                onClick={() => setIsWindPlaying((current) => !current)}
-              >
-                {isWindPlaying ? "âšâš" : "â–¶"}
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
-                onClick={() =>
-                  setActiveWindFrameIndex((current) => (current + 1) % windFrames.length)
-                }
-              >
-                â–¶
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-4 gap-2">
-            {windFrames.map((frame, index) => (
-              <button
-                key={frame.forecastHour}
-                type="button"
-                onClick={() => {
-                  setActiveWindFrameIndex(index);
-                  setIsWindPlaying(false);
-                }}
-                className={`rounded-2xl border px-3 py-2 text-left transition-colors ${
-                  index === activeWindFrameIndex
-                    ? "border-atlas-cobalt bg-atlas-cobalt/10"
-                    : "border-slate-200 bg-white hover:bg-slate-50"
-                }`}
-              >
-                <p className="text-xs font-semibold text-slate-900">
-                  +{frame.forecastHour}h
-                </p>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  {formatIstShortDateTime(frame.forecastTime)}
-                </p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {selectedWeatherMetrics.size > 0 && !isLoading && !loadError && (
-        <div className="absolute right-4 top-20 z-20 w-[min(24rem,calc(100%-2rem))] max-h-[calc(100%-6rem)] overflow-y-auto rounded-3xl border border-white/70 bg-white/94 p-4 shadow-2xl backdrop-blur-sm">
-          <div className="mb-4 flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
-                Weather Details
-              </p>
-              <h3 className="text-lg font-semibold text-slate-900">Click Map To Inspect</h3>
-            </div>
-            {weatherPanel.status !== "idle" && (
-              <div className="text-right text-xs text-slate-500">
-                <p>{formatCoordinate(weatherPanel.latitude)},</p>
-                <p>{formatCoordinate(weatherPanel.longitude)}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="mb-4 rounded-2xl bg-sky-50 px-3 py-2 text-xs text-sky-900">
-            Weather mode is active. Boundary drill-down stays paused until all weather metrics are cleared.
-          </div>
-
-          {weatherPanel.status === "idle" && (
-            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Click anywhere on the map to load live conditions and a 5-day forecast for that point.
-            </p>
-          )}
-
-          {weatherPanel.status === "loading" && (
-            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600" role="status">
-              Loading live weather and forecast...
-            </p>
-          )}
-
-          {weatherPanel.status === "unavailable" && (
-            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Weather details are temporarily unavailable for this location.
-            </p>
-          )}
-
-          {weatherPanel.status === "loaded" && (
-            <div className="space-y-4">
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h4 className="text-sm font-semibold text-slate-900">Current Conditions</h4>
-                  <span className="text-xs text-slate-500">Open-Meteo</span>
-                </div>
-
-                {weatherPanel.current?.weather.status === "AVAILABLE" && weatherPanel.current.weather.data ? (
-                  <div className="space-y-2">
-                    <WeatherCurrentHero
-                      temperatureC={weatherPanel.current.weather.data.temperatureC}
-                      feelsLikeC={weatherPanel.current.weather.data.feelsLikeC}
-                      code={weatherPanel.current.weather.data.weatherCode}
-                      isDay={weatherPanel.current.weather.data.isDay}
-                      windSpeedKmh={weatherPanel.current.weather.data.windSpeedKmh}
-                      updatedLabel={formatIstTime(weatherPanel.current.weather.data.observationTime)}
-                      size="md"
-                    />
-                    <div className="!mt-3 border-t border-slate-200 pt-2" />
-                    {selectedWeatherMetrics.has("temperature") && (
-                      <WeatherRow
-                        label="Temperature"
-                        value={formatMetric(weatherPanel.current.weather.data.temperatureC, "°C")}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("humidity") && (
-                      <WeatherRow
-                        label="Humidity"
-                        value={formatMetric(
-                          weatherPanel.current.weather.data.relativeHumidityPercent,
-                          "%"
-                        )}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("pressure") && (
-                      <WeatherRow
-                        label="Pressure"
-                        value={formatMetric(weatherPanel.current.weather.data.surfacePressureHpa, "hPa")}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("rain") && (
-                      <>
-                        <WeatherRow
-                          label="Rain"
-                          value={formatMetric(weatherPanel.current.weather.data.rainMm, "mm")}
-                        />
-                        <WeatherRow
-                          label="Precipitation"
-                          value={formatMetric(
-                            weatherPanel.current.weather.data.precipitationMm,
-                            "mm"
-                          )}
-                        />
-                      </>
-                    )}
-                    {selectedWeatherMetrics.has("wind") && (
-                      <WeatherRow
-                        label="Wind"
-                        value={`${formatMetric(
-                          weatherPanel.current.weather.data.windSpeedKmh,
-                          "km/h"
-                        )}${
-                          weatherPanel.current.weather.data.windDirectionCompass
-                            ? ` (${weatherPanel.current.weather.data.windDirectionCompass})`
-                            : ""
-                        }`}
-                      />
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-600">
-                    {weatherPanel.current?.weather.message ?? "Live weather is temporarily unavailable."}
-                  </p>
-                )}
-
-                {selectedWeatherMetrics.has("aqi") && (
-                  <div className="mt-3 border-t border-slate-200 pt-3">
-                    {weatherPanel.current?.modeledAirQuality.status === "AVAILABLE" &&
-                    weatherPanel.current.modeledAirQuality.data ? (
-                      <WeatherRow
-                        label="AQI (US)"
-                        value={formatMetric(
-                          weatherPanel.current.modeledAirQuality.data.usAqi,
-                          ""
-                        ).trim()}
-                      />
-                    ) : (
-                      <p className="text-sm text-slate-600">
-                        Modeled air quality is temporarily unavailable.
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <p className="mt-3 text-xs text-slate-500">
-                  {weatherPanel.current?.weather.data?.observationTime
-                    ? `Observed: ${formatIstTime(
-                        weatherPanel.current.weather.data.observationTime
-                      )} · `
-                    : ""}
-                  AQI is modeled, not an official CPCB reading.
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h4 className="text-sm font-semibold text-slate-900">5-Day Forecast</h4>
-                  <span className="text-xs text-slate-500">Bars show temperature range and rain chance</span>
-                </div>
-
-                {forecastDays.length > 0 ? (
-                  <div className="space-y-3">
-                    {forecastDays.map((day) => {
-                      const tempBar = temperatureBarStyle(
-                        day.temperatureMinC,
-                        day.temperatureMaxC,
-                        forecastRangeMin,
-                        forecastRangeMax
-                      );
-                      const rainChance = Math.max(
-                        0,
-                        Math.min(100, day.precipitationProbabilityMax ?? 0)
-                      );
-
-                      return (
-                        <div key={day.date} className="rounded-2xl bg-white p-3 shadow-sm">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                              <WeatherConditionIcon code={day.weatherCode} isDay size={22} />
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900">
-                                  {formatForecastDate(day.date)}
-                                </p>
-                                <p className="text-xs text-slate-500">
-                                  {weatherCodeLabel(day.weatherCode)}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="text-right text-xs text-slate-500">
-                              <p>Rain {formatMetric(day.precipitationSumMm, "mm")}</p>
-                              <p>Wind {formatMetric(day.windSpeedMaxKmh, "km/h")}</p>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 space-y-2">
-                            <div>
-                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                                <span>Temperature</span>
-                                <span>
-                                  {formatMetric(day.temperatureMinC, "°C")} to{" "}
-                                  {formatMetric(day.temperatureMaxC, "°C")}
-                                </span>
-                              </div>
-                              <div className="relative h-2 rounded-full bg-slate-200">
-                                <div
-                                  className="absolute top-0 h-2 rounded-full bg-gradient-to-r from-sky-400 via-amber-300 to-rose-400"
-                                  style={tempBar}
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                                <span>Rain chance</span>
-                                <span>{formatMetric(day.precipitationProbabilityMax, "%")}</span>
-                              </div>
-                              <div className="h-2 rounded-full bg-slate-200">
-                                <div
-                                  className="h-2 rounded-full bg-atlas-cobalt"
-                                  style={{ width: `${rainChance}%` }}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-600">
-                    Daily forecast is temporarily unavailable for this location.
-                  </p>
-                )}
-
-                {weatherPanel.daily && (
-                  <p className="mt-3 text-xs text-slate-500">
-                    Forecast source: {weatherPanel.daily.source}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Cursor-following weather glass card - only rendered once at least one
-          metric is selected; hidden the instant the checklist is cleared. */}
-      {weatherHoverCard && selectedWeatherMetrics.size > 0 && (
-        <div
-          className="pointer-events-none absolute z-30"
-          style={{ left: weatherHoverCard.left, top: weatherHoverCard.top, width: 240 }}
-        >
-          <div
-            className="rounded-xl px-4 py-3 text-white"
-            style={{
-              background: "rgba(20, 30, 38, 0.82)",
-              backdropFilter: "blur(14px)",
-              WebkitBackdropFilter: "blur(14px)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              boxShadow: "0 8px 28px rgba(0,0,0,0.25)",
-            }}
-          >
-            <p className="mb-2 text-[11px] uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.68)" }}>
-              Weather
-            </p>
-
-            {weatherHoverCard.status === "loading" && (
-              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }} role="status">
-                Loadingâ€¦
-              </p>
-            )}
-            {weatherHoverCard.status === "unavailable" && (
-              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
-                Weather is temporarily unavailable for this location.
-              </p>
-            )}
-            {weatherHoverCard.status === "loaded" && weatherHoverCard.data && (
-              <div className="space-y-1.5">
-                {weatherHoverCard.data.weather.status === "AVAILABLE" && weatherHoverCard.data.weather.data && (
-                  <>
-                    {selectedWeatherMetrics.has("temperature") && (
-                      <WeatherRow
-                        label="Temperature"
-                        value={formatMetric(weatherHoverCard.data.weather.data.temperatureC, "°C")}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("humidity") && (
-                      <WeatherRow
-                        label="Humidity"
-                        value={formatMetric(weatherHoverCard.data.weather.data.relativeHumidityPercent, "%")}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("pressure") && (
-                      <WeatherRow
-                        label="Pressure"
-                        value={formatMetric(weatherHoverCard.data.weather.data.surfacePressureHpa, "hPa")}
-                      />
-                    )}
-                    {selectedWeatherMetrics.has("rain") && (
-                      <WeatherRow label="Rain" value={formatMetric(weatherHoverCard.data.weather.data.rainMm, "mm")} />
-                    )}
-                    {selectedWeatherMetrics.has("wind") && (
-                      <WeatherRow
-                        label="Wind"
-                        value={`${formatMetric(weatherHoverCard.data.weather.data.windSpeedKmh, "km/h")}${
-                          weatherHoverCard.data.weather.data.windDirectionCompass
-                            ? ` (${weatherHoverCard.data.weather.data.windDirectionCompass})`
-                            : ""
-                        }`}
-                      />
-                    )}
-                  </>
-                )}
-                {weatherHoverCard.data.weather.status !== "AVAILABLE" &&
-                  WEATHER_METRICS.some(({ key }) => key !== "aqi" && selectedWeatherMetrics.has(key)) && (
-                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
-                      {weatherHoverCard.data.weather.message ?? "Live weather is temporarily unavailable."}
-                    </p>
-                  )}
-
-                {selectedWeatherMetrics.has("aqi") &&
-                  (weatherHoverCard.data.modeledAirQuality.status === "AVAILABLE" &&
-                  weatherHoverCard.data.modeledAirQuality.data ? (
-                    <WeatherRow
-                      label="AQI (US)"
-                      value={formatMetric(weatherHoverCard.data.modeledAirQuality.data.usAqi, "")}
-                    />
-                  ) : (
-                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
-                      Modeled air quality is temporarily unavailable.
-                    </p>
-                  ))}
-
-                <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.68)" }}>
-                  {weatherHoverCard.data.weather.data?.observationTime &&
-                    `Observed: ${formatIstTime(weatherHoverCard.data.weather.data.observationTime)} · `}
-                  Source: Open-Meteo
-                  {selectedWeatherMetrics.has("aqi") ? " · AQI is modeled, not an official CPCB reading" : ""}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
       )}
     </div>
   );

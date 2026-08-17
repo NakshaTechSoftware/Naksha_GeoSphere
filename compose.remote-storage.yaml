@@ -1,0 +1,66 @@
+# Naksha GeoSphere — remote storage overlay.
+#
+# Runs ONLY web, api and worker, pointed at a separate storage-server
+# machine (PostgreSQL/Redis/MinIO) as documented in
+# infrastructure/storage-server/ and .env.remote-storage.example.
+# No local database/Redis/MinIO containers are started in this mode.
+#
+#   docker compose -f compose.yaml -f compose.remote-storage.yaml -f compose.prod.yaml up --build -d
+#
+# Requires Docker Compose v2.24+ (for the !reset merge tag).
+#
+# The DATABASE_* / REDIS_* / S3_* values come from your .env (merge
+# .env.remote-storage.example into it) and MUST match the storage
+# server's own .env.storage exactly.
+
+services:
+  # Storage runs on the storage-server machine - never locally in this
+  # mode. Profiles keep these services defined but inactive, so plain
+  # `docker compose up` (without --profile local-storage) skips them.
+  postgres:
+    profiles: ["local-storage"]
+
+  redis:
+    profiles: ["local-storage"]
+
+  minio:
+    profiles: ["local-storage"]
+
+  # Bucket-init job for the LOCAL MinIO - not needed in remote mode (the
+  # storage server creates its own buckets).
+  minio-init:
+    profiles: ["local-storage"]
+
+  api:
+    # No local storage to wait for - the storage server is already up.
+    depends_on: !reset []
+    environment:
+      # Construct the connection URLs from the storage server's host/port
+      # values (see .env.remote-storage.example).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/2
+      # Map the S3_* storage-server credentials onto the app's MINIO_* config.
+      MINIO_ENDPOINT: ${S3_ENDPOINT_URL:-http://192.168.10.81:9010}
+      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set in .env}
+      MINIO_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set in .env}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://192.168.10.81:9010}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_SECURE: ${S3_SECURE:-false}
+      S3_REGION: ${S3_REGION:-geosphere}
+
+  worker:
+    depends_on: !reset []
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/2
+      MINIO_ENDPOINT: ${S3_ENDPOINT_URL:-http://192.168.10.81:9010}
+      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set in .env}
+      MINIO_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set in .env}
+
+  web:
+    environment:
+      # The frontend's dataset routes read the map data from MinIO.
+      MINIO_ENDPOINT: ${S3_ENDPOINT_URL:-http://192.168.10.81:9010}

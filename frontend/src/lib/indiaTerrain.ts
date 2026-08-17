@@ -2,6 +2,9 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 
 export const INDIA_DEM_SOURCE_ID = "local-dem";
 export const INDIA_DEM_COLOR_SOURCE_ID = "local-dem-color";
+// Separate raster-dem source for the hillshade layer: MapLibre warns (and renders worse)
+// when the 3D terrain source is also used by a hillshade layer, so each gets its own.
+export const INDIA_DEM_HILLSHADE_SOURCE_ID = "local-dem-hillshade";
 export const INDIA_TERRAIN_BACKGROUND_LAYER_ID = "local-terrain-background";
 export const INDIA_DEM_COLOR_LAYER_ID = "local-dem-color-layer";
 export const INDIA_HILLSHADE_LAYER_ID = "local-dem-hillshade";
@@ -26,6 +29,15 @@ export function addIndiaTerrain(map: MapLibreMap, beforeId?: string): void {
     tileSize: 256,
     minzoom: 4,
     maxzoom: 12,
+    attribution: "India SRTM 30 m DEM",
+  });
+  map.addSource(INDIA_DEM_HILLSHADE_SOURCE_ID, {
+    type: "raster-dem",
+    tiles: ["/api/terrain/{z}/{x}/{y}?v=3"],
+    tileSize: 256,
+    minzoom: 4,
+    maxzoom: 12,
+    encoding: "mapbox",
     attribution: "India SRTM 30 m DEM",
   });
 
@@ -59,7 +71,7 @@ export function addIndiaTerrain(map: MapLibreMap, beforeId?: string): void {
     {
       id: INDIA_HILLSHADE_LAYER_ID,
       type: "hillshade",
-      source: INDIA_DEM_SOURCE_ID,
+      source: INDIA_DEM_HILLSHADE_SOURCE_ID,
       minzoom: 4,
       paint: {
         "hillshade-exaggeration": 0.72,

@@ -18,7 +18,7 @@ class UserPublic(BaseModel):
     id: uuid.UUID
     full_name: str
     email: str
-    organization_name: str
-    role_or_use_case: str
+    organization_name: str | None
+    role_or_use_case: str | None
     status: UserStatus
     created_at: datetime

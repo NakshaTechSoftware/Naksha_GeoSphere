@@ -2,6 +2,7 @@ import {
   ApiRequestError,
   ApiUnavailableError,
   fetchPlatformHealth,
+  login,
   registerAccount,
   resendVerificationEmail,
   verifyEmail,
@@ -61,20 +62,12 @@ describe("registerAccount", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends snake_case fields and maps a snake_case response back to camelCase", async () => {
+  it("sends snake_case fields and maps the PendingSignup response back to camelCase", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 201,
       json: async () => ({
-        user: {
-          id: "11111111-1111-1111-1111-111111111111",
-          full_name: "Ada Lovelace",
-          email: "ada@example.com",
-          organization_name: "Example Org",
-          role_or_use_case: "developer",
-          status: "pending_verification",
-          created_at: "2026-08-04T00:00:00Z",
-        },
+        user: { full_name: "Ada Lovelace", email: "ada@example.com" },
         next_step: "verify_email",
         message: "Account created. Please verify your email address.",
       }),
@@ -83,8 +76,9 @@ describe("registerAccount", () => {
 
     const result = await registerAccount(VALID_INPUT);
 
-    expect(result.user.organizationName).toBe("Example Org");
-    expect(result.user.roleOrUseCase).toBe("developer");
+    // No users row exists at registration time — only fullName/email come back.
+    expect(result.user.fullName).toBe("Ada Lovelace");
+    expect(result.user.email).toBe("ada@example.com");
     expect(result.nextStep).toBe("verify_email");
 
     const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -153,36 +147,117 @@ describe("verifyEmail", () => {
     vi.unstubAllGlobals();
   });
 
-  it("resolves with the verified status on success", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ status: "active", message: "Email verified successfully." }),
+  it("sends the email + code and resolves with the verified user on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "active",
+        message: "Email verified successfully.",
+        user: {
+          id: "abc-123",
+          full_name: "Ada Lovelace",
+          email: "ada@example.com",
+          organization_name: "Example Org",
+          role_or_use_case: "developer",
+          status: "active",
+          created_at: "2026-08-13T00:00:00Z",
+        },
       }),
-    );
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    const result = await verifyEmail("raw-token-value");
+    const result = await verifyEmail({ email: "ada@example.com", code: "123456" });
     expect(result.status).toBe("active");
+    expect(result.user).toEqual({
+      id: "abc-123",
+      fullName: "Ada Lovelace",
+      email: "ada@example.com",
+      organizationName: "Example Org",
+      roleOrUseCase: "developer",
+      status: "active",
+      createdAt: "2026-08-13T00:00:00Z",
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody).toEqual({ email: "ada@example.com", code: "123456" });
   });
 
-  it("throws ApiRequestError for an invalid or expired token", async () => {
+  it("throws ApiRequestError for an invalid or expired code", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: false,
         status: 422,
         json: async () => ({
-          error_code: "INVALID_OR_EXPIRED_TOKEN",
-          message: "This verification link is invalid or has expired.",
+          error_code: "INVALID_OR_EXPIRED_CODE",
+          message: "This verification code is invalid or has expired.",
         }),
       }),
     );
 
-    const error = await verifyEmail("bad-token").catch((e: unknown) => e);
+    const error = await verifyEmail({ email: "ada@example.com", code: "000000" }).catch(
+      (e: unknown) => e,
+    );
     expect(error).toBeInstanceOf(ApiRequestError);
-    expect((error as ApiRequestError).errorCode).toBe("INVALID_OR_EXPIRED_TOKEN");
+    expect((error as ApiRequestError).errorCode).toBe("INVALID_OR_EXPIRED_CODE");
+  });
+});
+
+describe("login", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("authenticates and resolves with the signed-in user", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        user: {
+          id: "abc-123",
+          full_name: "Ada Lovelace",
+          email: "ada@example.com",
+          organization_name: "Example Org",
+          role_or_use_case: "developer",
+          status: "active",
+          created_at: "2026-08-13T00:00:00Z",
+        },
+        message: "Signed in successfully.",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await login({ email: "ada@example.com", password: "hunter2" });
+    expect(result.user.fullName).toBe("Ada Lovelace");
+    expect(result.message).toBe("Signed in successfully.");
+
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(requestInit.body as string);
+    expect(sentBody).toEqual({ email: "ada@example.com", password: "hunter2" });
+  });
+
+  it("throws ApiRequestError for invalid credentials", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error_code: "INVALID_CREDENTIALS",
+          message: "Invalid email or password.",
+        }),
+      }),
+    );
+
+    const error = await login({ email: "ada@example.com", password: "wrong" }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect((error as ApiRequestError).errorCode).toBe("INVALID_CREDENTIALS");
+    expect((error as ApiRequestError).status).toBe(401);
   });
 });
 

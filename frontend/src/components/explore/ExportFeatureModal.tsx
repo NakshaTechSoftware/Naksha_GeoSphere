@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Download, Loader2, X } from "lucide-react";
 import type { AdminLevel, AttributeHierarchy } from "./IndiaMapViewer";
+import { saveExportFile } from "@/lib/nativeDownload";
 
 export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
 type BulkLevel = Exclude<AdminLevel, "state">;
@@ -49,6 +50,7 @@ type Progress = { message: string; current?: number; total?: number };
 type ModalState =
   | { status: "idle" }
   | { status: "loading"; progress?: Progress }
+  | { status: "success" }
   | { status: "error"; message: string };
 
 // Centered format-picker dialog opened from the attribute panel's "Export" action. For
@@ -82,6 +84,14 @@ export function ExportFeatureModal({
     onClose();
   };
 
+  // Once the export succeeds, show the confirmation for a moment, then close
+  // the dialog on its own.
+  useEffect(() => {
+    if (state.status !== "success") return;
+    const timer = setTimeout(() => onClose(), 2500);
+    return () => clearTimeout(timer);
+  }, [state.status, onClose]);
+
   const runSingleExport = async () => {
     if (!geometry) {
       setState({ status: "error", message: "This feature has no geometry to export." });
@@ -101,15 +111,15 @@ export function ExportFeatureModal({
       const disposition = response.headers.get("Content-Disposition") ?? "";
       const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${title || "export"}.${format}`;
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      onClose();
+      // Native app: writes to cache and opens the OS save/share sheet; web: a
+      // plain browser download. In the WebView the old <a download> click did
+      // nothing, so the file never reached the phone's file system.
+      await saveExportFile({
+        blob,
+        filename,
+        mimetype: response.headers.get("Content-Type") ?? undefined,
+      });
+      setState({ status: "success" });
     } catch (error) {
       setState({ status: "error", message: error instanceof Error ? error.message : "Export failed" });
     }
@@ -171,13 +181,19 @@ export function ExportFeatureModal({
             // The finished file is streamed from a dedicated download route rather
             // than embedded here - a whole-district export can be hundreds of MB,
             // past what's safe to hold as one base64 string/Blob in the browser.
-            const link = document.createElement("a");
-            link.href = event.downloadUrl;
-            link.download = event.filename;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            onClose();
+            // Fetch that stream, then save it through the shared helper so the
+            // native app lands it on the phone (web keeps the browser download).
+            const fileResponse = await fetch(event.downloadUrl);
+            if (!fileResponse.ok) {
+              throw new Error("Failed to download the exported file");
+            }
+            const blob = await fileResponse.blob();
+            await saveExportFile({
+              blob,
+              filename: event.filename,
+              mimetype: event.mimetype,
+            });
+            setState({ status: "success" });
             return;
           } else {
             throw new Error(event.message);
@@ -204,24 +220,30 @@ export function ExportFeatureModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={handleClose} />
       <div className="relative z-10 w-[22rem] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4">
+        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-blue-600 to-blue-700 px-5 py-4">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-100">Export</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-100">Export</p>
             <h3 className="truncate text-sm font-semibold text-white">{title}</h3>
           </div>
           <button
             type="button"
             onClick={handleClose}
             aria-label="Close export dialog"
-            className="flex-shrink-0 rounded-full p-1 text-indigo-100 transition-colors hover:bg-white/15 hover:text-white"
+            className="flex-shrink-0 rounded-full p-1 text-blue-100 transition-colors hover:bg-white/15 hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {isLoading ? (
+        {state.status === "success" ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+            <CheckCircle2 className="h-9 w-9 text-green-500" />
+            <p className="text-base font-semibold text-slate-900">Export complete.</p>
+            <p className="text-xs text-slate-400">Your file has been saved.</p>
+          </div>
+        ) : isLoading ? (
           <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
-            <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
             <div className="space-y-1">
               <p className="text-sm font-medium text-slate-900">{progress?.message ?? "Exporting…"}</p>
               <p className="text-xs text-slate-400">This can take a moment for larger areas.</p>
@@ -229,7 +251,7 @@ export function ExportFeatureModal({
             {progressPct !== undefined && (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                 <div
-                  className="h-full rounded-full bg-indigo-600 transition-all duration-300"
+                  className="h-full rounded-full bg-blue-600 transition-all duration-300"
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
@@ -252,13 +274,13 @@ export function ExportFeatureModal({
                         onClick={() => toggleLevel(level)}
                         className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                           checked
-                            ? "border-indigo-500 bg-indigo-50"
+                            ? "border-blue-500 bg-blue-50"
                             : "border-gray-200 hover:bg-gray-50"
                         }`}
                       >
                         <span className="flex items-center gap-2 font-medium text-slate-900">
                           {level === hierarchy?.level && (
-                            <ChevronRight className="h-3.5 w-3.5 text-indigo-500" />
+                            <ChevronRight className="h-3.5 w-3.5 text-blue-500" />
                           )}
                           {LEVEL_LABEL[level]}
                           {level === hierarchy?.level && (
@@ -266,7 +288,7 @@ export function ExportFeatureModal({
                           )}
                         </span>
                         {checked ? (
-                          <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                          <CheckCircle2 className="h-4 w-4 text-blue-600" />
                         ) : (
                           <span className="h-4 w-4 rounded-full border border-gray-300" />
                         )}
@@ -286,7 +308,7 @@ export function ExportFeatureModal({
                   onClick={() => setFormat(option.id)}
                   className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors ${
                     format === option.id
-                      ? "border-indigo-500 bg-indigo-50"
+                      ? "border-blue-500 bg-blue-50"
                       : "border-gray-200 hover:bg-gray-50"
                   }`}
                 >
@@ -306,7 +328,7 @@ export function ExportFeatureModal({
               type="button"
               onClick={handleExport}
               disabled={levels.length > 0 && selectedLevels.size === 0}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="h-4 w-4" />
               Export

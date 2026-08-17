@@ -44,7 +44,8 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "gram_panchayat", label: "Gram Panchayat Boundaries" },
   { id: "police_station", label: "Police Station Boundaries" },
   { id: "civic_amenities", label: "Civic Amenities" },
-  { id: "gba", label: "GBA Boundaries" },
+  { id: "gba", label: "Bengaluru Boundaries" },
+  { id: "roads", label: "Roads" },
 ];
 const POLICE_TYPE_OPTIONS: { id: PoliceType; label: string }[] = [
   { id: "all", label: "All Police Types" },
@@ -247,8 +248,166 @@ function formatAreaSqKm(areaSqKm: number): string {
   return `${areaSqKm.toLocaleString("en-IN", { maximumFractionDigits: 2 })} km²`;
 }
 
+// Minimal typing for the Web Speech API. SpeechRecognition isn't part of TypeScript's
+// DOM lib yet, so the browser-specific constructors (webkit prefix included) are cast
+// through this shape instead of polluting the rest of the file with `any`.
+interface SpeechRecognitionResultItem {
+  transcript: string;
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  maxAlternatives: number;
+  onresult:
+    | ((event: { resultIndex: number; results: ArrayLike<SpeechRecognitionResultItem[]> }) => void)
+    | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+}
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+// Shared body of the attribute info panel - header (type badge + title + close), the
+// attribute table (Bhoomi owner rows above the feature's own rows), and the Export
+// action. Rendered by both the desktop floating card and the mobile bottom sheet so
+// the two always show the same content.
+function AttributePanelBody({
+  info,
+  owners,
+  onClose,
+  onExport,
+}: {
+  info: AttributeInfo;
+  owners:
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] };
+  // Optional: when omitted (mobile bottom sheet), the header shows no close button.
+  onClose?: () => void;
+  onExport: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-600">
+            {info.typeLabel}
+          </span>
+          <h3 className="truncate text-sm font-semibold text-slate-900">{info.title}</h3>
+        </div>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close attribute panel"
+            className="flex-shrink-0 rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      <table className="w-full border-collapse text-xs">
+        <tbody>
+          {/* Owner names (Bhoomi RTC) sit above the parcel's own attributes - they're
+              what the parcel is usually looked up for. */}
+          {info.parcel && (
+            <>
+              {owners.status === "loading" && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Owner
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-400">Loading land records…</td>
+                </tr>
+              )}
+              {owners.status === "error" && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Owner
+                  </td>
+                  <td className="break-words px-3 py-1.5 text-amber-600">
+                    Land records unavailable ({owners.message})
+                  </td>
+                </tr>
+              )}
+              {owners.status === "ok" && owners.rows.length === 0 && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Owner
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-400">No records found</td>
+                </tr>
+              )}
+              {owners.status === "ok" &&
+                owners.rows.map((owner, i) => (
+                  <tr key={`owner-${i}`} className="border-b border-slate-100">
+                    <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                      {i === 0 ? (owners.rows.length > 1 ? "Owners" : "Owner") : ""}
+                    </td>
+                    <td className="break-words px-3 py-1.5 font-semibold text-slate-900">
+                      {owner.name}
+                      {owner.hissa && (
+                        <span className="ml-1 font-normal text-slate-500">
+                          [Hissa {owner.hissa}]
+                        </span>
+                      )}
+                      {owner.extent && (
+                        <span className="ml-1 font-normal text-slate-500">
+                          ({owner.extent}
+                          {owner.category ? `, ${owner.category}` : ""})
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+            </>
+          )}
+          {info.rows.map((row, i) => (
+            <tr
+              key={`${row.label}-${i}`}
+              className="border-b border-slate-100 last:border-b-0"
+            >
+              <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                {row.label}
+              </td>
+              <td
+                className={`break-words px-3 py-1.5 ${
+                  row.bold ? "font-semibold" : "font-medium"
+                } text-slate-900`}
+              >
+                {row.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="border-t border-gray-100 p-3">
+        <button
+          type="button"
+          onClick={onExport}
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-gray-50"
+        >
+          Export
+        </button>
+      </div>
+    </>
+  );
+}
+
 export function ExplorePage() {
   const [searchQuery, setSearchQuery] = useState("");
+  // Voice search state: true while the browser's speech recognizer is actively listening.
+  const [isListening, setIsListening] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedWard, setSelectedWard] = useState<WardSelection | null>(null);
   const mapViewerRef = useRef<IndiaMapViewerHandle>(null);
@@ -261,12 +420,114 @@ export function ExplorePage() {
     useState<BoundaryLayerMode>("administrative");
   const [selectedPoliceType, setSelectedPoliceType] = useState<PoliceType>("all");
   const [selectedPoliceDistrict, setSelectedPoliceDistrict] = useState("all");
+  // What a district click does in Roads mode - "none" (default, neither button pressed) is
+  // fast/boundaries-only, matching taluk/hobli/village's own lightweight click behavior.
+  // "district" makes a single click also fetch that district's full roads immediately;
+  // "state" loads every district's roads combined on the next click, since districts tile
+  // the whole state with no separate clickable "state" area.
+  const [selectedRoadsScope, setSelectedRoadsScope] = useState<"none" | "district" | "state">("none");
   const [searchSuggestions, setSearchSuggestions] = useState<
     { category: string; items: string[] }[]
   >([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
+  // Refs backing the Filters panel's outside-click-to-close: the panel itself (clicks
+  // inside it are ignored) and the hamburger toggle (excluded so it keeps toggling
+  // instead of close-then-reopen).
+  const filtersPanelRef = useRef<HTMLElement | null>(null);
+  const filtersToggleRef = useRef<HTMLButtonElement | null>(null);
+  // Mobile drawer swipe-to-close: while the Filters drawer is open, a leftward swipe
+  // drags it off-screen; releasing past a threshold closes it, otherwise it snaps back.
+  const [drawerDragX, setDrawerDragX] = useState(0);
+  const drawerDragRef = useRef<{
+    startX: number;
+    startY: number;
+    dragging: boolean;
+    current: number;
+  }>({ startX: 0, startY: 0, dragging: false, current: 0 });
+
+  const handleDrawerTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    drawerDragRef.current = { startX: touch.clientX, startY: touch.clientY, dragging: false, current: 0 };
+  };
+
+  const handleDrawerTouchMove = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    const { startX, startY } = drawerDragRef.current;
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    // Only engage for a clearly-leftward, mostly-horizontal drag; the drawer is 80vw
+    // wide, so cap the drag at its own width.
+    if (dx < -20 && Math.abs(dx) > Math.abs(dy)) {
+      const clamped = Math.max(dx, -window.innerWidth * 0.8);
+      drawerDragRef.current.dragging = true;
+      drawerDragRef.current.current = clamped;
+      setDrawerDragX(clamped);
+    }
+  };
+
+  const handleDrawerTouchEnd = () => {
+    const { dragging, current } = drawerDragRef.current;
+    // Closing past ~20% of the screen width counts as a dismiss; otherwise snap back.
+    if (dragging && current < -window.innerWidth * 0.2) {
+      setShowFilters(false);
+    }
+    drawerDragRef.current.dragging = false;
+    drawerDragRef.current.current = 0;
+    setDrawerDragX(0);
+  };
+
+  // Mobile attribute sheet swipe-to-close: while the sheet is open, a downward swipe
+  // drags it off-screen; releasing past a threshold closes it, otherwise it snaps back.
+  // (Mirrors the Filters drawer's swipe handling.)
+  const [attrSheetDragY, setAttrSheetDragY] = useState(0);
+  const attrSheetDragRef = useRef({
+    startX: 0,
+    startY: 0,
+    dragging: false,
+    current: 0,
+  });
+
+  const handleAttrSheetTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    attrSheetDragRef.current = { startX: touch.clientX, startY: touch.clientY, dragging: false, current: 0 };
+  };
+
+  const handleAttrSheetTouchMove = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    const { startX, startY } = attrSheetDragRef.current;
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    // Only engage for a clearly-downward, mostly-vertical drag, and only while the
+    // sheet's content is scrolled to the top (a downward swipe mid-list should scroll
+    // the list back up instead of closing the sheet). Cap at the sheet height (30vh).
+    if (dy > 20 && Math.abs(dy) > Math.abs(dx)) {
+      if ((e.currentTarget as HTMLElement).scrollTop > 0) return;
+      const clamped = Math.min(dy, window.innerHeight * 0.5);
+      attrSheetDragRef.current.dragging = true;
+      attrSheetDragRef.current.current = clamped;
+      setAttrSheetDragY(clamped);
+    }
+  };
+
+  const handleAttrSheetTouchEnd = () => {
+    const { dragging, current } = attrSheetDragRef.current;
+    // Closing past ~15% of the screen height counts as a dismiss; otherwise snap back.
+    if (dragging && current > window.innerHeight * 0.15) {
+      setAttributePanelOpen(false);
+    }
+    attrSheetDragRef.current.dragging = false;
+    attrSheetDragRef.current.current = 0;
+    setAttrSheetDragY(0);
+  };
+  // Holds the live speech-recognition instance so tapping the mic again (or leaving the
+  // page) can stop it cleanly.
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   // "Draw AOI" tool dropdown
   const [showAOIMenu, setShowAOIMenu] = useState(false);
@@ -486,6 +747,20 @@ export function ExplorePage() {
       if (aoiMenuRef.current && !aoiMenuRef.current.contains(e.target as Node)) {
         setShowAOIMenu(false);
       }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Close the Filters panel when clicking anywhere outside it - the map, the search
+  // bar (input, voice icon, profile icon) all dismiss it. The hamburger toggle itself
+  // is excluded so it keeps toggling instead of close-then-reopen.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (filtersPanelRef.current?.contains(target)) return;
+      if (filtersToggleRef.current?.contains(target)) return;
+      setShowFilters(false);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -759,6 +1034,93 @@ export function ExplorePage() {
     mapViewerRef.current?.search("");
   };
 
+  // Voice search (mobile only): the spoken place name is transcribed live into the search
+  // bar, and the normal suggestion dropdown then appears so the user can confirm the text
+  // before running the search. Uses the Web Speech API (Chrome/Android WebView support it).
+  const stopVoiceSearch = () => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setIsListening(false);
+  };
+
+  // Native app (Capacitor WebView): make sure Android's microphone permission is
+  // granted before the WebView starts speech recognition - otherwise the WebView
+  // reports "not-allowed" even after the user granted access at the consent screen.
+  // On the web this resolves immediately without doing anything.
+  const ensureNativeVoicePermission = (): Promise<boolean> => {
+    if (typeof window === "undefined") return Promise.resolve(true);
+    const w = window as unknown as {
+      Capacitor?: {
+        isNativePlatform?: () => boolean;
+        Plugins?: {
+          NativePermissions?: {
+            ensureVoicePermission?: () => Promise<{ granted?: boolean }>;
+          };
+        };
+      };
+    };
+    if (w.Capacitor?.isNativePlatform?.() !== true) return Promise.resolve(true);
+    const ensure = w.Capacitor.Plugins?.NativePermissions?.ensureVoicePermission;
+    return (ensure?.() ?? Promise.resolve({ granted: true }))
+      .then((r) => r.granted !== false)
+      .catch(() => true); // plugin missing/failed - let the WebView's own flow decide
+  };
+
+  const toggleVoiceSearch = async () => {
+    if (isListening) {
+      stopVoiceSearch();
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognition();
+    if (!SpeechRecognitionCtor) {
+      alert("Voice search isn't supported in this browser. Please type your search instead.");
+      return;
+    }
+    const voiceAllowed = await ensureNativeVoicePermission();
+    if (!voiceAllowed) {
+      alert("Microphone access was denied. Please allow microphone access to use voice search.");
+      return;
+    }
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = "en-IN";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+    // Live transcription: every interim result updates the input as the user speaks, and
+    // the final result stays put - exactly like typing it in by hand.
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .slice(event.resultIndex)
+        .map((result) => result[0]?.transcript ?? "")
+        .join("")
+        .trim();
+      if (transcript) setSearchQuery(transcript);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setIsListening(false);
+    };
+    recognition.onerror = (event) => {
+      // "no-speech" / "aborted" fire on normal stops; only surface permission problems.
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        alert("Microphone access was denied. Please allow microphone access to use voice search.");
+      }
+    };
+    recognitionRef.current = recognition;
+    setIsListening(true);
+    try {
+      recognition.start();
+    } catch {
+      // Double-start can throw in some browsers; keep the button usable.
+      recognitionRef.current = null;
+      setIsListening(false);
+    }
+  };
+
+  // Stop any in-flight recognition when the page unmounts so the mic indicator never
+  // stays stuck on.
+  useEffect(() => () => recognitionRef.current?.abort(), []);
+
   // "Type" filter: Bengaluru's region subfolders, each expandable to show/load its files
   const [bengaluruFileTree, setBengaluruFileTree] = useState<Record<string, string[]> | null>(null);
   const [expandedRegions, setExpandedRegions] = useState<Record<string, boolean>>({});
@@ -831,12 +1193,26 @@ export function ExplorePage() {
 
         {/* Floating search bar */}
         <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
-          {/* Search Bar */}
-          <div ref={searchWrapperRef} className="relative max-w-md flex-1">
-            <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 shadow-md">
+          {/* Search Bar - takes the full width on mobile (common phone resolutions) where
+              the Draw AOI and User Profile controls are hidden. */}
+          {/* min-w-0 is critical: without it the wrapper's min-width defaults to auto,
+              so if the input ever fails to shrink (Android WebView quirk) the wrapper
+              grows with the input's intrinsic width and the bar visibly widens while
+              typing. min-w-0 lets the wrapper stay put and clip inside instead. */}
+          <div ref={searchWrapperRef} className="relative min-w-0 max-w-md flex-1">
+            {/* Taller on mobile (common phone resolutions) for easier touch; the
+                compact desktop size is restored at md and up. On mobile the profile
+                avatar is absolutely positioned over the pill's right edge (and space
+                reserved via pr-14) so it never participates in the flex layout - this
+                keeps the pill width constant no matter what the user types, even on
+                Android WebViews that refuse to shrink the input. */}
+            {/* overflow-hidden guarantees the pill never visually grows even if some
+                engine refuses to shrink the input - content clips at the pill edge. */}
+            <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
               <button
+                ref={filtersToggleRef}
                 onClick={() => setShowFilters((prev) => !prev)}
-                className={`flex-shrink-0 rounded-full p-2 transition-colors ${
+                className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
                   showFilters
                     ? "bg-gray-100 text-obsidian-graphite"
                     : "text-gray-500 hover:bg-gray-100"
@@ -844,10 +1220,15 @@ export function ExplorePage() {
                 aria-label="Toggle filters"
                 aria-pressed={showFilters}
               >
-                <Menu className="h-4 w-4" />
+                <Menu className="h-5 w-5 md:h-4 md:w-4" />
               </button>
               <input
                 type="text"
+                // size={1} collapses the input's intrinsic min-content width (the
+                // default size=20 is what Android WebViews fall back to when they
+                // ignore min-width:0, inflating the bar). flex-1 + min-w-0 then grow
+                // it to fill the remaining space normally.
+                size={1}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -875,15 +1256,15 @@ export function ExplorePage() {
                 aria-expanded={showSuggestions}
                 aria-autocomplete="list"
                 aria-controls="search-suggestions-listbox"
-                className="min-w-0 flex-1 bg-transparent py-1 text-sm focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-base md:py-1 md:text-sm focus:outline-none"
               />
               {searchQuery && (
                 <button
                   onClick={clearSearch}
-                  className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                  className="flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:p-2"
                   aria-label="Clear search"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-5 w-5 md:h-4 md:w-4" />
                 </button>
               )}
               <button
@@ -891,11 +1272,47 @@ export function ExplorePage() {
                   setShowSuggestions(false);
                   mapViewerRef.current?.search(searchQuery);
                 }}
-                className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                className="hidden flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:flex md:p-2"
                 aria-label="Search"
               >
-                <Search className="h-4 w-4" />
+                <Search className="h-5 w-5 md:h-4 md:w-4" />
               </button>
+              {/* Voice search icon - mobile only (common phone resolutions), sitting
+                  just left of the profile avatar. Absolutely positioned (outside the
+                  flex flow) so typing never moves it; the pill's pr-28 reserves its
+                  space. While listening it turns red so the state is obvious. */}
+              <button
+                onClick={toggleVoiceSearch}
+                className={`absolute right-14 top-1/2 -translate-y-1/2 rounded-full p-2.5 transition-colors md:hidden ${
+                  isListening
+                    ? "bg-red-50 text-red-500"
+                    : "text-gray-500 hover:bg-gray-100"
+                }`}
+                aria-label={isListening ? "Stop voice search" : "Search by voice"}
+                aria-pressed={isListening}
+              >
+                <Mic className="h-5 w-5" />
+              </button>
+              {/* User Profile replaces the search icon on mobile (common phone
+                  resolutions); desktop keeps the search icon in the pill. Absolutely
+                  positioned over the pill's right edge (outside the flex flow) so the
+                  pill's width can't change while typing. The menu is a fixed overlay
+                  that matches the search bar's bounds. Opening the profile menu closes
+                  the Filters panel so the two fixed overlays never stack. */}
+              {/* No transform here on purpose: a transform (e.g. -translate-y-1/2)
+                  would make this wrapper the containing block for the menu's `fixed`
+                  positioning, collapsing it to a sliver. Centering is done with
+                  top-1/2 + a negative half-height margin (-mt-5 = half of the 40px
+                  avatar), which keeps the exact same position with no transform, so
+                  the fixed menu anchors to the viewport and spans the search bar's
+                  width. */}
+              <div className="absolute right-2 top-1/2 -mt-5 md:hidden">
+                <UserProfile
+                  onMenuToggle={(open) => {
+                    if (open) setShowFilters(false);
+                  }}
+                />
+              </div>
             </div>
 
             {/* Suggestions dropdown */}
@@ -1067,126 +1484,84 @@ export function ExplorePage() {
             )}
           </div>
 
-          {/* User Profile Icon */}
-          <UserProfile
-            userName={storedUser?.name ?? "John Doe"}
-            userEmail={storedUser?.email ?? "john.doe@example.com"}
-            userLocationLabel={storedLocationLabel}
-          />
+          {/* User Profile Icon - reads the signed-in user from the session; hidden on
+              mobile (common phone resolutions) so only the search bar stays at the top. */}
+          <div className="hidden md:block">
+            <UserProfile />
+          </div>
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
             right side, when the user right-clicks a boundary feature on the map. No height
-            limit: all attribute rows are shown in full. */}
-        {attributeInfo && (
-          <aside className="attr-panel-in scrollbar-hide absolute right-4 top-20 z-20 max-h-[calc(100vh-120px)] w-80 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-600">
-                  {attributeInfo.typeLabel}
-                </span>
-                <h3 className="truncate text-sm font-semibold text-slate-900">
-                  {attributeInfo.title}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setAttributeInfo(null);
-                  setExportModalOpen(false);
-                  mapViewerRef.current?.clearAttributeInfo();
-                }}
-                aria-label="Close attribute panel"
-                className="flex-shrink-0 rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <table className="w-full border-collapse text-xs">
-              <tbody>
-                {/* Owner names (Bhoomi RTC) sit above the parcel's own attributes - they're
-                    what the parcel is usually looked up for. */}
-                {attributeInfo.parcel && (
-                  <>
-                    {owners.status === "loading" && (
-                      <tr className="border-b border-slate-100">
-                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
-                          Owner
-                        </td>
-                        <td className="px-3 py-1.5 text-slate-400">Loading land records…</td>
-                      </tr>
-                    )}
-                    {owners.status === "error" && (
-                      <tr className="border-b border-slate-100">
-                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
-                          Owner
-                        </td>
-                        <td className="break-words px-3 py-1.5 text-amber-600">
-                          Land records unavailable ({owners.message})
-                        </td>
-                      </tr>
-                    )}
-                    {owners.status === "ok" && owners.rows.length === 0 && (
-                      <tr className="border-b border-slate-100">
-                        <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
-                          Owner
-                        </td>
-                        <td className="px-3 py-1.5 text-slate-400">No records found</td>
-                      </tr>
-                    )}
-                    {owners.status === "ok" &&
-                      owners.rows.map((owner, i) => (
-                        <tr key={`owner-${i}`} className="border-b border-slate-100">
-                          <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
-                            {i === 0 ? (owners.rows.length > 1 ? "Owners" : "Owner") : ""}
-                          </td>
-                          <td className="break-words px-3 py-1.5 font-semibold text-slate-900">
-                            {owner.name}
-                            {owner.hissa && (
-                              <span className="ml-1 font-normal text-slate-500">
-                                [Hissa {owner.hissa}]
-                              </span>
-                            )}
-                            {owner.extent && (
-                              <span className="ml-1 font-normal text-slate-500">
-                                ({owner.extent}
-                                {owner.category ? `, ${owner.category}` : ""})
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                  </>
-                )}
-                {attributeInfo.rows.map((row, i) => (
-                  <tr
-                    key={`${row.label}-${i}`}
-                    className="border-b border-slate-100 last:border-b-0"
-                  >
-                    <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
-                      {row.label}
-                    </td>
-                    <td
-                      className={`break-words px-3 py-1.5 ${
-                        row.bold ? "font-semibold" : "font-medium"
-                      } text-slate-900`}
-                    >
-                      {row.value}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="border-t border-gray-100 p-3">
-              <button
-                type="button"
-                onClick={() => setExportModalOpen(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-gray-50"
-              >
-                Export
-              </button>
-            </div>
+            limit: all attribute rows are shown in full. On mobile the panel only opens
+            after tapping the "View Details" chip. */}
+        {attributeInfo && attributePanelOpen && (
+          <aside className="attr-panel-in scrollbar-hide absolute right-4 top-20 z-20 hidden max-h-[calc(100vh-120px)] w-80 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl md:block">
+            <AttributePanelBody
+              info={attributeInfo}
+              owners={owners}
+              onClose={() => {
+                setAttributeInfo(null);
+                setExportModalOpen(false);
+                mapViewerRef.current?.clearAttributeInfo();
+              }}
+              onExport={() => setExportModalOpen(true)}
+            />
           </aside>
+        )}
+
+        {/* Mobile (common phone resolutions) attribute info bottom sheet - instead of the
+            floating card, the info slides up from the bottom as a 30%-height sheet when
+            the "View Details" chip is tapped (mirrors the Filters drawer's slide-in). It
+            stays mounted while a feature is selected so the slide animates both ways; a
+            dimmed scrim closes it back to the chip. Hidden on desktop. */}
+        {attributeInfo && (
+          <div className="pointer-events-none fixed inset-0 z-40 md:hidden">
+            <div
+              aria-hidden
+              onClick={() => setAttributePanelOpen(false)}
+              className={`absolute inset-0 bg-black/40 transition-opacity duration-300 ${
+                attributePanelOpen
+                  ? "pointer-events-auto opacity-100"
+                  : "pointer-events-none opacity-0"
+              }`}
+            />
+            <div
+              onTouchStart={handleAttrSheetTouchStart}
+              onTouchMove={handleAttrSheetTouchMove}
+              onTouchEnd={handleAttrSheetTouchEnd}
+              style={
+                attrSheetDragY > 0
+                  ? { transform: `translateY(${attrSheetDragY}px)`, transition: "none" }
+                  : undefined
+              }
+              className={`pointer-events-auto scrollbar-hide absolute inset-x-0 bottom-0 h-[50vh] overflow-y-auto rounded-t-2xl border-t border-gray-200 bg-white shadow-xl transition-transform duration-300 ease-out ${
+                attributePanelOpen ? "translate-y-0" : "translate-y-full"
+              }`}
+            >
+              <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-gray-300" />
+              <AttributePanelBody
+                info={attributeInfo}
+                owners={owners}
+                onExport={() => setExportModalOpen(true)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Info chip - on mobile (common phone resolutions) the attribute panel is hidden
+            behind this chip; tapping it opens the panel. Hidden on desktop, where the
+            panel opens directly on selection. */}
+        {attributeInfo && !attributePanelOpen && (
+          <button
+            type="button"
+            onClick={() => setAttributePanelOpen(true)}
+            className={`absolute left-1/2 z-20 flex -translate-x-1/2 items-center rounded-full border border-gray-200 bg-white px-4 py-2.5 shadow-lg transition-colors hover:bg-gray-50 md:hidden ${
+              activeAOITool || aoiInfo ? "bottom-20" : "bottom-6"
+            }`}
+          >
+            <span className="text-sm font-medium text-obsidian-graphite">View Details</span>
+          </button>
         )}
 
         {exportModalOpen && attributeInfo && (
@@ -1214,22 +1589,19 @@ export function ExplorePage() {
         {showFilters && (
           <aside className="scrollbar-hide absolute left-4 top-20 z-10 max-h-[calc(100vh-200px)] w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
             <div className="p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-obsidian-graphite">Filters</h2>
-                <button className="text-sm text-atlas-cobalt hover:underline">Reset all</button>
-              </div>
+              <h2 className="mb-4 text-lg font-semibold text-obsidian-graphite md:text-base">Filters</h2>
 
               {/* Boundary Layers Filter */}
               <div className="mb-4 border-b border-gray-200 pb-4">
                 <button
                   onClick={() => toggleFilter("type")}
-                  className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-obsidian-graphite"
+                  className="mb-2 flex w-full items-center justify-between text-base font-semibold text-obsidian-graphite md:text-sm"
                 >
                   Boundary Layers
                   {expandedFilters.type ? (
-                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                    <ChevronUp className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
                   ) : (
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                    <ChevronDown className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
                   )}
                 </button>
                 {expandedFilters.type && (
@@ -1241,7 +1613,7 @@ export function ExplorePage() {
                       yet (no extra layers). */}
                     {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
                       <div key={id}>
-                      <label className="flex items-center text-sm text-gray-600">
+                      <label className="flex items-center text-base text-gray-600 md:text-sm">
                         <input
                           type="checkbox"
                           className="mr-2 accent-atlas-cobalt"
@@ -1249,6 +1621,7 @@ export function ExplorePage() {
                           onChange={() => {
                             setSelectedBoundaryLayer(id);
                             mapViewerRef.current?.setBoundaryLayerMode(id);
+                            if (id !== "roads") setSelectedRoadsScope("none");
                           }}
                         />
                         {label}
@@ -1256,7 +1629,7 @@ export function ExplorePage() {
                       {id === "police_station" && selectedBoundaryLayer === "police_station" && (
                         <div>
                         <select
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
                           value={selectedPoliceType}
                           onChange={(event) => {
                             const type = event.target.value as PoliceType;
@@ -1270,7 +1643,7 @@ export function ExplorePage() {
                         </select>
                         <select
                           aria-label="Police district"
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-700"
+                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
                           value={selectedPoliceDistrict}
                           onChange={(event) => {
                             setSelectedPoliceDistrict(event.target.value);
@@ -1282,14 +1655,35 @@ export function ExplorePage() {
                         </select>
                         </div>
                       )}
+                      {id === "roads" && selectedBoundaryLayer === "roads" && (
+                        <div className="ml-6 mt-2 flex w-[calc(100%-1.5rem)] gap-2">
+                          {(["district", "state"] as const).map((scope) => (
+                            <button
+                              key={scope}
+                              type="button"
+                              className={`flex-1 rounded-md border px-2 py-1.5 text-sm capitalize transition-colors ${
+                                selectedRoadsScope === scope
+                                  ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                              }`}
+                              onClick={() => {
+                                const next = selectedRoadsScope === scope ? "none" : scope;
+                                setSelectedRoadsScope(next);
+                                mapViewerRef.current?.setRoadsClickScope(next);
+                              }}
+                            >
+                              {scope}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       </div>
                     ))}
                   </div>
                 )}
               </div>
             </div>
-          </aside>
-        )}
+        </aside>
 
         {/* Floating chip: shows the completed AOI's area (with a clear button), or - while a
             drawing tool is armed - a hint for how to use it. */}

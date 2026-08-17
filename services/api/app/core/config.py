@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     secret_key: str
 
     # --- Authentication / registration ----------------------------------
+    # Doubles as the email-OTP code's TTL.
     email_verification_expiry_minutes: int = 30
     terms_version: str = "1.0"
     privacy_version: str = "1.0"
@@ -85,6 +86,34 @@ class Settings(BaseSettings):
     registration_rate_limit_per_ip_window_seconds: int = 900
     registration_rate_limit_per_email: int = 3
     registration_rate_limit_per_email_window_seconds: int = 3600
+    # Per-IP abuse control on /auth/login (a password check is
+    # brute-forceable without this).
+    login_rate_limit_per_ip: int = 10
+    login_rate_limit_per_ip_window_seconds: int = 900
+
+    # --- Google OAuth (Sign in with Google) -------------------------------
+    # Optional: when unset, the Google sign-in endpoints refuse to run and
+    # the UI shows the button as unavailable.
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str | None = None
+    # --- GitHub OAuth (Sign in with GitHub) -------------------------------
+    # Optional: when unset, the GitHub sign-in endpoints refuse to run and
+    # the UI shows the button as unavailable.
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+    github_redirect_uri: str | None = None
+    # How long the single-use post-callback sign-in ticket stays valid.
+    oauth_ticket_ttl_seconds: int = 300
+
+    # Wrong-code lockout: after this many failed attempts against a pending
+    # registration's OTP, the code is invalidated and a resend is required.
+    email_otp_max_attempts: int = 5
+    # Application-side abuse control on /auth/verify-email (per IP) — a
+    # 6-digit code is brute-forceable without this, unlike the old 32-byte
+    # link token.
+    email_otp_verify_rate_limit_per_ip: int = 10
+    email_otp_verify_rate_limit_per_ip_window_seconds: int = 3600
 
     # --- External environment/weather APIs ------------------------------
     # data.gov.in personal API key for the CPCB real-time AQI resource.

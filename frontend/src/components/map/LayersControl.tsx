@@ -48,10 +48,19 @@ export function LayersControl({
 
   return (
     <div className={`absolute bottom-6 left-6 z-10 ${className}`}>
-      <div className="flex items-end gap-3 max-sm:flex-col-reverse max-sm:items-start">
-        {isExpanded ? (
-        // Expanded view - horizontal row of small square cards (Google Maps style)
-        <div className="flex flex-row gap-2">
+      <div className="flex items-end gap-3 max-md:flex-col-reverse max-md:items-start">
+        {/* Layer option cards. Desktop: shown in place of the anchor button while
+            expanded (Google Maps style, unchanged). Mobile (common phone resolutions):
+            always in the layout as a vertical column of icon-sized buttons that
+            smoothly expands/collapses below the anchor button (max-height + opacity
+            transition). */}
+        <div
+          className={`relative z-10 flex flex-row gap-2 max-md:flex max-md:flex-col max-md:gap-2 max-md:overflow-hidden max-md:p-1 max-md:transition-all max-md:duration-300 max-md:ease-out ${
+            isExpanded
+              ? "max-md:max-h-48 max-md:opacity-100"
+              : "max-md:max-h-0 max-md:opacity-0"
+          } ${isExpanded ? "" : "hidden"}`}
+        >
           {layers.map((layer) => {
             const isSelected = currentLayer === layer.id;
             return (
@@ -63,6 +72,7 @@ export function LayersControl({
                 }}
                 className={`
                   relative w-20 h-20 rounded-xl overflow-hidden transition-all
+                  max-md:w-11 max-md:h-11 max-md:rounded-lg
                   ${
                     isSelected
                       ? "ring-[3px] ring-blue-500 shadow-xl"
@@ -81,22 +91,23 @@ export function LayersControl({
                 ) : (
                   <div className={`absolute inset-0 ${layer.previewBg}`} />
                 )}
-                
+
                 {/* Subtle overlay for depth */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
 
-                {/* Layer Icon - Top Left */}
-                <div className="absolute top-1.5 left-1.5">
+                {/* Layer Icon - Top Left (hidden on mobile to match the anchor button) */}
+                <div className="absolute top-1.5 left-1.5 max-md:hidden">
                   <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
                     <Layers className="w-3.5 h-3.5 text-gray-700" strokeWidth={2.5} />
                   </div>
                 </div>
 
-                {/* Selected Check Mark - Top Right */}
+                {/* Selected Check Mark - Top Right (hidden on mobile - the blue ring
+                    alone marks the selection there) */}
                 {isSelected && (
-                  <div className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
+                  <div className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shadow-lg max-md:w-4 max-md:h-4 max-md:top-1 max-md:right-1 max-md:hidden">
                     <svg
-                      className="w-3.5 h-3.5 text-white"
+                      className="w-3.5 h-3.5 text-white max-md:w-2.5 max-md:h-2.5"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -111,9 +122,9 @@ export function LayersControl({
                   </div>
                 )}
 
-                {/* Layer Name - Bottom Center */}
-                <div className="absolute bottom-0 left-0 right-0 pb-1">
-                  <p className="text-[11px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-center leading-tight">
+                {/* Layer Name - Bottom Center (hidden on mobile - icon-only options) */}
+                <div className="absolute bottom-0 left-0 right-0 pb-1 max-md:pb-0.5 max-md:hidden">
+                  <p className="text-[11px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-center leading-tight max-md:text-[9px]">
                     {layer.name}
                   </p>
                 </div>
@@ -121,11 +132,16 @@ export function LayersControl({
             );
           })}
         </div>
-        ) : (
-        // Collapsed view - Small square button showing current layer preview
+
+        {/* Collapsed anchor button. Hidden while the picker is open (all sizes) so the
+            options are the only things shown - on mobile the current-layer preview
+            would otherwise appear as a 4th tile duplicating one of the options. The
+            mobile backdrop below closes the picker without picking a layer. */}
         <button
-          onClick={() => setIsExpanded(true)}
-          className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-all hover:scale-105 ring-2 ring-white"
+          onClick={() => setIsExpanded((v) => !v)}
+          className={`relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-all hover:scale-105 ring-2 ring-white max-md:w-11 max-md:h-11 max-md:rounded-lg ${
+            isExpanded ? "hidden" : ""
+          }`}
           aria-label="Open map layers"
         >
           {/* Current Layer Preview */}
@@ -138,27 +154,36 @@ export function LayersControl({
           ) : (
             <div className={`absolute inset-0 ${currentLayerData?.previewBg ?? 'bg-gradient-to-b from-gray-100 via-gray-200 to-gray-400'}`} />
           )}
-          
+
           {/* Overlay gradient */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent max-md:hidden" />
 
           {/* Icon */}
-          <div className="absolute top-1.5 left-1.5">
+          <div className="absolute top-1.5 left-1.5 max-md:hidden">
             <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
               <Layers className="w-4 h-4 text-gray-700" strokeWidth={2.5} />
             </div>
           </div>
 
           {/* "Layers" Text */}
-          <div className="absolute bottom-0 left-0 right-0 pb-1.5">
+          <div className="absolute bottom-0 left-0 right-0 pb-1.5 max-md:hidden">
             <p className="text-xs font-bold text-white drop-shadow-lg text-center">
               Layers
             </p>
           </div>
         </button>
-        )}
+
         {currentLayer === "terrain" && <TerrainLegend />}
       </div>
+
+      {/* Mobile-only backdrop: while the picker is open the anchor button (the usual
+          close affordance) is hidden, so tapping anywhere else on the map closes it. */}
+      {isExpanded && (
+        <div
+          className="fixed inset-0 z-0 hidden max-md:block"
+          onClick={() => setIsExpanded(false)}
+        />
+      )}
     </div>
   );
 }

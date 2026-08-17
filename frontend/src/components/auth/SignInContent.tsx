@@ -1,52 +1,25 @@
 "use client";
 
-import { useState } from "react";
-import { Eye, EyeOff, Mail, Lock, MapPin, Shield } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { saveStoredUserSession, type StoredUserLocation } from "@/lib/userSession";
+import {
+  ApiRequestError,
+  ApiUnavailableError,
+  completeOAuthSignup,
+  login,
+} from "@/lib/api-client";
+import { buildGitHubAuthUrl, isGitHubSignInConfigured } from "@/lib/github-oauth";
+import { buildGoogleAuthUrl, isGoogleSignInConfigured } from "@/lib/google-oauth";
+import { signInUser } from "@/lib/session";
 import { SignInBenefits } from "./SignInBenefits";
 
-function requestCurrentLocation(): Promise<StoredUserLocation> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined" || !("geolocation" in navigator)) {
-      reject(new Error("Geolocation is not supported in this browser."));
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracyMeters:
-            typeof position.coords.accuracy === "number" ? position.coords.accuracy : null,
-          capturedAt: new Date().toISOString(),
-          source: "browser_geolocation",
-        });
-      },
-      (error) => {
-        switch (error.code) {
-          case error.PERMISSION_DENIED:
-            reject(new Error("Location permission was denied. You can still sign in and add it later."));
-            return;
-          case error.POSITION_UNAVAILABLE:
-            reject(new Error("Your exact location is currently unavailable."));
-            return;
-          case error.TIMEOUT:
-            reject(new Error("Location request timed out. Please try again later."));
-            return;
-          default:
-            reject(new Error("We could not read your location right now."));
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 300000,
-      }
-    );
-  });
-}
+// Development-stage demo account: signs in without touching the API so the
+// explore flow can be tested without a registered account.
+const DEMO_EMAIL = "demo@gmail.com";
+const DEMO_PASSWORD = "Demo@123";
+const DEMO_NAME = "Arjun Singh";
 
 export function SignInContent() {
   const [showPassword, setShowPassword] = useState(false);
@@ -56,16 +29,80 @@ export function SignInContent() {
   const [error, setError] = useState("");
   const [locationMessage, setLocationMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  /** Starts the Google authorization-code flow (PKCE); the browser leaves
+   *  the app and returns to `/signin?oauth_session=<ticket>` afterwards. */
+  const handleGoogleSignIn = async () => {
+    if (!isGoogleSignInConfigured()) {
+      setError("Google sign-in isn't configured yet. Use email sign-in for now.");
+      return;
+    }
+    try {
+      const authUrl = await buildGoogleAuthUrl("/signin");
+      window.location.assign(authUrl);
+    } catch {
+      setError("Couldn't start Google sign-in. Please try again.");
+    }
+  };
+
+  /** Starts the GitHub authorization-code flow; the browser leaves the app
+   *  and returns to `/signin?oauth_session=<ticket>` afterwards. */
+  const handleGitHubSignIn = async () => {
+    if (!isGitHubSignInConfigured()) {
+      setError("GitHub sign-in isn't configured yet. Use email sign-in for now.");
+      return;
+    }
+    try {
+      window.location.assign(buildGitHubAuthUrl("/signin"));
+    } catch {
+      setError("Couldn't start GitHub sign-in. Please try again.");
+    }
+  };
+
+  // Completes an OAuth round-trip (Google or GitHub): the backend exchanged
+  // the code and redirected here with a one-time ticket — swap it for the
+  // user and sign in.
+  useEffect(() => {
+    const ticket = searchParams.get("oauth_session");
+    if (!ticket) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await completeOAuthSignup(ticket);
+        if (cancelled) {
+          return;
+        }
+        signInUser({ email: result.user.email, name: result.user.fullName });
+        router.replace("/explore");
+      } catch {
+        if (!cancelled) {
+          setError("Sign-in couldn't be completed. Please try again.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, router]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     setError("");
     setLocationMessage("");
     setIsLoading(true);
 
-    console.log("Form submitted with:", { email, password });
+    // Demo credentials short-circuit the real authentication.
+    if (email === DEMO_EMAIL && password === DEMO_PASSWORD) {
+      signInUser({ email: DEMO_EMAIL, name: DEMO_NAME });
+      router.push("/explore");
+      return;
+    }
 
     // Test credentials
     if (email === "demo@gmail.com" && password === "Demo@123") {
@@ -104,15 +141,17 @@ export function SignInContent() {
     } else {
       console.log("Credentials do not match");
       setIsLoading(false);
-      setError("Invalid email or password. Use demo@gmail.com / Demo@123 for testing.");
     }
   };
 
   return (
     <div className="mx-auto w-full max-w-content px-6 py-12 lg:px-16">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
-        {/* Left Column - Welcome Back Section */}
-        <SignInBenefits />
+        {/* Left Column - Welcome Back Section. Hidden on mobile (common phone
+            resolutions) so the sign-in form gets the full width. */}
+        <div className="hidden lg:block">
+          <SignInBenefits />
+        </div>
 
         {/* Right Column - Sign In Form */}
         <div className="flex items-start justify-center lg:pt-8">
@@ -252,9 +291,6 @@ export function SignInContent() {
                   type="submit"
                   variant="primary"
                   disabled={isLoading}
-                  onClick={(e) => {
-                    console.log("Button clicked!");
-                  }}
                   className="w-full py-3.5 text-base font-medium"
                 >
                   {isLoading ? "Signing in..." : "Sign In"}
@@ -274,6 +310,7 @@ export function SignInContent() {
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
+                    onClick={handleGoogleSignIn}
                     className="flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-atlas-cobalt focus-visible:ring-offset-2"
                   >
                     <svg className="h-5 w-5" viewBox="0 0 24 24">
@@ -298,15 +335,17 @@ export function SignInContent() {
                   </button>
                   <button
                     type="button"
+                    onClick={handleGitHubSignIn}
                     className="flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-atlas-cobalt focus-visible:ring-offset-2"
                   >
-                    <svg className="h-5 w-5" viewBox="0 0 24 24">
+                    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                       <path
-                        fill="#00A4EF"
-                        d="M0 0h11.377v11.372H0V0zm12.623 0H24v11.372H12.623V0zM0 12.623h11.377V24H0V12.623zm12.623 0H24V24H12.623V12.623z"
+                        fillRule="evenodd"
+                        clipRule="evenodd"
+                        d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z"
                       />
                     </svg>
-                    Continue with Microsoft
+                    Continue with GitHub
                   </button>
                 </div>
 
@@ -321,17 +360,6 @@ export function SignInContent() {
                   </a>
                 </p>
               </form>
-
-              {/* Security Note */}
-              <div className="mt-8 flex items-start gap-3 rounded-lg bg-gray-50 p-4">
-                <Shield className="h-5 w-5 flex-shrink-0 text-atlas-cobalt" />
-                <div className="text-xs text-gray-600">
-                  <p className="font-medium">Your data is protected with enterprise-grade security.</p>
-                  <p className="mt-1">
-                    We never share your information. Trusted by professionals worldwide.
-                  </p>
-                </div>
-              </div>
             </div>
           </div>
         </div>

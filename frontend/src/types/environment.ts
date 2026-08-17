@@ -15,6 +15,7 @@ export interface WeatherObservation {
   latitude: number;
   longitude: number;
   temperatureC: number | null;
+  feelsLikeC: number | null;
   relativeHumidityPercent: number | null;
   precipitationMm: number | null;
   rainMm: number | null;
@@ -23,10 +24,35 @@ export interface WeatherObservation {
   windDirectionCompass: string | null;
   surfacePressureHpa: number | null;
   observationTime: string | null;
+  /** Open-Meteo WMO weather code (see lib/weather/weatherCondition.ts) - drives the condition icon/label. */
+  weatherCode: number | null;
+  /** Whether `observationTime` falls in daytime at this location - selects day/night icon variants. */
+  isDay: boolean | null;
   source: "Open-Meteo";
 }
 
 export interface WeatherResponse extends WeatherObservation {
+  dataStatus: DataStatus;
+  fetchedAt: string;
+}
+
+export interface HourlyForecastPoint {
+  time: string;
+  temperatureC: number | null;
+  precipitationProbabilityPercent: number | null;
+  precipitationMm: number | null;
+  windSpeedKmh: number | null;
+  windDirectionDegrees: number | null;
+  windDirectionCompass: string | null;
+  weatherCode: number | null;
+  isDay: boolean | null;
+}
+
+export interface HourlyForecastResponse {
+  latitude: number;
+  longitude: number;
+  points: HourlyForecastPoint[];
+  source: "Open-Meteo";
   dataStatus: DataStatus;
   fetchedAt: string;
 }
@@ -79,7 +105,7 @@ export interface GfsWindFrameResponse {
 export interface GfsWeatherFieldFrameResponse {
   source: "NOAA GFS";
   model: "GFS 0.25°";
-  variable: "temperature" | "precipitation" | "clouds";
+  variable: "temperature" | "precipitation" | "clouds" | "pressure";
   runTime: string;
   forecastTime: string;
   forecastHour: number;
@@ -94,6 +120,25 @@ export interface GfsWeatherFieldFrameResponse {
   values: number[];
   dataStatus: DataStatus;
   fetchedAt: string;
+}
+
+/** One NASA FIRMS active-fire detection, normalized server-side from the Area API CSV. */
+export interface FireDetection {
+  lat: number;
+  lon: number;
+  brightness: number | null;
+  brightTi5: number | null;
+  /** 0-100. VIIRS categorical low/nominal/high confidence is mapped to 25/60/95 server-side. */
+  confidence: number | null;
+  /** Fire Radiative Power (MW), when reported. */
+  frp: number | null;
+  scan: number | null;
+  track: number | null;
+  version: string | null;
+  acquiredAt: string;
+  satellite: string;
+  instrument: string;
+  dayNight: "day" | "night";
 }
 
 export interface ModeledAirQuality {

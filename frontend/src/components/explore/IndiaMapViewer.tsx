@@ -16,27 +16,124 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
+import {
+  WEATHER_TERRAIN_DEM_SOURCE_ID,
+  WEATHER_TERRAIN_LAYER_IDS,
+  applyWeatherTerrainWeatherMode,
+  ensureWeatherTerrain,
+  isWeatherTerrainReady,
+  resolveWeatherTerrainProvider,
+  setWeatherTerrainVisible,
+  type WeatherTerrainProvider,
+} from "../../lib/weather/weatherTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
-import { ChevronDown, CloudRain, CloudSun, Droplets, Gauge, Leaf, Thermometer, Wind } from "lucide-react";
-import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
+import { WeatherConditionIcon, WeatherCurrentHero } from "../weather/WeatherUI";
+import { ChevronDown, CloudRain, CloudSun, Compass, Droplets, Gauge, Leaf, Thermometer, Wind } from "lucide-react";
 import {
   ApiRequestError,
   ApiUnavailableError,
   fetchAqiGrid,
   fetchCurrentEnvironment,
   fetchDailyForecast,
+  fetchFireDetections,
   fetchGfsWeatherFieldFrame,
   fetchGfsWindFrame,
   fetchNationalAqiStationsGeoJson,
 } from "@/lib/api-client";
 import { formatIstTime, formatMetric } from "@/lib/environmentFormat";
-import { GfsWindCanvasAnimator } from "@/lib/weather/gfsWindCanvas";
+import { GfsWindCanvasAnimator, sampleInterpolatedVector } from "@/lib/weather/gfsWindCanvas";
+import { compassDirection } from "@/lib/weather/openMeteoFallback";
+import { AqiGridCanvasRenderer } from "@/lib/weather/aqiGridCanvas";
 import {
-  AqiGridCanvasRenderer,
   fieldLegendStops,
   fieldUnit,
   renderFieldToImageSource,
+  windSpeedValues,
 } from "@/lib/weather/gfsFieldRenderer";
+import {
+  GIBS_ATTRIBUTION,
+  GIBS_INSTRUMENT,
+  GIBS_NATIVE_MAX_ZOOM,
+  GIBS_NOMINAL_RESOLUTION_M,
+  GIBS_PRODUCT_NAME,
+  GIBS_TILE_SIZE,
+  gibsTileUrlTemplate,
+  probeGibsDate,
+  recentGibsDates,
+  resetGibsSatelliteResolution,
+  resolveGibsSatellite,
+  type ResolvedGibsSatellite,
+} from "@/lib/weather/nasaGibs";
+import {
+  computeIsobars,
+  cropGrid,
+  findPressureExtrema,
+  type IsobarLine,
+  type PressureExtremum,
+} from "@/lib/weather/pressureIsobars";
+import {
+  HIMAWARI_ATTRIBUTION,
+  HIMAWARI_CADENCE_MINUTES,
+  HIMAWARI_INSTRUMENT,
+  HIMAWARI_NATIVE_MAX_ZOOM,
+  HIMAWARI_NOMINAL_RESOLUTION_M,
+  HIMAWARI_PRODUCT_NAME,
+  HIMAWARI_TILE_SIZE,
+  himawariTileUrlTemplate,
+  recentHimawariFrames,
+} from "@/lib/weather/nasaHimawari";
+import {
+  GEO_HIMAWARI,
+  GEO_GOES_WEST,
+  GEO_GOES_EAST,
+  GEO_SATELLITES,
+  geoCloudTileUrlTemplate,
+  recentGeoFrames,
+  type GeoSatelliteDef,
+} from "@/lib/weather/nasaGeoCloudComposite";
+import {
+  IMERG_ATTRIBUTION,
+  IMERG_CADENCE_MINUTES,
+  IMERG_NATIVE_MAX_ZOOM,
+  IMERG_NOMINAL_RESOLUTION_KM,
+  IMERG_PRODUCT_NAME,
+  IMERG_TILE_SIZE,
+  imergTileUrlTemplate,
+  recentImergFrames,
+} from "@/lib/weather/nasaImerg";
+import {
+  NDVI_ATTRIBUTION,
+  NDVI_INSTRUMENT,
+  NDVI_NATIVE_MAX_ZOOM,
+  NDVI_NOMINAL_RESOLUTION_M,
+  NDVI_PRODUCT_NAME,
+  NDVI_TILE_SIZE,
+  ndviTileUrlTemplate,
+  resetNdviResolution,
+  resolveNdvi,
+  type ResolvedNdvi,
+} from "@/lib/weather/nasaVegetation";
+import {
+  VIIRS_LST_ATTRIBUTION,
+  VIIRS_LST_INSTRUMENT,
+  VIIRS_LST_NATIVE_MAX_ZOOM,
+  VIIRS_LST_NOMINAL_RESOLUTION_M,
+  VIIRS_LST_PRODUCT_NAME,
+  VIIRS_LST_TILE_SIZE,
+  VIIRS_LST_TILE_MATRIX_SET,
+  VIIRS_LST_FORMAT,
+  isDaytimeIst,
+  probeViirsLstDate,
+  recentViirsLstDates,
+  resolveViirsLst,
+  checkViirsLstCoverage,
+  viirsLstTileUrlTemplate,
+  type ResolvedViirsLst,
+  type ViirsLstDayNight,
+  type ViirsLstCoverageReport,
+  type ViirsLstProductInfo,
+  VIIRS_LST_PRODUCTS,
+} from "@/lib/weather/nasaViirsLst";
 import {
   buildRainViewerTileUrl,
   fetchRainViewerWeatherMaps,
@@ -50,13 +147,92 @@ import type {
   AqiGridResponse,
   CurrentEnvironmentResponse,
   DailyForecastResponse,
+  FireDetection,
   GeoJsonFeatureCollection,
   GfsWeatherFieldFrameResponse,
   GfsWindFrameResponse,
 } from "@/types/environment";
 
 // A single active all-India weather-map field. Exactly one is shown at a time.
-type WeatherMapMode = "none" | "temperature" | "rain" | "wind" | "clouds" | "air-quality";
+type WeatherMapMode =
+  | "none"
+  | "temperature"
+  | "rain"
+  | "wind"
+  | "clouds"
+  | "pressure"
+  | "air-quality"
+  | "satellite"
+  | "vegetation"
+  | "fire";
+
+// Sensible per-layer defaults instead of one hardcoded 92% for every product
+// (which washed out the satellite/terrain basemap under every raster). Rain's
+// no-rain pixels are already fully transparent so a higher opacity only ever
+// affects real precipitation; clouds and pressure keep enough basemap context
+// visible underneath, and pressure specifically stays subtle now that isobars
+// (mathematically derived contour lines) carry the primary analytical signal.
+/** Fixed internal display opacity for all weather overlay layers.
+ *  These values are NOT user-configurable — opacity sliders have been removed. */
+const DISPLAY_OPACITY = {
+  // Band 13 Clean IR colorizes its ENTIRE footprint by brightness
+  // temperature, not just actual clouds (clear sky still gets a colour,
+  // just a warmer/darker one) - so unlike VIIRS true-color, there's no
+  // real per-pixel "no data" signal to make clear-sky areas transparent
+  // without guessing a threshold. Kept translucent instead, so the
+  // basemap/terrain and (now boundary-layer-order-fixed) admin boundaries
+  // stay visible underneath rather than being fully covered.
+  observedCloud: 0.7,
+  observedRain: 0.88,
+  trueColor: 1.00,
+  vegetation: 0.88,
+  pressure: 0.60,
+  windScalar: 0.50,
+  radar: 0.82,
+  fire: 1.00,
+  cloudFill: 0.60,
+  lst: 0.92,
+  aqi: 0.70,
+} as const;
+
+/** Wind speed/direction under the cursor (Ventusky-style inspector). */
+interface WindCursorState {
+  screenX: number;
+  screenY: number;
+  speedKmh: number | null; // null = no data at this point - never fabricated as 0
+  directionDeg: number | null;
+  compass: string | null;
+  loading: boolean;
+}
+
+/**
+ * Meteorological wind direction (degrees the wind is blowing FROM, not
+ * toward) from east/north vector components. u/v point in the direction the
+ * wind is travelling, so the FROM bearing is the reverse: atan2(-u, -v).
+ * 0=N, 90=E, 180=S, 270=W.
+ */
+function windDirectionFromVector(u: number, v: number): number {
+  const deg = (Math.atan2(-u, -v) * 180) / Math.PI;
+  return (deg + 360) % 360;
+}
+
+/**
+ * Where to insert a weather raster layer so administrative boundaries and
+ * their labels stay legible on top of it. Naively inserting "before the
+ * first symbol layer" only protects text labels - `india-boundary-line`
+ * and `india-boundary-fill` are `line`/`fill` type, not `symbol`, so that
+ * check alone lets a raster end up above the boundary outline itself while
+ * still sitting below its label, silently burying the India outline (and
+ * any state boundaries) under cloud/satellite/rain imagery. Anchoring on
+ * the boundary line layer specifically (present from initial map load)
+ * keeps every boundary layer, and everything added after it, above.
+ */
+function findWeatherImageryInsertionPoint(map: MapLibreMap): string | undefined {
+  const layers = map.getStyle().layers ?? [];
+  const boundaryLine = layers.find((l) => l.id === "india-boundary-line");
+  if (boundaryLine) return boundaryLine.id;
+  return layers.find((l: any) => l.type === "symbol" || l.id?.includes("label"))?.id;
+}
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -780,30 +956,20 @@ export type PoliceType =
   | "cyber_crime" | "ksisf" | "ksrp";
 
 export interface IndiaMapViewerHandle {
-  /** Sets the active Boundary Layers filter option (single-select). "administrative" shows
-   * every loaded administrative boundary layer; "assembly" shows the default india_states
-   * geojson (neon-blue states) plus loaded assembly constituency boundaries; "parliamentary"
-   * shows the states plus loaded parliamentary constituency boundaries; "gram_panchayat"
-   * shows the states too (panchayat boundaries not wired to data yet). */
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
   setPoliceType: (type: PoliceType) => void;
   setPoliceDistrict: (district: string) => void;
-  /** Loads the Karnataka or Bengaluru boundary when the query matches (case-insensitive). */
   search: (query: string) => void;
-  /** Lists every Bengaluru boundary file, grouped by region subfolder (Central, East, ...). */
   listBengaluruFiles: () => Promise<Record<string, string[]>>;
-  /** Loads (visible=true) or removes (visible=false) a single Bengaluru boundary file by its
-   * full MinIO key, as an extra overlay layer alongside whatever's already on the map. */
   toggleBengaluruFile: (key: string, visible: boolean) => Promise<void>;
-  /** Arms (tool) or disarms (null) an AOI drawing tool from the "Draw AOI" menu. While armed,
-   * map pan is disabled and pointer input draws a shape instead of selecting boundaries. The
-   * last completed AOI stays on the map until clearAOI() or Escape. */
   setDrawingTool: (tool: AOITool | null) => void;
-  /** Removes the last completed AOI polygon from the map (no-op if there is none). */
   clearAOI: () => void;
-  /** Tells the viewer the attribute-info panel was dismissed by its close button, so the
-   * next Escape clears boundaries instead of being treated as "close the panel". */
   clearAttributeInfo: () => void;
+  /** Expose weather mode so the parent can render the toolbar next to the search bar. */
+  getWeatherMode: () => WeatherMapMode;
+  setWeatherMode: (mode: WeatherMapMode) => void;
+  /** Whether any weather control is active (weather menu open, mode selected, radar, wind). */
+  isWeatherControlActive: () => boolean;
 }
 
 export interface IndiaMapViewerProps {
@@ -828,6 +994,8 @@ export interface IndiaMapViewerProps {
   /** Called whenever the map's current drill-down context changes (e.g. a taluk search
    * resolves), so callers can scope their own suggestions; null when the map is reset. */
   onDrillContextChange?: (context: { state: string; district: string; taluk: string } | null) => void;
+  /** Called when the weather toolbar visibility changes (weather button clicked or mode changed). */
+  onWeatherToolbarChange?: (visible: boolean) => void;
 }
 
 // Source/layer ids for a selected state's district boundaries, loaded on demand from MinIO.
@@ -1356,6 +1524,102 @@ const SATELLITE_TILES = [
 // are discovered live (see above) and only ever pulled down from here, never raised past it.
 const SATELLITE_MAX_ZOOM_CEILING = 21;
 
+// NASA GIBS's VIIRS true-color product has no real alpha channel for its
+// "no observation yet" (polar-orbiting swath gap) fill: live inspection of
+// both its WMTS tile endpoint (JPEG, no alpha at all) and its WMS GetMap
+// endpoint (nominally RGBA PNG) shows every no-data pixel comes back as
+// exact opaque black - R=G=B=0, A=255. NASA bakes that sentinel value
+// directly into the pixels rather than flagging it with transparency.
+// This protocol strips exactly that sentinel (R===0 && G===0 && B===0,
+// no tolerance/threshold) to alpha 0 client-side, so the real basemap
+// shows through gaps instead of a solid black tile. This is not a
+// brightness/darkness heuristic - a fuzzy threshold would eat real dark
+// ocean/shadow/vegetation pixels, which do occur in this imagery; an exact
+// zero match only ever catches NASA's literal fill value, which a real
+// corrected-reflectance photograph essentially never lands on by chance.
+const VIIRS_NODATA_PROTOCOL = "viirsnd";
+let viirsNoDataProtocolRegistered = false;
+
+// A missing/failed VIIRS tile (404 outside the tile pyramid, 403/429/500,
+// network error, decode failure) is a normal, expected outcome - not an
+// application error - and must degrade to "nothing drawn here, basemap
+// shows through" exactly like a genuine no-data pixel. Throwing from an
+// addProtocol handler surfaces as an unhandled rejection (Next.js's dev
+// overlay treats it as a crash); returning a real transparent tile avoids
+// that entirely and produces the correct visual result in one step. Built
+// once and cached - every failed tile reuses the same bytes.
+let transparentTilePromise: Promise<ArrayBuffer> | null = null;
+function getTransparentTile(): Promise<ArrayBuffer> {
+  if (!transparentTilePromise) {
+    transparentTilePromise = new Promise((resolve, reject) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("Failed to create transparent tile"));
+          return;
+        }
+        blob.arrayBuffer().then(resolve, reject);
+      }, "image/png");
+    });
+  }
+  return transparentTilePromise;
+}
+
+function registerViirsNoDataProtocol(maplibregl: typeof import("maplibre-gl")) {
+  if (viirsNoDataProtocolRegistered) return;
+  viirsNoDataProtocolRegistered = true;
+
+  maplibregl.addProtocol(VIIRS_NODATA_PROTOCOL, async (params, abortController) => {
+    const realUrl = params.url.replace(`${VIIRS_NODATA_PROTOCOL}://`, "https://");
+
+    let response: Response;
+    try {
+      response = await fetch(realUrl, { signal: abortController.signal });
+    } catch (error) {
+      // A genuine cancellation (user panned/zoomed away before this tile
+      // finished) is MapLibre's own signal to drop the request - let it
+      // propagate. Any other fetch failure (network error, etc.) degrades
+      // to transparent like a real no-data tile.
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      return { data: await getTransparentTile() };
+    }
+
+    if (!response.ok) {
+      return { data: await getTransparentTile() };
+    }
+    const blob = await response.blob();
+
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { data: await blob.arrayBuffer() };
+
+      ctx.drawImage(bitmap, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0) {
+          data[i + 3] = 0;
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+
+      const outBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!outBlob) return { data: await blob.arrayBuffer() };
+      return { data: await outBlob.arrayBuffer() };
+    } catch {
+      // Decoding failed for any reason - fall back to the raw (opaque) tile
+      // rather than failing the request outright.
+      return { data: await blob.arrayBuffer() };
+    }
+  });
+}
+
 let satelliteProtocolRegistered = false;
 
 // Registers the "gsat://" protocol used by SATELLITE_TILES (idempotent - MapLibre only
@@ -1510,13 +1774,55 @@ const GFS_WIND_SOURCE_ID = "gfs-wind-canary-source";
 const GFS_WIND_LAYER_ID = "gfs-wind-canary-layer";
 const GFS_FIELD_SOURCE_ID = "gfs-weather-field-source";
 const GFS_FIELD_LAYER_ID = "gfs-weather-field-layer";
+// Smooth wind-speed colour surface, rendered under the animated particle
+// canvas (see the wind overlay effect) so Wind mode shows a continuous
+// meteorological field the same way Temperature/Rain/Clouds do.
+const GFS_WIND_SPEED_SOURCE_ID = "gfs-wind-speed-source";
+const GFS_WIND_SPEED_LAYER_ID = "gfs-wind-speed-layer";
+// NASA GIBS VIIRS true-color satellite imagery (Satellite weather mode).
+const GIBS_SATELLITE_SOURCE_ID = "gibs-satellite-source";
+const GIBS_SATELLITE_LAYER_ID = "gibs-satellite-layer";
+// NASA GIBS VIIRS Land Surface Temperature (Temperature -> Surface Temperature mode).
+const VIIRS_LST_SOURCE_ID = "viirs-lst-source";
+const VIIRS_LST_LAYER_ID = "viirs-lst-layer";
+// Observed Cloud: Multi-geostationary composite (real satellite imagery).
+// Himawari-9 covers Asia-Pacific, GOES-West covers Americas/Pacific,
+// GOES-East covers Americas/Atlantic – stacked for global cloud coverage.
+const HIMAWARI_SOURCE_ID = "himawari-cloud-source";
+const HIMAWARI_LAYER_ID = "himawari-cloud-layer";
+const GOES_WEST_SOURCE_ID = "goes-west-cloud-source";
+const GOES_WEST_LAYER_ID = "goes-west-cloud-layer";
+const GOES_EAST_SOURCE_ID = "goes-east-cloud-source";
+const GOES_EAST_LAYER_ID = "goes-east-cloud-layer";
+// GFS cloud fill: renders underneath the geostationary tiles to fill gaps
+// between satellite disks. Only active when cloudProduct === "observed".
+const GFS_CLOUD_FILL_SOURCE_ID = "gfs-cloud-fill-source";
+const GFS_CLOUD_FILL_LAYER_ID = "gfs-cloud-fill-layer";
+// Observed Rain: NASA GIBS GPM IMERG 30-minute precipitation (real satellite
+// observation, same tile-source crossfade approach as Himawari above).
+const IMERG_SOURCE_ID = "imerg-rain-source";
+const IMERG_LAYER_ID = "imerg-rain-layer";
+// Mean sea-level pressure isobars, derived from the same GFS grid (Pressure mode).
+const ISOBAR_SOURCE_ID = "pressure-isobar-source";
+const ISOBAR_LINE_LAYER_ID = "pressure-isobar-line-layer";
+const ISOBAR_LABEL_LAYER_ID = "pressure-isobar-label-layer";
+const PRESSURE_EXTREMA_SOURCE_ID = "pressure-extrema-source";
+const PRESSURE_EXTREMA_LAYER_ID = "pressure-extrema-layer";
+// NASA GIBS MODIS Terra NDVI, 8-day composite (Vegetation weather mode).
+const NDVI_SOURCE_ID = "ndvi-source";
+const NDVI_LAYER_ID = "ndvi-layer";
+// NASA FIRMS active-fire detections (Fire weather mode). Clustered like the
+// CPCB AQI stations: cluster circles at low zoom, individual detections once
+// zoomed in past clusterMaxZoom.
+const FIRE_SOURCE_ID = "fire-detections-source";
+const FIRE_CLUSTER_LAYER_ID = "fire-detections-cluster";
+const FIRE_CLUSTER_COUNT_LAYER_ID = "fire-detections-cluster-count";
+const FIRE_POINTS_LAYER_ID = "fire-detections-points";
+const FIRE_PULSE_LAYER_ID = "fire-detections-pulse";
 
 // Topographic basemap shown automatically when any weather overlay is active.
-// Uses Maps-For-Free relief tiles (CC0) – standard XYZ, z0-z11, global land 60°N-56°S.
-const TOPO_BASE_SOURCE_ID = "weather-topographic-source";
-const TOPO_BASE_LAYER_ID = "weather-topographic-layer";
-const TOPO_MAX_ZOOM = 9; // Maps-For-Free has real terrain data up to z11, but z9 is a safe cap
-const TOPO_TILES = ["https://maps-for-free.com/layer/relief/z{z}/row{y}/{z}_{x}-{y}.jpg"];
+// See ../../lib/weather/weatherTerrain.ts (Mapterhorn DEM color-relief + hillshade,
+// with a Re:Earth fallback) for the source/layer setup.
 
 // Air Quality weather-map mode sources/layers: official CPCB stations (points
 // with clustering) + modeled AQ surface (gridded canvas).
@@ -1653,8 +1959,8 @@ function WeatherRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-// Horizontal color ramp legend for a scalar forecast field (temperature / rain / clouds).
-function WeatherFieldLegend({ mode }: { mode: "temperature" | "rain" | "clouds" }) {
+// Horizontal color ramp legend for a scalar forecast field (temperature / rain / clouds / pressure).
+function WeatherFieldLegend({ mode }: { mode: "temperature" | "rain" | "clouds" | "pressure" }) {
   const variable = mode === "rain" ? "precipitation" : mode;
   const stops = fieldLegendStops(variable);
   const unit = fieldUnit(variable);
@@ -1685,6 +1991,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       onDrawingToolChange,
       onAttributeInfo,
       onDrillContextChange,
+      onWeatherToolbarChange,
     },
     ref
   ) {
@@ -1717,7 +2024,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     new Set()
   );
   const [isRadarEnabled, setIsRadarEnabled] = useState(false);
-  const [radarOpacity, setRadarOpacity] = useState(0.6);
   const [radarStatus, setRadarStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
     "idle"
   );
@@ -1731,7 +2037,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Unified all-India weather map: exactly one field is active at a time.
   const [weatherMode, setWeatherMode] = useState<WeatherMapMode>("none");
   const [isWindEnabled, setIsWindEnabled] = useState(false);
-  const [windOpacity, setWindOpacity] = useState(0.8);
   const [windDensity, setWindDensity] = useState(0.6);
   const [windFrames, setWindFrames] = useState<GfsWindFrameResponse[]>([]);
   const [activeWindFrameIndex, setActiveWindFrameIndex] = useState(0);
@@ -1741,16 +2046,101 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   );
   const [windStatusMessage, setWindStatusMessage] = useState<string | null>(null);
 
+  // Wind speed/direction under the cursor (Ventusky-style inspector). Kept as
+  // one small object in state - the decoded U/V grid itself stays in
+  // `windFrames`/refs, never duplicated into rapidly-changing state.
+  const [windCursor, setWindCursor] = useState<WindCursorState | null>(null);
+  const activeWindFrameRef = useRef<GfsWindFrameResponse | null>(null);
+  const windCursorRafRef = useRef<number | null>(null);
+  const pendingWindPointRef = useRef<{ x: number; y: number; lng: number; lat: number } | null>(null);
+
+  // Reset View: shows only once the map has been rotated/tilted away from
+  // the default north-up, flat orientation.
+  const [mapTransformDirty, setMapTransformDirty] = useState(false);
+  const mapTransformDirtyRef = useRef(false);
+
+  // Pressure isobars + H/L centers, derived mathematically from the active
+  // GFS pressure frame (see pressureIsobars.ts) - recomputed once per frame,
+  // never per render/pan/zoom.
+  const [pressureIsobars, setPressureIsobars] = useState<IsobarLine[]>([]);
+  const [pressureExtrema, setPressureExtrema] = useState<PressureExtremum[]>([]);
+  const [showPressureExtrema, setShowPressureExtrema] = useState(true);
+
   // Scalar forecast fields (temperature / rain / clouds) rendered as a raster
   // image source. `weatherFieldFrames` holds one frame per forecast hour.
   const [weatherFieldFrames, setWeatherFieldFrames] = useState<GfsWeatherFieldFrameResponse[]>([]);
   const [weatherFieldIndex, setWeatherFieldIndex] = useState(0);
   const [isWeatherFieldPlaying, setIsWeatherFieldPlaying] = useState(false);
-  const [weatherFieldOpacity, setWeatherFieldOpacity] = useState(0.6);
   const [weatherFieldStatus, setWeatherFieldStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
     "idle"
   );
   const [weatherFieldMessage, setWeatherFieldMessage] = useState<string | null>(null);
+
+  // Temperature: Surface Temperature (NASA VIIRS LST, default) vs Air
+  // Temperature Forecast (BharatFS - see the dedicated effect below).
+  const [temperatureProduct, setTemperatureProduct] = useState<"surface" | "forecast">("surface");
+
+  // Clouds/Rain: real satellite Observed imagery (Himawari IR / GPM IMERG,
+  // default - see the dedicated effects below) vs the NOAA GFS Forecast
+  // model field (existing pipeline). Same observed/forecast split as
+  // Temperature above, applied to the two other layers where a genuine
+  // observation product exists.
+  const [cloudProduct, setCloudProduct] = useState<"observed" | "forecast">("observed");
+  const [rainProduct, setRainProduct] = useState<"observed" | "forecast">("observed");
+
+  // Observed Cloud: Multi-geostationary composite (Himawari-9 + GOES-West + GOES-East).
+  // All three use the same Band 13 Clean Infrared product (10.3 µm thermal IR),
+  // so they blend seamlessly. Himawari covers Asia-Pacific, GOES-West covers
+  // Americas/Pacific, GOES-East covers Americas/Atlantic – together they give
+  // global cloud coverage.
+  const [himawariFrames, setHimawariFrames] = useState<string[]>([]);
+  const [himawariFrameIndex, setHimawariFrameIndex] = useState(0);
+  const [isHimawariPlaying, setIsHimawariPlaying] = useState(false);
+  const [himawariStatus, setHimawariStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GOES-West frames share the same timestamps as Himawari (10-min cadence).
+  const [goesWestFrames, setGoesWestFrames] = useState<string[]>([]);
+  const [goesWestStatus, setGoesWestStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GOES-East frames share the same timestamps as Himawari (10-min cadence).
+  const [goesEastFrames, setGoesEastFrames] = useState<string[]>([]);
+  const [goesEastStatus, setGoesEastStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GFS cloud fill: global cloud fraction from NOAA GFS model, rendered
+  // underneath geostationary tiles to fill gaps between satellite disks.
+  const [cloudFillFrame, setCloudFillFrame] = useState<any>(null);
+
+  // Observed Rain: NASA GIBS GPM IMERG 30-minute near-real-time precipitation.
+  const [imergFrames, setImergFrames] = useState<string[]>([]);
+  const [imergFrameIndex, setImergFrameIndex] = useState(0);
+  const [isImergPlaying, setIsImergPlaying] = useState(false);
+  const [imergStatus, setImergStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [lstDayNightSelection, setLstDayNightSelection] = useState<"auto" | ViirsLstDayNight>("auto");
+  const [lstPlatform, setLstPlatform] = useState<"auto" | "SNPP" | "NOAA20" | "NOAA21">("auto");
+  const [lstResolvedDay, setLstResolvedDay] = useState<ResolvedViirsLst | null | undefined>(undefined);
+  const [lstResolvedNight, setLstResolvedNight] = useState<ResolvedViirsLst | null | undefined>(undefined);
+  const [lstDate, setLstDate] = useState<string | null>(null);
+  const [lstAvailableDates, setLstAvailableDates] = useState<string[]>([]);
+  const [lstStatus, setLstStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [isLstPlaying, setIsLstPlaying] = useState(false);
+  const [lstCoverage, setLstCoverage] = useState<ViirsLstCoverageReport | null>(null);
+  const [showLstDebug, setShowLstDebug] = useState(false);
+
+  // NASA GIBS VIIRS true-color Satellite mode.
+  const [satelliteResolved, setSatelliteResolved] = useState<ResolvedGibsSatellite | null | undefined>(undefined);
+  const [satelliteDate, setSatelliteDate] = useState<string | null>(null);
+  const [isSatellitePlaying, setIsSatellitePlaying] = useState(false);
+  const [satelliteStatus, setSatelliteStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+
+  // NASA GIBS MODIS NDVI Vegetation mode.
+  const [ndviResolved, setNdviResolved] = useState<ResolvedNdvi | null | undefined>(undefined);
+  const [ndviStatus, setNdviStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+
+  // NASA FIRMS active-fire detections (Fire mode).
+  const [fireDetections, setFireDetections] = useState<FireDetection[]>([]);
+  const [fireStatus, setFireStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [fireMessage, setFireMessage] = useState<string | null>(null);
+  const [fireHours, setFireHours] = useState<24 | 48 | 72>(24);
+  const [selectedFireDetection, setSelectedFireDetection] = useState<
+    { detection: FireDetection; screenX: number; screenY: number } | null
+  >(null);
 
   // Air Quality weather-map mode: official CPCB station points + modeled surface.
   const [aqiGrid, setAqiGrid] = useState<AqiGridResponse | null>(null);
@@ -1759,7 +2149,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   );
   const [aqiStatus, setAqiStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [aqiMessage, setAqiMessage] = useState<string | null>(null);
-  const [aqiOpacity, setAqiOpacity] = useState(0.6);
 
   const [weatherPanel, setWeatherPanel] = useState<WeatherPanelState>({ status: "idle" });
   const selectedWeatherMetricsRef = useRef(selectedWeatherMetrics);
@@ -1776,14 +2165,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const aqiGridRendererRef = useRef<AqiGridCanvasRenderer | null>(null);
   const windAutoFocusedRef = useRef(false);
   const [weatherHoverCard] = useState<WeatherHoverCardData | null>(null);
+
+  // Notify the parent (ExplorePage) when the weather toolbar should show/hide.
+  // The toolbar appears beside the search bar when the weather menu is open or any weather mode is active.
+  useEffect(() => {
+    const visible = showWeatherMenu || weatherMode !== "none";
+    onWeatherToolbarChangeRef.current?.(visible);
+  }, [showWeatherMenu, weatherMode]);
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (weatherMenuRef.current && !weatherMenuRef.current.contains(e.target as Node)) {
         setShowWeatherMenu(false);
       }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    // Use `click` (not `mousedown`) so a press on the horizontal Weather toolbar -
+    // which lives outside `weatherMenuRef` - still delivers its `onClick` (which
+    // sets the weather mode) before this handler closes the menu. With `mousedown`
+    // the menu-close re-render unmounted the toolbar before the `click` fired,
+    // making the toolbar's first product selection impossible to activate.
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
   }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
@@ -1809,12 +2210,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const boundaryLayerModeRef = useRef<BoundaryLayerMode>("administrative");
   const policeTypeRef = useRef<PoliceType>("all");
   const policeDistrictRef = useRef("all");
+  const onWeatherToolbarChangeRef = useRef(onWeatherToolbarChange);
+  useEffect(() => {
+    onWeatherToolbarChangeRef.current = onWeatherToolbarChange;
+  }, [onWeatherToolbarChange]);
   // Mirrors the active base layer ("satellite" | "terrain" | "default") for refs that run
   // outside React (async cadastral loads), so the parcel grid recolors correctly even when
   // the basemap switched while a village's cadastrals were still loading.
   const currentLayerRef = useRef<MapLayer>(DEFAULT_MAP_LAYER);
-  // Saved maxZoom before weather mode caps it; restored when weather deactivates.
-  const savedMaxZoomRef = useRef<number | null>(null);
+  // Resolved Weather workspace terrain DEM provider (Mapterhorn or the Re:Earth
+  // fallback), cached once per session by resolveWeatherTerrainProvider().
+  const weatherTerrainProviderRef = useRef<WeatherTerrainProvider | null | undefined>(undefined);
+  // Original india-boundary-line paint, captured the first time the Weather
+  // workspace de-emphasizes it, so it can be restored exactly on exit.
+  const originalIndiaBoundaryPaintRef = useRef<{
+    color: unknown; opacity: unknown; width: unknown;
+  } | null>(null);
 
   // Shows/hides every existing boundary layer to match the active mode, including any
   // manually-toggled Bengaluru extra files. In the constituency modes the neon-blue
@@ -4813,6 +5224,101 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     applyDrillSnapshot(map, next);
   };
 
+  // Clears every loaded boundary layer and resets drill state back to the blank initial
+  // map. Used by the Escape key handler and the search-bar clear path.
+  const clearAllMapState = (map: MapLibreMap) => {
+    // Clear drill undo/redo stacks.
+    drillUndoStackRef.current = [];
+    drillRedoStackRef.current = [];
+
+    // Remove every custom boundary layer and source.
+    const style = map.getStyle();
+    const boundaryLayerIds = Object.keys(style.sources).filter(
+      (id) =>
+        id === STATE_SOURCE_ID ||
+        id === STATE_LABELS_SOURCE_ID ||
+        id === STATE_DISTRICTS_SOURCE_ID ||
+        id === STATE_DISTRICTS_LABELS_SOURCE_ID ||
+        id === STATE_ASSEMBLY_SOURCE_ID ||
+        id === STATE_PARLIAMENT_SOURCE_ID ||
+        id === STATE_POLICE_SOURCE_ID ||
+        id.startsWith("police-") ||
+        id === DISTRICT_TALUKS_SOURCE_ID ||
+        id === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
+        id === TALUK_HOBLIES_SOURCE_ID ||
+        id === TALUK_HOBLIES_LABELS_SOURCE_ID ||
+        id === HOBLI_VILLAGES_SOURCE_ID ||
+        id === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
+        id === VILLAGE_CADASTRALS_SOURCE_ID
+    );
+    boundaryLayerIds.forEach((sourceId) => {
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    });
+
+    const boundaryLayers = style.layers.filter(
+      (l) =>
+        l.id === "states-fill-default" ||
+        l.id === "states-borders-default" ||
+        l.id === "states-labels-default" ||
+        l.id.startsWith("states-") ||
+        l.id === STATE_DISTRICTS_FILL_LAYER_ID ||
+        l.id === STATE_DISTRICTS_LINE_LAYER_ID ||
+        l.id === STATE_DISTRICTS_LABELS_LAYER_ID ||
+        l.id === STATE_ASSEMBLY_FILL_LAYER_ID ||
+        l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
+        l.id === STATE_ASSEMBLY_LABELS_LAYER_ID ||
+        l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
+        l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
+        l.id === STATE_PARLIAMENT_LABELS_LAYER_ID ||
+        l.id === STATE_POLICE_FILL_LAYER_ID ||
+        l.id === STATE_POLICE_LINE_LAYER_ID ||
+        l.id === STATE_POLICE_LABEL_LAYER_ID ||
+        l.id.startsWith("police-") ||
+        l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
+        l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
+        l.id === DISTRICT_TALUKS_LABELS_LAYER_ID ||
+        l.id === TALUK_HOBLIES_FILL_LAYER_ID ||
+        l.id === TALUK_HOBLIES_LINE_LAYER_ID ||
+        l.id === TALUK_HOBLIES_LABELS_LAYER_ID ||
+        l.id === HOBLI_VILLAGES_FILL_LAYER_ID ||
+        l.id === HOBLI_VILLAGES_LINE_LAYER_ID ||
+        l.id === HOBLI_VILLAGES_LABELS_LAYER_ID ||
+        l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
+        l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
+        l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID
+    );
+    boundaryLayers.forEach((layer) => {
+      if (map.getLayer(layer.id)) map.removeLayer(layer.id);
+    });
+
+    // Remove extra Bengaluru overlay layers.
+    for (const key of extraLayerKeysRef.current) {
+      const baseId = extraLayerIdFromKey(key);
+      for (const suffix of ["-fill", "-line", "-label"]) {
+        if (map.getLayer(`${baseId}${suffix}`)) map.removeLayer(`${baseId}${suffix}`);
+      }
+      if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
+    }
+    extraLayerKeysRef.current.clear();
+
+    // Reset boundary layer mode and notify the parent.
+    boundaryLayerModeRef.current = "administrative";
+    onBoundariesClearedRef.current?.();
+
+    // Restore India boundary visibility if present.
+    for (const id of ["india-boundary-line", "india-boundary-fill", "india-boundary-label", "india-boundary-label-hover"]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
+    }
+
+    // Show the national boundary + states fill again.
+    if (map.getLayer("states-fill-default")) {
+      map.setLayoutProperty("states-fill-default", "visibility", "visible");
+    }
+    if (map.getLayer("states-borders-default")) {
+      map.setLayoutProperty("states-borders-default", "visibility", "visible");
+    }
+  };
+
   // Selects a district by name within a state already present in the default states layer
   // (e.g. from a "Karnataka, Hassan" search): selects/zooms the state, loads its districts if
   // needed, then finds and selects the matching district feature by name - mirroring what
@@ -4951,7 +5457,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // a taluk on the map still drills into its hoblies - that path is separate.)
     clearTalukHoblies(map);
     focusTalukBorders(map, actualTalukName);
-    reportDrillContext();
     return true;
   };
 
@@ -5333,11 +5838,19 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     setIsWindEnabled(weatherMode === "wind");
   }, [weatherMode]);
 
-  // Loads the all-India scalar forecast field (temperature / rain / clouds) for
-  // forecast hours 0..6 whenever a field mode is active. One combined GFS grid
-  // per hour feeds the image renderer; frames animate as a coherent time series.
+  // Loads the all-India scalar forecast field (rain / clouds) for forecast
+  // hours 0..6 whenever a field mode is active. One combined GFS grid per
+  // hour feeds the image renderer; frames animate as a coherent time series.
+  // Temperature no longer uses this pipeline - see the VIIRS Land Surface
+  // Temperature effect below (GFS 0.25° stays available to Rain/Clouds/Wind
+  // exactly as before; only the Temperature *visualization* changed).
   useEffect(() => {
-    if (weatherMode !== "temperature" && weatherMode !== "rain" && weatherMode !== "clouds") {
+    const isGfsForecastField =
+      weatherMode === "pressure" ||
+      (weatherMode === "rain" && rainProduct === "forecast") ||
+      (weatherMode === "clouds" && cloudProduct === "forecast");
+
+    if (!isGfsForecastField) {
       setWeatherFieldFrames([]);
       setWeatherFieldIndex(0);
       setIsWeatherFieldPlaying(false);
@@ -5346,10 +5859,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       return;
     }
 
-    const variable: "temperature" | "precipitation" | "clouds" =
-      weatherMode === "rain" ? "precipitation" : weatherMode;
+    const variable: "precipitation" | "clouds" | "pressure" =
+      weatherMode === "rain" ? "precipitation" : (weatherMode as "clouds" | "pressure");
     let cancelled = false;
     const controller = new AbortController();
+
+    // Clear any previous mode's frames immediately (e.g. Rain -> Clouds) so the
+    // map never paints a stale frame's raster (wrong variable/colours) under
+    // the new mode's legend while the new fetch is still in flight.
+    setWeatherFieldFrames((prev) => (prev.length && prev[0]?.variable !== variable ? [] : prev));
+    setWeatherFieldIndex(0);
 
     const describeFailure = (error: unknown): string => {
       if (error instanceof ApiUnavailableError) {
@@ -5409,21 +5928,23 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       cancelled = true;
       controller.abort();
     };
-  }, [weatherMode]);
+  }, [weatherMode, rainProduct, cloudProduct]);
 
-  // Renders the active scalar forecast field (temperature / rain / clouds) as a
-  // MapLibre raster `image` source.  The GFS grid is painted into a canvas
-  // image once per frame/opacity change and handed to MapLibre as an
-  // `image` source + `raster` layer.  MapLibre's WebGL renderer handles the
-  // WebMercator projection and zoom/pan transforms natively on the GPU, so
-  // there is zero JavaScript re-rendering on viewport change — the overlay
-  // stays pinned to the map with the same smoothness as any raster tile.
+  // Renders the active scalar forecast field (rain / clouds) as a MapLibre
+  // raster `image` source.  The GFS grid is painted into a canvas image once
+  // per frame/opacity change and handed to MapLibre as an `image` source +
+  // `raster` layer.  MapLibre's WebGL renderer handles the WebMercator
+  // projection and zoom/pan transforms natively on the GPU, so there is zero
+  // JavaScript re-rendering on viewport change — the overlay stays pinned to
+  // the map with the same smoothness as any raster tile.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
     const isField =
-      weatherMode === "temperature" || weatherMode === "rain" || weatherMode === "clouds";
+      weatherMode === "pressure" ||
+      (weatherMode === "rain" && rainProduct === "forecast") ||
+      (weatherMode === "clouds" && cloudProduct === "forecast");
     const frame = weatherFieldFrames[weatherFieldIndex];
 
     if (!isField || !frame) {
@@ -5434,7 +5955,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     const applyFieldOverlay = () => {
       try {
-        const result = renderFieldToImageSource(frame, weatherFieldOpacity);
+        const result = renderFieldToImageSource(frame);
         if (!result) {
           setWeatherFieldStatus("unavailable");
           setWeatherFieldMessage("NOAA GFS forecast overlay is temporarily unavailable.");
@@ -5451,24 +5972,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           coordinates: result.coordinates,
         });
 
-        // Insert the raster layer below labels so boundaries / ward names
-        // remain readable on top of the weather colouring.
-        const firstLabelId = map.getStyle().layers?.find(
-          (l: any) => l.type === "symbol" || l.id?.includes("label")
-        )?.id;
+        // Insert the raster layer below boundaries/labels so they remain
+        // readable on top of the weather colouring.
+        const firstLabelId = findWeatherImageryInsertionPoint(map);
         map.addLayer(
           {
             id: GFS_FIELD_LAYER_ID,
             type: "raster",
             source: GFS_FIELD_SOURCE_ID,
             paint: {
-              "raster-opacity": weatherFieldOpacity,
+              "raster-opacity": weatherMode === "pressure" ? DISPLAY_OPACITY.pressure : weatherMode === "rain" ? DISPLAY_OPACITY.observedRain : DISPLAY_OPACITY.observedCloud,
               "raster-fade-duration": 0,
               "raster-resampling": "linear",
             },
           },
           firstLabelId
         );
+
+        // Temperature dims the Mapterhorn colour-relief and floats a subtle
+        // detail hillshade above this raster so the terrain keeps its relief
+        // without drowning out the data. Rain/Clouds get the standard relief.
+        applyWeatherTerrainWeatherMode(map, weatherMode);
 
         setWeatherFieldStatus("ready");
         setWeatherFieldMessage(null);
@@ -5486,7 +6010,1168 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       };
     }
     applyFieldOverlay();
-  }, [weatherMode, weatherFieldFrames, weatherFieldIndex, weatherFieldOpacity]);
+  }, [weatherMode, weatherFieldFrames, weatherFieldIndex, rainProduct, cloudProduct]);
+
+  // ── Pressure isobars: compute once per frame from the raw grid ─────────────
+  useEffect(() => {
+    if (weatherMode !== "pressure") {
+      setPressureIsobars([]);
+      setPressureExtrema([]);
+      return;
+    }
+    const frame = weatherFieldFrames[weatherFieldIndex];
+    if (!frame) return;
+
+    // Cropped to India + generous regional context, not the whole globe -
+    // see cropGrid's docstring for why (performance, not a data limitation).
+    const grid = cropGrid(
+      {
+        width: frame.width,
+        height: frame.height,
+        values: frame.values,
+        longitudes: frame.longitudes,
+        latitudes: frame.latitudes,
+      },
+      { west: 40, south: -10, east: 110, north: 45 }
+    );
+    setPressureIsobars(computeIsobars(grid, 4));
+    setPressureExtrema(findPressureExtrema(grid));
+  }, [weatherMode, weatherFieldFrames, weatherFieldIndex]);
+
+  // Renders the isobar lines + labels + optional H/L centers. Old contours
+  // are always removed before new ones are added (setData replaces the
+  // FeatureCollection wholesale) so a frame change never leaves stale lines
+  // drawn on top of the new raster.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const removeAll = () => {
+      if (map.getLayer(ISOBAR_LABEL_LAYER_ID)) map.removeLayer(ISOBAR_LABEL_LAYER_ID);
+      if (map.getLayer(ISOBAR_LINE_LAYER_ID)) map.removeLayer(ISOBAR_LINE_LAYER_ID);
+      if (map.getSource(ISOBAR_SOURCE_ID)) map.removeSource(ISOBAR_SOURCE_ID);
+      if (map.getLayer(PRESSURE_EXTREMA_LAYER_ID)) map.removeLayer(PRESSURE_EXTREMA_LAYER_ID);
+      if (map.getSource(PRESSURE_EXTREMA_SOURCE_ID)) map.removeSource(PRESSURE_EXTREMA_SOURCE_ID);
+    };
+
+    if (weatherMode !== "pressure" || pressureIsobars.length === 0) {
+      removeAll();
+      return;
+    }
+
+    const lineGeojson = {
+      type: "FeatureCollection" as const,
+      features: pressureIsobars.map((line) => ({
+        type: "Feature" as const,
+        geometry: { type: "LineString" as const, coordinates: line.coordinates },
+        properties: { level: line.level, label: `${line.level}` },
+      })),
+    };
+
+    if (!map.getSource(ISOBAR_SOURCE_ID)) {
+      map.addSource(ISOBAR_SOURCE_ID, { type: "geojson", data: lineGeojson as any });
+      map.addLayer({
+        id: ISOBAR_LINE_LAYER_ID,
+        type: "line",
+        source: ISOBAR_SOURCE_ID,
+        paint: {
+          // A single restrained tone - isobars are meant to be the
+          // strongest analytical feature over the deliberately subtle raster.
+          "line-color": "#3b4a63",
+          "line-width": ["case", ["==", ["%", ["get", "level"], 20], 0], 1.6, 0.9],
+          "line-opacity": 0.75,
+        },
+      });
+      map.addLayer({
+        id: ISOBAR_LABEL_LAYER_ID,
+        type: "symbol",
+        source: ISOBAR_SOURCE_ID,
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": 260,
+          "text-field": ["get", "label"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-keep-upright": true,
+        },
+        paint: {
+          "text-color": "#3b4a63",
+          "text-halo-color": "rgba(255,255,255,0.85)",
+          "text-halo-width": 1.2,
+        },
+      });
+    } else {
+      (map.getSource(ISOBAR_SOURCE_ID) as GeoJSONSource).setData(lineGeojson as any);
+    }
+
+    if (showPressureExtrema && pressureExtrema.length > 0) {
+      const extremaGeojson = {
+        type: "FeatureCollection" as const,
+        features: pressureExtrema.map((e) => ({
+          type: "Feature" as const,
+          geometry: { type: "Point" as const, coordinates: [e.lon, e.lat] },
+          properties: { label: e.type, value: `${e.valueHpa}`, isHigh: e.type === "H" },
+        })),
+      };
+      if (!map.getSource(PRESSURE_EXTREMA_SOURCE_ID)) {
+        map.addSource(PRESSURE_EXTREMA_SOURCE_ID, { type: "geojson", data: extremaGeojson as any });
+        map.addLayer({
+          id: PRESSURE_EXTREMA_LAYER_ID,
+          type: "symbol",
+          source: PRESSURE_EXTREMA_SOURCE_ID,
+          layout: {
+            "text-field": ["format", ["get", "label"], { "font-scale": 1.4 }, "\n", ["get", "value"], { "font-scale": 0.7 }],
+            "text-font": ["Noto Sans Bold"],
+            "text-size": 13,
+            "text-allow-overlap": false,
+          },
+          paint: {
+            "text-color": ["case", ["get", "isHigh"], "#1d4ed8", "#b91c1c"],
+            "text-halo-color": "rgba(255,255,255,0.9)",
+            "text-halo-width": 1.5,
+          },
+        });
+      } else {
+        (map.getSource(PRESSURE_EXTREMA_SOURCE_ID) as GeoJSONSource).setData(extremaGeojson as any);
+        if (!map.getLayer(PRESSURE_EXTREMA_LAYER_ID)) {
+          map.addLayer({
+            id: PRESSURE_EXTREMA_LAYER_ID,
+            type: "symbol",
+            source: PRESSURE_EXTREMA_SOURCE_ID,
+            layout: {
+              "text-field": ["format", ["get", "label"], { "font-scale": 1.4 }, "\n", ["get", "value"], { "font-scale": 0.7 }],
+              "text-font": ["Noto Sans Bold"],
+              "text-size": 13,
+              "text-allow-overlap": false,
+            },
+            paint: {
+              "text-color": ["case", ["get", "isHigh"], "#1d4ed8", "#b91c1c"],
+              "text-halo-color": "rgba(255,255,255,0.9)",
+              "text-halo-width": 1.5,
+            },
+          });
+        }
+      }
+    } else {
+      if (map.getLayer(PRESSURE_EXTREMA_LAYER_ID)) map.removeLayer(PRESSURE_EXTREMA_LAYER_ID);
+      if (map.getSource(PRESSURE_EXTREMA_SOURCE_ID)) map.removeSource(PRESSURE_EXTREMA_SOURCE_ID);
+    }
+  }, [weatherMode, pressureIsobars, pressureExtrema, showPressureExtrema]);
+
+  // ── Authoritative Weather-Mode Terrain Synchronization (section 15)
+  // Controls terrain styling solely based on weatherMode, independent of
+  // frame availability. Runs once after the map style is loaded and re-runs
+  // whenever weatherMode changes. This is the single source of truth; the
+  // field overlay and terrain reveal are safety nets.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const sync = () => {
+      if (map.isStyleLoaded()) {
+        applyWeatherTerrainWeatherMode(map, weatherMode);
+      }
+    };
+
+    if (map.isStyleLoaded()) {
+      sync();
+    } else {
+      map.once("style.load", sync);
+    }
+
+    return () => {
+      map.off("style.load", sync);
+    };
+  }, [weatherMode]);
+
+  // ── Satellite mode: NASA GIBS VIIRS true-color imagery ─────────────────────
+  // Resolve which VIIRS product + date actually has real tiles (see
+  // ../../lib/weather/nasaGibs.ts - today's imagery 404s until NASA finishes
+  // processing the day's swath, so this probes today -> yesterday -> two days
+  // ago against the live tile endpoint rather than assuming). Also builds a
+  // short list of recent valid dates for the prev/next/play controls.
+  const [satelliteAvailableDates, setSatelliteAvailableDates] = useState<string[]>([]);
+  useEffect(() => {
+    if (weatherMode !== "satellite" || satelliteResolved !== undefined) return;
+    let cancelled = false;
+    setSatelliteStatus("loading");
+
+    resolveGibsSatellite().then(async (resolved) => {
+      if (cancelled) return;
+      if (!resolved) {
+        setSatelliteResolved(null);
+        setSatelliteStatus("unavailable");
+        return;
+      }
+      setSatelliteResolved(resolved);
+      setSatelliteDate(resolved.date);
+
+      // Build the recent-dates list for this exact product (prev/next/play
+      // must never land on a date with no real tile).
+      const candidates = recentGibsDates(6);
+      const checks = await Promise.all(
+        candidates.map((d) => probeGibsDate(resolved.product.layer, d).then((ok) => (ok ? d : null)))
+      );
+      if (cancelled) return;
+      const valid = checks.filter((d): d is string => d !== null);
+      setSatelliteAvailableDates(valid.length > 0 ? valid : [resolved.date]);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherMode, satelliteResolved]);
+
+  // Adds/updates the GIBS raster source+layer. Idempotent: only ever one
+  // source/layer, `setTiles` swaps the date instead of remove+re-add.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (weatherMode !== "satellite") {
+      if (map.getLayer(GIBS_SATELLITE_LAYER_ID)) {
+        map.setLayoutProperty(GIBS_SATELLITE_LAYER_ID, "visibility", "none");
+      }
+      return;
+    }
+    if (!satelliteResolved || !satelliteDate) return;
+
+    // Always use the resolved explicit date (see resolveGibsSatellite's
+    // docstring: it deliberately resolves to the most recent *complete*
+    // day, never "today" mid-progress) rather than GIBS's own "default"
+    // best-available path. Tried "default" first - verified live that
+    // NASA's per-tile fallback is inconsistent enough to leave whole
+    // regions (the entire Americas/Atlantic, still hours from today's
+    // pass) with no tile at all. One consistent, verified-complete date
+    // applied uniformly is honest and gap-free; "default" wasn't either.
+    // Routed through the "viirsnd://" protocol (registerViirsNoDataProtocol)
+    // so NASA's opaque-black no-data fill gets stripped to real transparency
+    // before MapLibre ever sees the tile - see that function's docstring.
+    const tileUrl = gibsTileUrlTemplate(satelliteResolved.product.layer, satelliteDate).replace(
+      "https://",
+      `${VIIRS_NODATA_PROTOCOL}://`
+    );
+
+    if (!map.getSource(GIBS_SATELLITE_SOURCE_ID)) {
+      map.addSource(GIBS_SATELLITE_SOURCE_ID, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: GIBS_TILE_SIZE,
+        maxzoom: GIBS_NATIVE_MAX_ZOOM,
+        attribution: GIBS_ATTRIBUTION,
+      });
+      // Satellite mode keeps the normal basemap (Google satellite tiles)
+      // VISIBLE underneath - it shows through VIIRS's transparent no-data
+      // pixels (see registerViirsNoDataProtocol) instead of the terrain
+      // being hidden. That only works if VIIRS renders ABOVE the opaque
+      // basemap layer; inserting at the very bottom (as satellite/NDVI/
+      // vegetation do when the basemap gets fully hidden instead) would put
+      // VIIRS underneath the opaque basemap raster, hiding it completely
+      // regardless of its own content - real bug, confirmed live via the
+      // actual layer stack (gibs-satellite-layer was at index 0, with the
+      // fully-opaque satellite-base-layer sitting above it at index 5).
+      const firstLabelId = findWeatherImageryInsertionPoint(map);
+      map.addLayer(
+        {
+          id: GIBS_SATELLITE_LAYER_ID,
+          type: "raster",
+          source: GIBS_SATELLITE_SOURCE_ID,
+          paint: {
+            "raster-opacity": DISPLAY_OPACITY.trueColor,
+            // Photographic imagery: smooth bilinear resampling, not nearest-
+            // neighbour - but only ever within its own native tiles (maxzoom
+            // 9 above), never by stretching one oversized bitmap.
+            "raster-resampling": "linear",
+            "raster-fade-duration": 0,
+          },
+        },
+        firstLabelId
+      );
+    } else {
+      (map.getSource(GIBS_SATELLITE_SOURCE_ID) as { setTiles?: (t: string[]) => void }).setTiles?.([tileUrl]);
+      map.setLayoutProperty(GIBS_SATELLITE_LAYER_ID, "visibility", "visible");
+    }
+    setSatelliteStatus("ready");
+  }, [weatherMode, satelliteResolved, satelliteDate]);
+
+  // Play/pause steps through the verified recent-dates list.
+  useEffect(() => {
+    if (!isSatellitePlaying || satelliteAvailableDates.length < 2) return;
+    const intervalId = window.setInterval(() => {
+      setSatelliteDate((current) => {
+        const idx = satelliteAvailableDates.indexOf(current ?? satelliteAvailableDates[0]!);
+        const next = satelliteAvailableDates[(idx + 1) % satelliteAvailableDates.length];
+        return next ?? current;
+      });
+    }, 1800);
+    return () => window.clearInterval(intervalId);
+  }, [isSatellitePlaying, satelliteAvailableDates]);
+
+  const stepSatelliteDate = (direction: 1 | -1) => {
+    if (satelliteAvailableDates.length === 0 || !satelliteDate) return;
+    const idx = satelliteAvailableDates.indexOf(satelliteDate);
+    // Dates are newest-first: index 0 = most recent, so "next" (forward in
+    // time) moves to a lower index and "previous" (further back) to a higher one.
+    const nextIdx = idx - direction;
+    const clamped = Math.max(0, Math.min(satelliteAvailableDates.length - 1, nextIdx));
+    const candidate = satelliteAvailableDates[clamped];
+    if (candidate) setSatelliteDate(candidate);
+  };
+
+  // ── Observed Cloud: Multi-geostationary composite ──────────────────────────────
+  // Real satellite imagery from three geostationary satellites, not a numerical
+  // model field. Each resolves a short list of genuinely real, live-probed
+  // recent 10-minute frames (never fabricated timestamps), then renders them
+  // as MapLibre raster TILE sources. Himawari covers Asia-Pacific,
+  // GOES-West covers Americas/Pacific, GOES-East covers Americas/Atlantic –
+  // together they provide global cloud coverage.
+  const himawariResolvedAtRef = useRef(0);
+  useEffect(() => {
+    if (weatherMode !== "clouds" || cloudProduct !== "observed") return;
+    const staleAfterMs = HIMAWARI_CADENCE_MINUTES * 60_000;
+    if (himawariFrames.length > 0 && Date.now() - himawariResolvedAtRef.current < staleAfterMs) return;
+    let cancelled = false;
+    setHimawariStatus("loading");
+    setGoesWestStatus("loading");
+    setGoesEastStatus("loading");
+
+    // Resolve all three satellites in parallel for global coverage
+    Promise.all([
+      recentGeoFrames(GEO_HIMAWARI),
+      recentGeoFrames(GEO_GOES_WEST),
+      recentGeoFrames(GEO_GOES_EAST),
+    ]).then(([hFrames, gwFrames, geFrames]) => {
+      if (cancelled) return;
+      himawariResolvedAtRef.current = Date.now();
+      
+      // Himawari is primary – if it fails, mark as unavailable
+      if (hFrames.length === 0) {
+        setHimawariStatus("unavailable");
+        setGoesWestStatus("unavailable");
+        setGoesEastStatus("unavailable");
+        return;
+      }
+      setHimawariFrames(hFrames);
+      setHimawariFrameIndex(0);
+      setHimawariStatus("ready");
+
+      // GOES-West and GOES-East are optional – show if available
+      if (gwFrames.length > 0) {
+        setGoesWestFrames(gwFrames);
+        setGoesWestStatus("ready");
+      } else {
+        setGoesWestStatus("unavailable");
+      }
+      if (geFrames.length > 0) {
+        setGoesEastFrames(geFrames);
+        setGoesEastStatus("ready");
+      } else {
+        setGoesEastStatus("unavailable");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherMode, cloudProduct, himawariFrames.length]);
+
+  // Pauses (but doesn't discard) playback on leaving the mode - the resolved
+  // frame list is kept for the staleness-gated reuse above, but a running
+  // play interval must never keep ticking invisibly in the background.
+  useEffect(() => {
+    if (weatherMode === "clouds" && cloudProduct === "observed") return;
+    setIsHimawariPlaying(false);
+  }, [weatherMode, cloudProduct]);
+
+  // Helper to add/update a geostationary cloud layer.
+  function addGeoCloudLayer(
+    map: MapLibreMap,
+    sourceId: string,
+    layerId: string,
+    sat: GeoSatelliteDef,
+    tileUrl: string,
+    opacity: number
+  ) {
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: sat.tileSize,
+        maxzoom: sat.maxZoom,
+        attribution: sat.attribution,
+      });
+      const firstLabelId = findWeatherImageryInsertionPoint(map);
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          paint: {
+            "raster-opacity": opacity,
+            "raster-resampling": "linear",
+            "raster-fade-duration": 300,
+          },
+        },
+        firstLabelId
+      );
+    } else {
+      (map.getSource(sourceId) as { setTiles?: (t: string[]) => void }).setTiles?.([tileUrl]);
+      map.setLayoutProperty(layerId, "visibility", "visible");
+    }
+  }
+
+  // Helper to hide a geostationary cloud layer
+  function hideGeoCloudLayer(map: MapLibreMap, layerId: string) {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", "none");
+    }
+  }
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const isActive = weatherMode === "clouds" && cloudProduct === "observed";
+    const hFrame = himawariFrames[himawariFrameIndex];
+    const gwFrame = goesWestFrames[himawariFrameIndex];
+    const geFrame = goesEastFrames[himawariFrameIndex];
+
+    // Himawari (primary) – always visible when active
+    if (!isActive || !hFrame) {
+      hideGeoCloudLayer(map, HIMAWARI_LAYER_ID);
+      hideGeoCloudLayer(map, GOES_WEST_LAYER_ID);
+      hideGeoCloudLayer(map, GOES_EAST_LAYER_ID);
+      return;
+    }
+
+    // Himawari covers Asia-Pacific
+    const hUrl = himawariTileUrlTemplate(hFrame);
+    addGeoCloudLayer(map, HIMAWARI_SOURCE_ID, HIMAWARI_LAYER_ID, GEO_HIMAWARI, hUrl, DISPLAY_OPACITY.observedCloud);
+
+    // GOES-West covers Americas/Pacific – optional, show if available
+    if (gwFrame && goesWestStatus === "ready") {
+      const gwUrl = geoCloudTileUrlTemplate(GEO_GOES_WEST, gwFrame);
+      addGeoCloudLayer(map, GOES_WEST_SOURCE_ID, GOES_WEST_LAYER_ID, GEO_GOES_WEST, gwUrl, DISPLAY_OPACITY.observedCloud);
+    } else {
+      hideGeoCloudLayer(map, GOES_WEST_LAYER_ID);
+    }
+
+    // GOES-East covers Americas/Atlantic – optional, show if available
+    if (geFrame && goesEastStatus === "ready") {
+      const geUrl = geoCloudTileUrlTemplate(GEO_GOES_EAST, geFrame);
+      addGeoCloudLayer(map, GOES_EAST_SOURCE_ID, GOES_EAST_LAYER_ID, GEO_GOES_EAST, geUrl, DISPLAY_OPACITY.observedCloud);
+    } else {
+      hideGeoCloudLayer(map, GOES_EAST_LAYER_ID);
+    }
+  }, [weatherMode, cloudProduct, himawariFrames, himawariFrameIndex, goesWestFrames, goesEastFrames, goesWestStatus, goesEastStatus]);
+
+  useEffect(() => {
+    if (!isHimawariPlaying || himawariFrames.length < 2) return;
+    const intervalId = window.setInterval(() => {
+      setHimawariFrameIndex((i) => (i + 1) % himawariFrames.length);
+    }, 900);
+    return () => window.clearInterval(intervalId);
+  }, [isHimawariPlaying, himawariFrames.length]);
+
+  // ── GFS Cloud Fill: global cloud fraction underneath satellite tiles ────────
+  // Fetches GFS forecast hour 0 (analysis) when in observed cloud mode.
+  // This fills the gaps between geostationary satellite disks so the user
+  // sees seamless global cloud coverage. The GFS layer renders at moderate opacity
+  // and the real satellite imagery shows through on top where available.
+  const cloudFillFetchedRef = useRef(false);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const isActive = weatherMode === "clouds" && cloudProduct === "observed";
+
+    if (!isActive) {
+      if (map.getLayer(GFS_CLOUD_FILL_LAYER_ID)) map.removeLayer(GFS_CLOUD_FILL_LAYER_ID);
+      if (map.getSource(GFS_CLOUD_FILL_SOURCE_ID)) map.removeSource(GFS_CLOUD_FILL_SOURCE_ID);
+      setCloudFillFrame(null);
+      cloudFillFetchedRef.current = false;
+      return;
+    }
+
+    // If we already have a frame or already tried and failed, don't re-fetch
+    if (cloudFillFrame || cloudFillFetchedRef.current) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    fetchGfsWeatherFieldFrame("clouds", 0, controller.signal)
+      .then((frame) => {
+        if (cancelled) return;
+        cloudFillFetchedRef.current = true;
+        setCloudFillFrame(frame);
+      })
+      .catch(() => {
+        // GFS fill is optional – silently ignore failures
+        if (!cancelled) cloudFillFetchedRef.current = true;
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [weatherMode, cloudProduct, cloudFillFrame]);
+
+  // Render the GFS cloud fill as a MapLibre image source underneath the
+  // geostationary satellite tiles.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const isActive = weatherMode === "clouds" && cloudProduct === "observed";
+
+    if (!isActive || !cloudFillFrame) {
+      if (map.getLayer(GFS_CLOUD_FILL_LAYER_ID)) map.removeLayer(GFS_CLOUD_FILL_LAYER_ID);
+      if (map.getSource(GFS_CLOUD_FILL_SOURCE_ID)) map.removeSource(GFS_CLOUD_FILL_SOURCE_ID);
+      return;
+    }
+
+    const applyCloudFill = () => {
+      try {
+        const result = renderFieldToImageSource(cloudFillFrame);
+        if (!result) return;
+
+        if (map.getLayer(GFS_CLOUD_FILL_LAYER_ID)) map.removeLayer(GFS_CLOUD_FILL_LAYER_ID);
+        if (map.getSource(GFS_CLOUD_FILL_SOURCE_ID)) map.removeSource(GFS_CLOUD_FILL_SOURCE_ID);
+
+        map.addSource(GFS_CLOUD_FILL_SOURCE_ID, {
+          type: "image",
+          url: result.url,
+          coordinates: result.coordinates,
+        });
+
+        // Insert below the satellite layers so it fills gaps
+        const satelliteLayerOrder = [
+          HIMAWARI_LAYER_ID,
+          GOES_WEST_LAYER_ID,
+          GOES_EAST_LAYER_ID,
+        ];
+        let insertBeforeId: string | undefined;
+        for (const lid of satelliteLayerOrder) {
+          if (map.getLayer(lid)) {
+            insertBeforeId = lid;
+            break;
+          }
+        }
+        if (!insertBeforeId) {
+          insertBeforeId = map.getStyle().layers?.find(
+            (l: any) => l.type === "symbol" || l.id?.includes("label")
+          )?.id;
+        }
+
+        map.addLayer(
+          {
+            id: GFS_CLOUD_FILL_LAYER_ID,
+            type: "raster",
+            source: GFS_CLOUD_FILL_SOURCE_ID,
+            paint: {
+              "raster-opacity": DISPLAY_OPACITY.cloudFill,
+              "raster-fade-duration": 0,
+              "raster-resampling": "linear",
+            },
+          },
+          insertBeforeId
+        );
+      } catch {
+        // silently ignore rendering errors
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyCloudFill);
+    } else {
+      applyCloudFill();
+    }
+  }, [weatherMode, cloudProduct, cloudFillFrame]);
+
+  // ── Observed Rain: NASA GIBS GPM IMERG 30-minute precipitation ─────────────
+  // Same real-tile-source + crossfade approach as Himawari above - see
+  // nasaImerg.ts for why this is genuinely observed (satellite-derived) data,
+  // not a forecast model field. Same staleness-gated re-probe as Himawari,
+  // for the same reason (avoid a request burst on every mode toggle).
+  const imergResolvedAtRef = useRef(0);
+  useEffect(() => {
+    if (weatherMode !== "rain" || rainProduct !== "observed") return;
+    const staleAfterMs = IMERG_CADENCE_MINUTES * 60_000;
+    if (imergFrames.length > 0 && Date.now() - imergResolvedAtRef.current < staleAfterMs) return;
+    let cancelled = false;
+    setImergStatus("loading");
+
+    recentImergFrames().then((frames) => {
+      if (cancelled) return;
+      imergResolvedAtRef.current = Date.now();
+      if (frames.length === 0) {
+        setImergStatus("unavailable");
+        return;
+      }
+      setImergFrames(frames);
+      setImergFrameIndex(0);
+      setImergStatus("ready");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherMode, rainProduct, imergFrames.length]);
+
+  // Pauses (but doesn't discard) playback on leaving the mode - see the
+  // matching Himawari comment above.
+  useEffect(() => {
+    if (weatherMode === "rain" && rainProduct === "observed") return;
+    setIsImergPlaying(false);
+  }, [weatherMode, rainProduct]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const isActive = weatherMode === "rain" && rainProduct === "observed";
+    const frame = imergFrames[imergFrameIndex];
+
+    if (!isActive || !frame) {
+      if (map.getLayer(IMERG_LAYER_ID)) {
+        map.setLayoutProperty(IMERG_LAYER_ID, "visibility", "none");
+      }
+      return;
+    }
+
+    const tileUrl = imergTileUrlTemplate(frame);
+
+    if (!map.getSource(IMERG_SOURCE_ID)) {
+      map.addSource(IMERG_SOURCE_ID, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: IMERG_TILE_SIZE,
+        maxzoom: IMERG_NATIVE_MAX_ZOOM,
+        attribution: IMERG_ATTRIBUTION,
+      });
+      const firstLabelId = findWeatherImageryInsertionPoint(map);
+      map.addLayer(
+        {
+          id: IMERG_LAYER_ID,
+          type: "raster",
+          source: IMERG_SOURCE_ID,
+          paint: {
+            "raster-opacity": DISPLAY_OPACITY.observedRain,
+            "raster-resampling": "linear",
+            "raster-fade-duration": 300,
+          },
+        },
+        firstLabelId
+      );
+    } else {
+      (map.getSource(IMERG_SOURCE_ID) as { setTiles?: (t: string[]) => void }).setTiles?.([tileUrl]);
+      map.setLayoutProperty(IMERG_LAYER_ID, "visibility", "visible");
+    }
+  }, [weatherMode, rainProduct, imergFrames, imergFrameIndex]);
+
+  useEffect(() => {
+    if (!isImergPlaying || imergFrames.length < 2) return;
+    const intervalId = window.setInterval(() => {
+      setImergFrameIndex((i) => (i + 1) % imergFrames.length);
+    }, 900);
+    return () => window.clearInterval(intervalId);
+  }, [isImergPlaying, imergFrames.length]);
+
+  // ── Vegetation mode: NASA GIBS MODIS Terra NDVI (8-day composite) ──────────
+  // Resolves the most recent composite period with a real tile (see
+  // ../../lib/weather/nasaVegetation.ts), then renders it as a GIBS raster
+  // layer exactly like Satellite mode - GIBS serves this layer pre-colorized,
+  // so no client-side colormap is needed.
+  useEffect(() => {
+    if (weatherMode !== "vegetation" || ndviResolved !== undefined) return;
+    let cancelled = false;
+    setNdviStatus("loading");
+
+    resolveNdvi().then((resolved) => {
+      if (cancelled) return;
+      if (!resolved) {
+        setNdviResolved(null);
+        setNdviStatus("unavailable");
+        return;
+      }
+      setNdviResolved(resolved);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherMode, ndviResolved]);
+
+  // Adds/updates the GIBS NDVI raster source+layer. Idempotent: only ever one
+  // source/layer, `setTiles` swaps the date instead of remove+re-add.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (weatherMode !== "vegetation") {
+      if (map.getLayer(NDVI_LAYER_ID)) {
+        map.setLayoutProperty(NDVI_LAYER_ID, "visibility", "none");
+      }
+      return;
+    }
+    if (!ndviResolved) return;
+
+    const tileUrl = ndviTileUrlTemplate(ndviResolved.date);
+
+    if (!map.getSource(NDVI_SOURCE_ID)) {
+      map.addSource(NDVI_SOURCE_ID, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: NDVI_TILE_SIZE,
+        maxzoom: NDVI_NATIVE_MAX_ZOOM,
+        attribution: NDVI_ATTRIBUTION,
+      });
+      const bottomLayerId = map.getStyle().layers?.[0]?.id;
+      map.addLayer(
+        {
+          id: NDVI_LAYER_ID,
+          type: "raster",
+          source: NDVI_SOURCE_ID,
+          paint: {
+            "raster-opacity": DISPLAY_OPACITY.vegetation,
+            "raster-resampling": "linear",
+            "raster-fade-duration": 0,
+          },
+        },
+        bottomLayerId
+      );
+    } else {
+      (map.getSource(NDVI_SOURCE_ID) as { setTiles?: (t: string[]) => void }).setTiles?.([tileUrl]);
+      map.setLayoutProperty(NDVI_LAYER_ID, "visibility", "visible");
+    }
+    setNdviStatus("ready");
+  }, [weatherMode, ndviResolved]);
+
+
+  // ── Fire mode: NASA FIRMS active-fire detections ────────────────────────────
+  // Fetches detections in a bounding box around the map's current center
+  // (built server-side, see nasa_firms.py) and refreshes on pan/zoom
+  // (debounced) while Fire mode is active.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || weatherMode !== "fire") {
+      setFireDetections([]);
+      setFireStatus("idle");
+      setFireMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+    let debounceId: number | undefined;
+
+    const load = () => {
+      const center = map.getCenter();
+      setFireStatus("loading");
+      setFireMessage(null);
+      fetchFireDetections(center.lat, center.lng, fireHours)
+        .then((detections) => {
+          if (cancelled) return;
+          setFireDetections(detections);
+          setFireStatus("ready");
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setFireDetections([]);
+          setFireStatus("unavailable");
+          // Distinguishes "not configured" from a genuine transient failure
+          // (rate limit / network) - these are different states, not both a
+          // vague "unavailable" (spec: never report 0 detections when the
+          // real reason is the request failing).
+          const rawMessage = error instanceof ApiRequestError ? error.message : "";
+          if (/no map_key configured/i.test(rawMessage)) {
+            setFireMessage("NASA FIRMS API key not configured.");
+          } else if (rawMessage) {
+            setFireMessage(`Fire data temporarily unavailable: ${rawMessage}`);
+          } else {
+            setFireMessage("Fire data temporarily unavailable.");
+          }
+        });
+    };
+
+    load();
+    const handleMoveEnd = () => {
+      window.clearTimeout(debounceId);
+      debounceId = window.setTimeout(load, 600);
+    };
+    map.on("moveend", handleMoveEnd);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(debounceId);
+      map.off("moveend", handleMoveEnd);
+    };
+  }, [weatherMode, fireHours]);
+
+  // Renders fire detections as a clustered GeoJSON source (same clustering
+  // mechanism as the CPCB AQI stations: cluster circles below clusterMaxZoom,
+  // individual points above it - MapLibre handles the zoom-based switch
+  // automatically, no manual per-zoom layer swapping). Individual points are
+  // colored by confidence and faded by age (newer = fuller opacity), and the
+  // newest detections (< 1h old) get a slow, subtle pulse layer.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const removeAll = () => {
+      [FIRE_PULSE_LAYER_ID, FIRE_POINTS_LAYER_ID, FIRE_CLUSTER_COUNT_LAYER_ID, FIRE_CLUSTER_LAYER_ID].forEach(
+        (id) => {
+          if (map.getLayer(id)) map.removeLayer(id);
+        }
+      );
+      if (map.getSource(FIRE_SOURCE_ID)) map.removeSource(FIRE_SOURCE_ID);
+    };
+
+    if (weatherMode !== "fire" || fireDetections.length === 0) {
+      removeAll();
+      return;
+    }
+
+    const nowMs = Date.now();
+    const geojson = {
+      type: "FeatureCollection" as const,
+      features: fireDetections.map((d) => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [d.lon, d.lat] },
+        properties: {
+          brightness: d.brightness,
+          brightTi5: d.brightTi5,
+          confidence: d.confidence ?? 0,
+          frp: d.frp,
+          scan: d.scan,
+          track: d.track,
+          version: d.version,
+          acquiredAt: d.acquiredAt,
+          satellite: d.satellite,
+          instrument: d.instrument,
+          dayNight: d.dayNight,
+          ageHours: Math.max(0, (nowMs - new Date(d.acquiredAt).getTime()) / 3_600_000),
+        },
+      })),
+    };
+
+    if (!map.getSource(FIRE_SOURCE_ID)) {
+      map.addSource(FIRE_SOURCE_ID, {
+        type: "geojson",
+        data: geojson as any,
+        cluster: true,
+        clusterMaxZoom: 8,
+        clusterRadius: 50,
+      });
+
+      map.addLayer({
+        id: FIRE_CLUSTER_LAYER_ID,
+        type: "circle",
+        source: FIRE_SOURCE_ID,
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": "#ea580c",
+          "circle-opacity": 0.75,
+          "circle-radius": ["step", ["get", "point_count"], 14, 10, 18, 50, 24],
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
+        },
+      });
+      map.addLayer({
+        id: FIRE_CLUSTER_COUNT_LAYER_ID,
+        type: "symbol",
+        source: FIRE_SOURCE_ID,
+        filter: ["has", "point_count"],
+        layout: {
+          "text-field": "{point_count_abbreviated}",
+          "text-font": ["Noto Sans Bold"],
+          "text-size": 12,
+        },
+        paint: { "text-color": "#ffffff" },
+      });
+      map.addLayer({
+        id: FIRE_POINTS_LAYER_ID,
+        type: "circle",
+        source: FIRE_SOURCE_ID,
+        filter: ["!", ["has", "point_count"]],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["get", "confidence"], 0, 4, 100, 9],
+          "circle-color": [
+            "interpolate",
+            ["linear"],
+            ["get", "confidence"],
+            0, "#ffd700",
+            60, "#ff9900",
+            100, "#e81e1e",
+          ],
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#7a1a00",
+          // Age fade: full opacity for a brand-new detection, fading toward
+          // 0.3 as it approaches the edge of the selected time window - never
+          // fully invisible, so older-but-still-selected detections stay findable.
+          "circle-opacity": [
+            "interpolate",
+            ["linear"],
+            ["get", "ageHours"],
+            0, 0.95,
+            fireHours, 0.3,
+          ],
+        },
+      });
+      // Newest detections (< 1h) get a slow pulse ring underneath the solid
+      // point - subtle (opacity/radius alternate every ~1.1s), not flashing.
+      map.addLayer(
+        {
+          id: FIRE_PULSE_LAYER_ID,
+          type: "circle",
+          source: FIRE_SOURCE_ID,
+          filter: ["all", ["!", ["has", "point_count"]], ["<", ["get", "ageHours"], 1]],
+          paint: {
+            "circle-radius": 9,
+            "circle-color": "#e81e1e",
+            "circle-opacity": 0.35,
+            "circle-stroke-width": 0,
+          },
+        },
+        FIRE_POINTS_LAYER_ID
+      );
+
+      map.on("mouseenter", FIRE_POINTS_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", FIRE_POINTS_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "";
+      });
+    } else {
+      (map.getSource(FIRE_SOURCE_ID) as GeoJSONSource).setData(geojson as any);
+    }
+  }, [weatherMode, fireDetections, fireHours]);
+
+  // Slow, bounded pulse animation for newest detections - a single interval,
+  // cleared whenever Fire mode is off or the pulse layer doesn't exist, never
+  // stacked with a second one (Phase 14: every timer must be cleared).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || weatherMode !== "fire") return;
+
+    let phase = 0;
+    const intervalId = window.setInterval(() => {
+      if (!map.getLayer(FIRE_PULSE_LAYER_ID)) return;
+      phase = (phase + 1) % 2;
+      map.setPaintProperty(FIRE_PULSE_LAYER_ID, "circle-radius", phase === 0 ? 9 : 15);
+      map.setPaintProperty(FIRE_PULSE_LAYER_ID, "circle-opacity", phase === 0 ? 0.35 : 0.12);
+    }, 1100);
+
+    return () => window.clearInterval(intervalId);
+  }, [weatherMode, fireDetections]);
+
+  // Click a fire detection -> compact popup with real FIRMS metadata (React
+  // state driven, same pattern as the wind cursor tooltip - not MapLibre's
+  // native Popup class, kept consistent with the rest of this file). Attached
+  // only while the points layer exists, removed with the same handler
+  // reference whenever the layer is torn down or the mode changes.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || weatherMode !== "fire") {
+      setSelectedFireDetection(null);
+      return;
+    }
+
+    const handleFireClick = (e: MapLayerMouseEvent) => {
+      const feature = e.features?.[0];
+      if (!feature || feature.geometry.type !== "Point") return;
+      const props = feature.properties as Record<string, any>;
+      const [lon, lat] = feature.geometry.coordinates as [number, number];
+      setSelectedFireDetection({
+        detection: {
+          lat,
+          lon,
+          brightness: props.brightness ?? null,
+          brightTi5: props.brightTi5 ?? null,
+          confidence: props.confidence ?? null,
+          frp: props.frp ?? null,
+          scan: props.scan ?? null,
+          track: props.track ?? null,
+          version: props.version ?? null,
+          acquiredAt: props.acquiredAt,
+          satellite: props.satellite,
+          instrument: props.instrument ?? "VIIRS",
+          dayNight: props.dayNight,
+        },
+        screenX: e.point.x,
+        screenY: e.point.y,
+      });
+    };
+
+    map.on("click", FIRE_POINTS_LAYER_ID, handleFireClick);
+    return () => {
+      map.off("click", FIRE_POINTS_LAYER_ID, handleFireClick);
+    };
+  }, [weatherMode, fireDetections]);
+
+  // ── Surface Temperature mode: NASA GIBS VIIRS Land Surface Temperature ─────
+  // Auto resolves to Day/Night from the current IST hour; the user can pin it
+  // to either explicitly. Each is resolved (product + real available date)
+  // independently and cached. Platform can be auto (try all) or specific.
+  const lstEffectiveDayNight: ViirsLstDayNight =
+    lstDayNightSelection === "auto" ? (isDaytimeIst() ? "day" : "night") : lstDayNightSelection;
+
+  // Build a cache key that includes platform selection so auto/platform changes re-resolve
+  const lstResolveKey = `${lstEffectiveDayNight}-${lstPlatform}`;
+  const lstResolved = lstEffectiveDayNight === "day" ? lstResolvedDay : lstResolvedNight;
+
+  useEffect(() => {
+    if (weatherMode !== "temperature" || temperatureProduct !== "surface") return;
+    let cancelled = false;
+    setLstStatus("loading");
+    setLstCoverage(null);
+
+    const doResolve = async () => {
+      const candidateDates = recentViirsLstDates(6);
+      let resolved: ResolvedViirsLst | null = null;
+
+      if (lstPlatform === "auto") {
+        // Try all platforms for this day/night
+        const products = VIIRS_LST_PRODUCTS.filter((p) => p.dayNight === lstEffectiveDayNight);
+        for (const product of products) {
+          for (const date of candidateDates) {
+            if (await probeViirsLstDate(product.layer, date)) {
+              resolved = {
+                dayNight: lstEffectiveDayNight,
+                layer: product.layer,
+                satelliteLabel: product.label,
+                date,
+                platform: product.platform,
+                productInfo: product,
+              };
+              break;
+            }
+          }
+          if (resolved) break;
+        }
+      } else {
+        // Specific platform requested
+        const product = VIIRS_LST_PRODUCTS.find(
+          (p) => p.dayNight === lstEffectiveDayNight && p.platform === lstPlatform
+        );
+        if (product) {
+          for (const date of candidateDates) {
+            if (await probeViirsLstDate(product.layer, date)) {
+              resolved = {
+                dayNight: lstEffectiveDayNight,
+                layer: product.layer,
+                satelliteLabel: product.label,
+                date,
+                platform: product.platform,
+                productInfo: product,
+              };
+              break;
+            }
+          }
+        }
+      }
+
+      if (cancelled) return;
+
+      if (lstEffectiveDayNight === "day") setLstResolvedDay(resolved);
+      else setLstResolvedNight(resolved);
+
+      if (!resolved) {
+        setLstStatus("unavailable");
+        return;
+      }
+
+      setLstDate(resolved.date);
+
+      // Check coverage for the resolved product/date
+      const coverage = await checkViirsLstCoverage(resolved.productInfo, resolved.date);
+      if (!cancelled) setLstCoverage(coverage);
+
+      const checks = await Promise.all(
+        candidateDates.map((d) => probeViirsLstDate(resolved.layer, d).then((ok) => (ok ? d : null)))
+      );
+      if (cancelled) return;
+      const valid = checks.filter((d): d is string => d !== null);
+      setLstAvailableDates(valid.length > 0 ? valid : [resolved.date]);
+      setLstStatus("ready");
+    };
+
+    void doResolve();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [weatherMode, temperatureProduct, lstResolveKey]);
+
+  // Adds/updates the VIIRS LST raster source+layer. Idempotent: only ever one
+  // source/layer, `setTiles` swaps the product/date instead of remove+re-add.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (weatherMode !== "temperature" || temperatureProduct !== "surface") {
+      if (map.getLayer(VIIRS_LST_LAYER_ID)) {
+        map.setLayoutProperty(VIIRS_LST_LAYER_ID, "visibility", "none");
+      }
+      return;
+    }
+    if (!lstResolved || !lstDate) return;
+
+    const tileUrl = viirsLstTileUrlTemplate(lstResolved.layer, lstDate);
+
+    if (!map.getSource(VIIRS_LST_SOURCE_ID)) {
+      map.addSource(VIIRS_LST_SOURCE_ID, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: VIIRS_LST_TILE_SIZE,
+        maxzoom: VIIRS_LST_NATIVE_MAX_ZOOM,
+        attribution: VIIRS_LST_ATTRIBUTION,
+      });
+      // Unlike Satellite mode, Temperature keeps the Mapterhorn terrain visible
+      // underneath (for context in the LST layer's large transparent gaps), so
+      // this must render ABOVE terrain's ocean/color-relief/hillshade layers,
+      // not at the absolute bottom of the stack - insert before the first
+      // label, same slot the GFS Rain/Clouds field layer uses.
+      const firstLabelId = findWeatherImageryInsertionPoint(map);
+      map.addLayer(
+        {
+          id: VIIRS_LST_LAYER_ID,
+          type: "raster",
+          source: VIIRS_LST_SOURCE_ID,
+          paint: {
+            "raster-opacity": DISPLAY_OPACITY.lst,
+            "raster-resampling": "linear",
+            "raster-fade-duration": 0,
+          },
+        },
+        firstLabelId
+      );
+    } else {
+      (map.getSource(VIIRS_LST_SOURCE_ID) as { setTiles?: (t: string[]) => void }).setTiles?.([tileUrl]);
+      map.setLayoutProperty(VIIRS_LST_LAYER_ID, "visibility", "visible");
+    }
+    setLstStatus("ready");
+  }, [weatherMode, temperatureProduct, lstResolved, lstDate]);
+
+
+  // Play/pause steps through the verified recent-dates list.
+  useEffect(() => {
+    if (!isLstPlaying || lstAvailableDates.length < 2) return;
+    const intervalId = window.setInterval(() => {
+      setLstDate((current) => {
+        const idx = lstAvailableDates.indexOf(current ?? lstAvailableDates[0]!);
+        const next = lstAvailableDates[(idx + 1) % lstAvailableDates.length];
+        return next ?? current;
+      });
+    }, 1800);
+    return () => window.clearInterval(intervalId);
+  }, [isLstPlaying, lstAvailableDates]);
+
+  const stepLstDate = (direction: 1 | -1) => {
+    if (lstAvailableDates.length === 0 || !lstDate) return;
+    const idx = lstAvailableDates.indexOf(lstDate);
+    const nextIdx = idx - direction;
+    const clamped = Math.max(0, Math.min(lstAvailableDates.length - 1, nextIdx));
+    const candidate = lstAvailableDates[clamped];
+    if (candidate) setLstDate(candidate);
+  };
 
   // --- Air Quality weather-map mode ------------------------------------------
   // Renders official CPCB station points (clustered) + a modeled AQ surface
@@ -5528,11 +7213,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         // --- Modeled AQ surface canvas ---
         if (aqiGrid && aqiGrid.points.length > 0) {
           if (!aqiGridRendererRef.current) {
-            aqiGridRendererRef.current = new AqiGridCanvasRenderer(aqiOpacity);
+            aqiGridRendererRef.current = new AqiGridCanvasRenderer(DISPLAY_OPACITY.aqi);
             aqiGridRendererRef.current.attachTo(overlayHost);
             aqiGridRendererRef.current.setMap(map);
           } else {
-            aqiGridRendererRef.current.setOpacity(aqiOpacity);
+            aqiGridRendererRef.current.setOpacity(DISPLAY_OPACITY.aqi);
           }
           aqiGridRendererRef.current.setGrid(aqiGrid);
           const syncCanvas = () => {
@@ -5653,7 +7338,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       cleanup?.();
       cleanupExisting();
     };
-  }, [weatherMode, aqiGrid, aqiStationsGeoJson, aqiOpacity]);
+  }, [weatherMode, aqiGrid, aqiStationsGeoJson]);
 
   // Fetches the modeled AQ grid + official CPCB stations when air-quality mode is active.
   useEffect(() => {
@@ -5709,7 +7394,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // playing, looping 0..6.
   useEffect(() => {
     const isField =
-      weatherMode === "temperature" || weatherMode === "rain" || weatherMode === "clouds";
+      weatherMode === "temperature" ||
+      weatherMode === "rain" ||
+      weatherMode === "clouds" ||
+      weatherMode === "pressure";
     if (!isField || weatherFieldFrames.length === 0 || !isWeatherFieldPlaying) return;
     const intervalId = window.setInterval(() => {
       setWeatherFieldIndex((current) => (current + 1) % weatherFieldFrames.length);
@@ -5745,36 +7433,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     return () => window.clearInterval(intervalId);
   }, [isWindEnabled, isWindPlaying, windFrames]);
 
-  // ── Weather workspace topographic basemap ──────────────────────────────────
-  // When ANY weather overlay is active, the basemap is replaced with Maps-For-Free
-  // relief tiles so the colorful weather data sits on a neutral topographic canvas
-  // instead of bright satellite imagery. When weather deactivates, the previous
-  // basemap is restored. No white flash: the topographic tiles are added hidden
-  // and only shown after an `idle` event confirms they have loaded.
-
-  /** Idempotently add the topographic source + layer (hidden) if not already on the map. */
-  const ensureWeatherTopographicBasemap = useCallback((map: MapLibreMap) => {
-    if (map.getSource(TOPO_BASE_SOURCE_ID)) return;
-
-    map.addSource(TOPO_BASE_SOURCE_ID, {
-      type: "raster",
-      tiles: TOPO_TILES,
-      tileSize: 256,
-      maxzoom: TOPO_MAX_ZOOM,
-      bounds: [-180, -56, 180, 60], // Maps-For-Free restricted lat range
-    });
-
-    // Insert at the very bottom so it sits under every overlay / boundary layer.
-    map.addLayer({
-      id: TOPO_BASE_LAYER_ID,
-      type: "raster",
-      source: TOPO_BASE_SOURCE_ID,
-      minzoom: 0,
-      maxzoom: TOPO_MAX_ZOOM,
-      layout: { visibility: "none" },
-    });
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -5787,6 +7445,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (cancelled || !containerRef.current) return;
 
         registerSatelliteProtocol(maplibregl, () => mapRef.current);
+        registerViirsNoDataProtocol(maplibregl);
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {
@@ -5856,11 +7515,20 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           // back to MapLibre's default when the user switches to a layer with fuller coverage.
           maxZoom: DEFAULT_MAP_LAYER === "satellite" ? SATELLITE_MAX_ZOOM_CEILING : 22,
           attributionControl: false,
+          // Without this, MapLibre redraws the ENTIRE style - including the
+          // GFS rain/cloud/pressure image overlays and the fire/AQI point
+          // layers - at every wrapped world copy when zoomed out, producing
+          // duplicated continents and duplicated weather fields side by side.
+          // This app only ever shows one India; one world is correct.
+          renderWorldCopies: false,
         });
 
         mapRef.current = map;
+        if (process.env.NODE_ENV !== "production") {
+          (window as any).__debugMap = map;
+        }
 
-        // --- AOI drawing handlers (Free Hand / Polygon / Rectangle). These all no-op unless
+// --- AOI drawing handlers (Free Hand / Polygon / Rectangle). These all no-op unless
         // a tool is armed via setDrawingTool. The layer-specific boundary handlers are
         // guarded with the same check so a click/drag while drawing doesn't also select
         // states/districts.
@@ -6199,6 +7867,19 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
           "bottom-right"
         );
+
+        // Reset View: tracks whether the map has been rotated/tilted away from
+        // the default north-up, flat orientation, so the button can show only
+        // then. `move` fires on every camera change (drag, rotate, pitch,
+        // zoom) - cheap to check here since state is only set when the
+        // dirty/clean boolean actually flips, not on every event.
+        map.on("move", () => {
+          const dirty = Math.abs(map.getBearing()) > 0.5 || Math.abs(map.getPitch()) > 0.5;
+          if (dirty !== mapTransformDirtyRef.current) {
+            mapTransformDirtyRef.current = dirty;
+            setMapTransformDirty(dirty);
+          }
+        });
 
         // Keep the base map's place labels (city/town/village names baked into the raster
         // tiles) in sync with the scale bar: shown at 1km and below, hidden beyond 1km so
@@ -8132,7 +9813,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID ||
         l.id === RAINVIEWER_RADAR_LAYER_ID ||
         l.id === GFS_WIND_LAYER_ID ||
-        l.id === TOPO_BASE_LAYER_ID ||
+        l.id === GFS_WIND_SPEED_LAYER_ID ||
+        l.id === GIBS_SATELLITE_LAYER_ID ||
+        l.id === VIIRS_LST_LAYER_ID ||
+        l.id === HIMAWARI_LAYER_ID ||
+        l.id === GOES_WEST_LAYER_ID ||
+        l.id === GOES_EAST_LAYER_ID ||
+        l.id === GFS_CLOUD_FILL_LAYER_ID ||
+        (WEATHER_TERRAIN_LAYER_IDS as readonly string[]).includes(l.id) ||
         l.id.startsWith("kml-") ||
         l.id.startsWith("bengaluru-") ||
         l.id.startsWith("extra-") ||
@@ -8160,7 +9848,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         sourceId === VILLAGE_CADASTRALS_SOURCE_ID ||
         sourceId === RAINVIEWER_RADAR_SOURCE_ID ||
         sourceId === GFS_WIND_SOURCE_ID ||
-        sourceId === TOPO_BASE_SOURCE_ID ||
+        sourceId === GFS_WIND_SPEED_SOURCE_ID ||
+        sourceId === GIBS_SATELLITE_SOURCE_ID ||
+        sourceId === VIIRS_LST_SOURCE_ID ||
+        sourceId === HIMAWARI_SOURCE_ID ||
+        sourceId === GOES_WEST_SOURCE_ID ||
+        sourceId === GOES_EAST_SOURCE_ID ||
+        sourceId === GFS_CLOUD_FILL_SOURCE_ID ||
+        sourceId === WEATHER_TERRAIN_DEM_SOURCE_ID ||
         sourceId === "kml-data" ||
         sourceId === "bengaluru-data" ||
         sourceId.startsWith("extra-") ||
@@ -8278,7 +9973,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               type: "raster",
               source: RAINVIEWER_RADAR_SOURCE_ID,
               paint: {
-                "raster-opacity": radarOpacity,
+                "raster-opacity": DISPLAY_OPACITY.radar,
                 "raster-fade-duration": 150,
               },
             },
@@ -8303,15 +9998,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     applyRadarOverlay();
   }, [isRadarEnabled, radarHost, radarFrames, radarFrameIndex]);
-
-  // Opacity changes shouldn't reload tiles - update paint only.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isRadarEnabled) return;
-    if (map.getLayer(RAINVIEWER_RADAR_LAYER_ID)) {
-      map.setPaintProperty(RAINVIEWER_RADAR_LAYER_ID, "raster-opacity", radarOpacity);
-    }
-  }, [isRadarEnabled, radarOpacity]);
 
   // Pastâ†’now animation playback.
   useEffect(() => {
@@ -8351,11 +10037,80 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const activeWindFrame = windFrames[activeWindFrameIndex] ?? null;
     if (!map) return;
 
+    const removeWindSpeedSurface = () => {
+      if (map.getLayer(GFS_WIND_SPEED_LAYER_ID)) map.removeLayer(GFS_WIND_SPEED_LAYER_ID);
+      if (map.getSource(GFS_WIND_SPEED_SOURCE_ID)) map.removeSource(GFS_WIND_SPEED_SOURCE_ID);
+    };
+
+    let handleViewportChange: (() => void) | null = null;
+
+    const cleanupMapListeners = () => {
+      if (handleViewportChange) {
+        map.off("move", handleViewportChange);
+        map.off("zoom", handleViewportChange);
+        map.off("rotate", handleViewportChange);
+        map.off("pitch", handleViewportChange);
+        map.off("resize", handleViewportChange);
+        handleViewportChange = null;
+      }
+    };
+
+    const destroyWindAnimator = () => {
+      windAnimatorRef.current?.destroy();
+      windAnimatorRef.current = null;
+    };
+
     const applyWindOverlay = () => {
+      cleanupMapListeners();
+      destroyWindAnimator();
+      removeWindSpeedSurface();
+
       if (!isWindEnabled || !activeWindFrame) {
-        windAnimatorRef.current?.destroy();
-        windAnimatorRef.current = null;
         return;
+      }
+
+      // Smooth wind-speed colour field underneath the particle canvas, from
+      // the SAME U/V data the particles animate from (section 19: continuous
+      // speed surface + streamlines must agree, since both read one frame).
+      try {
+        const speeds = windSpeedValues(activeWindFrame.u, activeWindFrame.v);
+        const result = renderFieldToImageSource({
+          width: activeWindFrame.width,
+          height: activeWindFrame.height,
+          dx: activeWindFrame.dx,
+          dy: activeWindFrame.dy,
+          bounds: activeWindFrame.bounds,
+          values: speeds,
+          variable: "wind",
+        });
+        if (result) {
+          removeWindSpeedSurface();
+          map.addSource(GFS_WIND_SPEED_SOURCE_ID, {
+            type: "image",
+            url: result.url,
+            coordinates: result.coordinates,
+          });
+          const firstLabelId = findWeatherImageryInsertionPoint(map);
+          map.addLayer(
+            {
+              id: GFS_WIND_SPEED_LAYER_ID,
+              type: "raster",
+              source: GFS_WIND_SPEED_SOURCE_ID,
+              paint: {
+                "raster-opacity": 0.8,
+                "raster-fade-duration": 0,
+                "raster-resampling": "linear",
+              },
+            },
+            firstLabelId
+          );
+          // Re-apply terrain muting now that gfs-wind-speed-layer actually
+          // exists, so the detail hillshade floats directly above it instead
+          // of the "no target yet" top-of-stack fallback.
+          applyWeatherTerrainWeatherMode(map, "wind");
+        }
+      } catch (error) {
+        console.error("Failed to render wind-speed surface:", error);
       }
 
       try {
@@ -8377,7 +10132,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         windAnimatorRef.current.setMap(map);
         windAnimatorRef.current.setDensity(windDensity);
         windAnimatorRef.current.attachTo(overlayHost);
-        windAnimatorRef.current.getCanvas().style.opacity = String(windOpacity);
+        windAnimatorRef.current.getCanvas().style.opacity = String(DISPLAY_OPACITY.windScalar);
         const syncAnimatorCanvasToMap = () => {
           if (!windAnimatorRef.current) return;
           windAnimatorRef.current.resize(
@@ -8391,7 +10146,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         };
 
         syncAnimatorCanvasToMap();
-        const handleViewportChange = () => syncAnimatorCanvasToMap();
+        handleViewportChange = () => syncAnimatorCanvasToMap();
         map.on("move", handleViewportChange);
         map.on("zoom", handleViewportChange);
         map.on("rotate", handleViewportChange);
@@ -8399,15 +10154,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.on("resize", handleViewportChange);
         windAnimatorRef.current.start();
         setWindStatus("ready");
-
-        return () => {
-          map.off("move", handleViewportChange);
-          map.off("zoom", handleViewportChange);
-          map.off("rotate", handleViewportChange);
-          map.off("pitch", handleViewportChange);
-          map.off("resize", handleViewportChange);
-        };
-
       } catch (error) {
         console.error("Failed to apply NOAA GFS wind overlay:", error);
         setWindStatus("unavailable");
@@ -8418,18 +10164,154 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       map.once("load", applyWindOverlay);
       return () => {
         map.off("load", applyWindOverlay);
+        cleanupMapListeners();
+        destroyWindAnimator();
+        removeWindSpeedSurface();
       };
     }
 
-    const cleanup = applyWindOverlay();
+    applyWindOverlay();
     return () => {
-      cleanup?.();
-      if (!isWindEnabled) {
-        windAnimatorRef.current?.destroy();
-        windAnimatorRef.current = null;
-      }
+      cleanupMapListeners();
+      destroyWindAnimator();
+      removeWindSpeedSurface();
     };
-  }, [activeWindFrameIndex, isWindEnabled, windDensity, windFrames, windOpacity]);
+  }, [activeWindFrameIndex, isWindEnabled, windDensity, windFrames]);
+
+  // Keeps a ref to the currently-visualized wind frame in sync, so the
+  // mousemove handler below (registered once per Wind ON/OFF toggle, not
+  // once per frame) always samples the live frame without going stale and
+  // without needing to re-attach the map listener on every frame change.
+  useEffect(() => {
+    activeWindFrameRef.current = windFrames[activeWindFrameIndex] ?? null;
+  }, [windFrames, activeWindFrameIndex]);
+
+  // ── Wind speed/direction under the cursor (Ventusky-style inspector) ───────
+  // Samples the SAME decoded GFS U/V grid the particle animation reads from
+  // (gfsWindCanvas.ts's sampleInterpolatedVector - bilinear interpolation
+  // between the 4 surrounding grid cells, exactly what the particles use to
+  // move). No separate data source, no per-mousemove network request: this
+  // is a pure client-side lookup into data already in memory.
+  const sampleWindAtPending = useCallback(() => {
+    windCursorRafRef.current = null;
+    const pending = pendingWindPointRef.current;
+    if (!pending) return;
+    const frame = activeWindFrameRef.current;
+    if (!frame) {
+      // Wind enabled but the frame hasn't loaded yet - loading state, not a fake value.
+      setWindCursor({
+        screenX: pending.x,
+        screenY: pending.y,
+        speedKmh: null,
+        directionDeg: null,
+        compass: null,
+        loading: true,
+      });
+      return;
+    }
+    const vector = sampleInterpolatedVector(frame, pending.lng, pending.lat);
+    if (!vector) {
+      // Genuinely no data at this point (e.g. near the grid's latitude edge) - never fabricate 0.
+      setWindCursor({
+        screenX: pending.x,
+        screenY: pending.y,
+        speedKmh: null,
+        directionDeg: null,
+        compass: null,
+        loading: false,
+      });
+      return;
+    }
+    const speedMs = Math.sqrt(vector.u * vector.u + vector.v * vector.v);
+    // Direction is meaningless at (near-)zero wind speed - atan2(0,0) would
+    // otherwise report a spurious "N" for genuinely calm air.
+    const hasDirection = speedMs > 0.15; // ~0.5 km/h
+    const directionDeg = hasDirection ? windDirectionFromVector(vector.u, vector.v) : null;
+    setWindCursor({
+      screenX: pending.x,
+      screenY: pending.y,
+      speedKmh: speedMs * 3.6,
+      directionDeg,
+      compass: directionDeg != null ? compassDirection(directionDeg) : null,
+      loading: false,
+    });
+  }, []);
+
+  const scheduleWindSample = useCallback(
+    (screenX: number, screenY: number, lng: number, lat: number) => {
+      pendingWindPointRef.current = { x: screenX, y: screenY, lng, lat };
+      if (windCursorRafRef.current != null) return; // one pending RAF only
+      windCursorRafRef.current = window.requestAnimationFrame(sampleWindAtPending);
+    },
+    [sampleWindAtPending]
+  );
+
+  const handleWindMouseMove = useCallback(
+    (e: MapMouseEvent) => {
+      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
+    },
+    [scheduleWindSample]
+  );
+
+  const handleWindMouseLeave = useCallback(() => {
+    pendingWindPointRef.current = null;
+    if (windCursorRafRef.current != null) {
+      window.cancelAnimationFrame(windCursorRafRef.current);
+      windCursorRafRef.current = null;
+    }
+    setWindCursor(null);
+  }, []);
+
+  // Mobile/tablet: tap-to-inspect (no persistent hover). Reuses the same
+  // sampler as desktop mousemove. Draw AOI takes priority - if a drawing
+  // tool is armed, the tap belongs to AOI drawing, not the wind inspector.
+  const handleWindClick = useCallback(
+    (e: MapMouseEvent) => {
+      if (drawingToolRef.current) return;
+      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
+    },
+    [scheduleWindSample]
+  );
+
+  // Attaches/detaches exactly one set of listeners per Wind ON/OFF toggle -
+  // stable function references throughout (useCallback above), so `off()`
+  // always removes the exact listener `on()` added. Wind OFF tears down
+  // every trace: listeners, pending RAF, pending sample point, tooltip state.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isWindEnabled) {
+      setWindCursor(null);
+      if (windCursorRafRef.current != null) {
+        window.cancelAnimationFrame(windCursorRafRef.current);
+        windCursorRafRef.current = null;
+      }
+      pendingWindPointRef.current = null;
+      return;
+    }
+
+    map.on("mousemove", handleWindMouseMove);
+    map.on("mouseout", handleWindMouseLeave);
+    map.on("click", handleWindClick);
+
+    return () => {
+      map.off("mousemove", handleWindMouseMove);
+      map.off("mouseout", handleWindMouseLeave);
+      map.off("click", handleWindClick);
+      if (windCursorRafRef.current != null) {
+        window.cancelAnimationFrame(windCursorRafRef.current);
+        windCursorRafRef.current = null;
+      }
+      pendingWindPointRef.current = null;
+      setWindCursor(null);
+    };
+  }, [isWindEnabled, handleWindMouseMove, handleWindMouseLeave, handleWindClick]);
+
+  // Reset View: bearing/pitch only, center and zoom (and every other piece of
+  // app state - AOI, weather mode, wind, selected location) are left alone.
+  // A single easeTo call - no source/layer/engine recreation of any kind.
+  const handleResetView = useCallback(() => {
+    mapRef.current?.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+  }, []);
 
   // Pressing Escape clears any loaded boundary (Karnataka, Bengaluru wards, or a manually
   // uploaded KML/KMZ) so the user can freshly load a new one. While an AOI drawing tool is
@@ -8896,6 +10778,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     clearAttributeInfo: () => {
       attributeInfoOpenRef.current = false;
     },
+    getWeatherMode: () => weatherMode,
+    setWeatherMode: (mode: WeatherMapMode) => setWeatherMode(mode),
+    isWeatherControlActive: () => isWeatherControlActive,
   }));
 
   // Loads Karnataka's boundary from MinIO when the user clicks its label on the map
@@ -9548,8 +11433,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     isWindEnabled ||
     weatherMode !== "none";
 
-  // ── Topographic basemap toggle ────────────────────────────────────────────
-  // See the ensureWeatherTopographicBasemap callback above for details.
+  // ── Weather workspace terrain basemap ─────────────────────────────────────
+  // Replaces the normal basemap with a Mapterhorn (Re:Earth-fallback) DEM
+  // color-relief + hillshade canvas whenever any weather overlay is active.
+  // See ../../lib/weather/weatherTerrain.ts for the source/layer setup and
+  // provider resolution. The normal basemap is only hidden once the terrain
+  // source has actually finished loading tiles for the current view, so
+  // there's no blank/gray flash while a slow or unreachable provider loads.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -9584,65 +11474,131 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
     };
 
-    if (active) {
-      // ── Activate topographic basemap ──
-      ensureWeatherTopographicBasemap(map);
-
-      // Cap maxZoom to what the topo tiles support (z9) so the user doesn't
-      // scroll past the last real relief tile into empty gray tiles.
-      const currentMax = map.getMaxZoom();
-      savedMaxZoomRef.current = currentMax;
-      if (currentMax > TOPO_MAX_ZOOM) {
-        map.setMaxZoom(TOPO_MAX_ZOOM);
-      }
-
-      const showTopo = () => {
-        map.setLayoutProperty(TOPO_BASE_LAYER_ID, "visibility", "visible");
-        hideBasemapLayers();
-      };
-
-      // If the topo source already has loaded tiles, switch immediately.
-      // Otherwise wait for the first `sourcedata` from the topo source so
-      // there is no flash of blank canvas between hiding the basemap and
-      // the topo tiles arriving.
-      const topoSource = map.getSource(TOPO_BASE_SOURCE_ID) as any;
-      const hasLoaded = topoSource?.loaded?.() ?? false;
-
-      if (hasLoaded) {
-        showTopo();
-      } else {
-        const onSourceData = (e: any) => {
-          if (e.sourceId !== TOPO_BASE_SOURCE_ID) return;
-          showTopo();
-          map.off("sourcedata", onSourceData);
-        };
-        map.on("sourcedata", onSourceData);
-        // Safety timeout: don't leave the user staring at a blank map if the
-        // topo provider is down. After 4s fall back to showing topo anyway.
-        const fallback = setTimeout(() => {
-          map.off("sourcedata", onSourceData);
-          showTopo();
-        }, 4000);
-        return () => {
-          map.off("sourcedata", onSourceData);
-          clearTimeout(fallback);
-        };
-      }
-    } else {
-      // ── Deactivate topographic basemap ──
+    if (!active) {
+      // ── Deactivate weather terrain ──
       showBasemapLayers();
-
-      if (map.getLayer(TOPO_BASE_LAYER_ID)) {
-        map.setLayoutProperty(TOPO_BASE_LAYER_ID, "visibility", "none");
-      }
-
-      // Restore maxZoom.
-      if (savedMaxZoomRef.current !== null) {
-        map.setMaxZoom(savedMaxZoomRef.current);
-        savedMaxZoomRef.current = null;
-      }
+      setWeatherTerrainVisible(map, false);
+      return;
     }
-  }, [isWeatherControlActive, currentLayer, ensureWeatherTopographicBasemap]);
+
+    // ── Activate weather terrain ──
+    // Weather is always a flat 2D cartographic effect, even if the user had the
+    // 3D "terrain" basemap selected beforehand.
+    removeIndiaTerrain(map);
+
+    const revealTerrain = () => {
+      // Satellite (VIIRS) is polar-orbiting with swath gaps — opaque black
+      // JPEG tiles where no pass exists. Keep the basemap visible so it
+      // shows through those black gaps.
+      // Observed Cloud is multi-geostationary (Himawari + GOES-West/East)
+      // which does NOT have full global coverage — gaps exist between the
+      // satellite disks (e.g. over Africa/Europe). The basemap MUST stay
+      // visible so it shows through in those gaps.
+      // Vegetation (MODIS NDVI) is full-viewport and can replace the basemap.
+      const isFullCoverageImagery = weatherMode === "vegetation";
+      const needsBasemapBehind =
+        weatherMode === "satellite" ||
+        (weatherMode === "clouds" && cloudProduct === "observed");
+      setWeatherTerrainVisible(map, !isFullCoverageImagery && !needsBasemapBehind);
+      // Satellite VIIRS and observed cloud both have coverage gaps — keep
+      // the basemap visible so it fills those gaps naturally. Only hide the
+      // basemap for modes where the imagery truly covers the full viewport
+      // (vegetation/NDVI) or where weather-terrain serves as the background.
+      if (needsBasemapBehind) {
+        showBasemapLayers();
+      } else {
+        hideBasemapLayers();
+      }
+    };
+
+    /** Wires up the DEM source with `provider` and reveals it once ready; returns a cleanup fn. */
+    const activateWithProvider = (provider: WeatherTerrainProvider): (() => void) => {
+      ensureWeatherTerrain(map, provider);
+
+      if (isWeatherTerrainReady(map)) {
+        revealTerrain();
+        return () => {};
+      }
+
+      // Wait for the first `sourcedata` confirming the current view's tiles loaded
+      // so there is no flash of blank canvas between hiding the basemap and the
+      // terrain tiles arriving.
+      const onSourceData = (e: { sourceId?: string }) => {
+        if (e.sourceId !== WEATHER_TERRAIN_DEM_SOURCE_ID || !isWeatherTerrainReady(map)) return;
+        revealTerrain();
+        map.off("sourcedata", onSourceData);
+      };
+      map.on("sourcedata", onSourceData);
+      // Safety timeout: never leave the user staring at the (still-visible) normal
+      // basemap forever if tiles for this exact view never resolve.
+      const fallback = setTimeout(() => {
+        map.off("sourcedata", onSourceData);
+        revealTerrain();
+      }, 4000);
+      return () => {
+        map.off("sourcedata", onSourceData);
+        clearTimeout(fallback);
+      };
+    };
+
+    const cachedProvider = weatherTerrainProviderRef.current;
+    if (cachedProvider !== undefined) {
+      // Already resolved earlier this session (possibly null - both providers unreachable).
+      if (!cachedProvider) return undefined; // Safe failure: keep the normal basemap, no terrain.
+      return activateWithProvider(cachedProvider);
+    }
+
+    let cancelled = false;
+    let cleanupActivation: (() => void) | undefined;
+    resolveWeatherTerrainProvider().then((provider) => {
+      weatherTerrainProviderRef.current = provider;
+      if (cancelled) return;
+      if (!provider) return; // Both providers unreachable - keep the normal basemap.
+      cleanupActivation = activateWithProvider(provider);
+    });
+
+    return () => {
+      cancelled = true;
+      cleanupActivation?.();
+    };
+  }, [isWeatherControlActive, currentLayer, weatherMode, cloudProduct]);
+
+  // ── Weather workspace boundary de-emphasis ────────────────────────────────
+  // The cyan India outline reads as too visually dominant next to Ventusky/MSN-
+  // style weather colouring. Only while the Weather workspace is active, swap
+  // it for a thin, restrained neutral line; restore the exact original paint
+  // (captured on first use) once weather deactivates. Geometry and every other
+  // (non-Weather) boundary styling is untouched.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer("india-boundary-line")) return;
+
+    if (isWeatherControlActive) {
+      if (!originalIndiaBoundaryPaintRef.current) {
+        originalIndiaBoundaryPaintRef.current = {
+          color: map.getPaintProperty("india-boundary-line", "line-color"),
+          opacity: map.getPaintProperty("india-boundary-line", "line-opacity"),
+          width: map.getPaintProperty("india-boundary-line", "line-width"),
+        };
+      }
+      map.setPaintProperty("india-boundary-line", "line-color", "rgba(151, 194, 201, 0.75)");
+      map.setPaintProperty("india-boundary-line", "line-opacity", 0.85);
+      map.setPaintProperty("india-boundary-line", "line-width", [
+        "case",
+        ["boolean", ["feature-state", "hover"], false],
+        2.25,
+        ["boolean", ["feature-state", "selected"], false],
+        1.75,
+        0.85,
+      ]);
+    } else if (originalIndiaBoundaryPaintRef.current) {
+      const original = originalIndiaBoundaryPaintRef.current;
+      map.setPaintProperty("india-boundary-line", "line-color", original.color as any);
+      map.setPaintProperty("india-boundary-line", "line-opacity", original.opacity as any);
+      map.setPaintProperty("india-boundary-line", "line-width", original.width as any);
+      originalIndiaBoundaryPaintRef.current = null;
+    }
+  }, [isWeatherControlActive]);
 
   return (
     <div className="relative w-full h-full explore-map-root">
@@ -9701,6 +11657,158 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         />
       )}
 
+      {/* Reset View - only shown once the map has been rotated/tilted away
+          from the default north-up, flat orientation. Sits above the scale
+          bar (bottom-right, native MapLibre control). */}
+      {!isLoading && !loadError && mapTransformDirty && (
+        <button
+          type="button"
+          onClick={handleResetView}
+          aria-label="Reset map view to north-up"
+          title="Reset view"
+          className="absolute bottom-16 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-white"
+        >
+          <Compass className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Wind speed/direction under the cursor (Ventusky-style). Zero listeners/
+          state when Wind is off - `windCursor` is only ever set while the
+          mousemove/click listeners above are attached. */}
+      {isWindEnabled &&
+        windCursor &&
+        (() => {
+          const TOOLTIP_WIDTH = 148;
+          const TOOLTIP_HEIGHT = windCursor.loading || windCursor.speedKmh == null ? 50 : 78;
+          const OFFSET = 14;
+          const containerWidth = containerRef.current?.clientWidth ?? 0;
+          const containerHeight = containerRef.current?.clientHeight ?? 0;
+
+          let left = windCursor.screenX + OFFSET;
+          let top = windCursor.screenY - OFFSET - TOOLTIP_HEIGHT;
+
+          if (containerWidth && left + TOOLTIP_WIDTH > containerWidth - 8) {
+            left = windCursor.screenX - OFFSET - TOOLTIP_WIDTH;
+          }
+          if (top < 8) {
+            top = windCursor.screenY + OFFSET;
+          }
+          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - TOOLTIP_WIDTH - 8));
+          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - TOOLTIP_HEIGHT - 8));
+
+          const activeFrame = windFrames[activeWindFrameIndex];
+
+          return (
+            <div
+              className="pointer-events-none absolute z-30 rounded-xl border border-white/60 bg-white/90 px-3 py-2 shadow-lg backdrop-blur-md"
+              style={{ left, top, width: TOOLTIP_WIDTH }}
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Wind</p>
+              {windCursor.loading ? (
+                <p className="mt-0.5 text-xs text-slate-500">Loading wind data...</p>
+              ) : windCursor.speedKmh == null ? (
+                <p className="mt-0.5 text-xs text-slate-500">No wind data</p>
+              ) : (
+                <>
+                  <p className="mt-0.5 text-base font-semibold text-obsidian-graphite">
+                    {windCursor.speedKmh.toFixed(1)} km/h
+                  </p>
+                  {windCursor.compass != null && windCursor.directionDeg != null && (
+                    <p className="text-xs text-slate-500">
+                      {windCursor.compass} · {Math.round(windCursor.directionDeg)}°
+                    </p>
+                  )}
+                  {activeFrame && (
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      {formatIstTime(activeFrame.forecastTime)}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+      {/* Fire detection click popup - compact real FIRMS metadata, explicitly
+          not a fire perimeter (see the note in the panel itself). Dismissible
+          via the close button; also cleared automatically on mode change. */}
+      {weatherMode === "fire" &&
+        selectedFireDetection &&
+        (() => {
+          const POPUP_WIDTH = 220;
+          const POPUP_HEIGHT = 168;
+          const OFFSET = 14;
+          const containerWidth = containerRef.current?.clientWidth ?? 0;
+          const containerHeight = containerRef.current?.clientHeight ?? 0;
+          const { detection } = selectedFireDetection;
+
+          let left = selectedFireDetection.screenX + OFFSET;
+          let top = selectedFireDetection.screenY - OFFSET - POPUP_HEIGHT;
+          if (containerWidth && left + POPUP_WIDTH > containerWidth - 8) {
+            left = selectedFireDetection.screenX - OFFSET - POPUP_WIDTH;
+          }
+          if (top < 8) top = selectedFireDetection.screenY + OFFSET;
+          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - POPUP_WIDTH - 8));
+          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - POPUP_HEIGHT - 8));
+
+          const confidenceLabel =
+            detection.confidence == null
+              ? "—"
+              : detection.confidence >= 90
+              ? "High"
+              : detection.confidence >= 50
+              ? "Nominal"
+              : "Low";
+
+          return (
+            <div
+              className="absolute z-30 rounded-xl border border-white/60 bg-white/95 px-3.5 py-3 shadow-xl backdrop-blur-md"
+              style={{ left, top, width: POPUP_WIDTH }}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-600">
+                  Active Fire Detection
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFireDetection(null)}
+                  aria-label="Close"
+                  className="-mr-1 -mt-1 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  ×
+                </button>
+              </div>
+              <dl className="mt-1.5 space-y-1 text-xs">
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Acquired</dt>
+                  <dd className="font-medium text-slate-900">{formatIstTime(detection.acquiredAt)}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Satellite</dt>
+                  <dd className="font-medium text-slate-900">{detection.satellite}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Confidence</dt>
+                  <dd className="font-medium text-slate-900">{confidenceLabel}</dd>
+                </div>
+                {detection.frp != null && (
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">FRP</dt>
+                    <dd className="font-medium text-slate-900">{detection.frp.toFixed(1)} MW</dd>
+                  </div>
+                )}
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Source</dt>
+                  <dd className="font-medium text-slate-900">NASA FIRMS / VIIRS</dd>
+                </div>
+              </dl>
+              <p className="mt-2 border-t border-slate-100 pt-1.5 text-[10px] leading-snug text-slate-400">
+                This is an active-fire satellite detection, not a mapped fire perimeter.
+              </p>
+            </div>
+          );
+        })()}
+
       {/* Non-blocking notice for a drill-down layer that failed to load (e.g.
           no boundary data uploaded yet for this state/place) â€” small and
           dismisses itself, never covers the map. */}
@@ -9752,22 +11860,216 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               </p>
 
               <div className="mt-4">
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  Weather Map
-                </p>
-                <WeatherLayerToolbar
-                  activeLayer={weatherMode === "none" ? null : (weatherMode as WeatherLayerKey)}
-                  onLayerSelect={(layer) => {
-                    // Only accept modes that exist in WeatherMapMode
-                    if (layer === "temperature" || layer === "rain" || layer === "wind" || layer === "clouds" || layer === "air-quality" || layer === null) {
-                      setWeatherMode(layer ?? "none");
-                    }
-                  }}
-                />
+                {(weatherMode === "rain" || weatherMode === "clouds") && (
+                  <div role="tablist" className="flex gap-1 rounded-xl bg-gray-100 p-1">
+                    {(["observed", "forecast"] as const).map((product) => {
+                      const active =
+                        weatherMode === "rain" ? rainProduct === product : cloudProduct === product;
+                      return (
+                        <button
+                          key={product}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() =>
+                            weatherMode === "rain" ? setRainProduct(product) : setCloudProduct(product)
+                          }
+                          className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                            active
+                              ? "bg-white text-obsidian-graphite shadow-sm"
+                              : "text-slate-500 hover:text-obsidian-graphite"
+                          }`}
+                        >
+                          {product}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
-                {(weatherMode === "temperature" ||
-                  weatherMode === "rain" ||
-                  weatherMode === "clouds") && (
+                {weatherMode === "clouds" && cloudProduct === "observed" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">Multi-Geo Composite</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Satellites</span>
+                      <span className="text-right font-medium text-slate-900">
+                        Himawari-9 + GOES-West + GOES-East
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{HIMAWARI_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Coverage</span>
+                      <span className="text-right font-medium text-slate-900">Asia-Pacific, Americas, Atlantic</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {HIMAWARI_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observed</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {himawariFrames[himawariFrameIndex]
+                          ? formatIstTime(himawariFrames[himawariFrameIndex]!)
+                          : "Resolving..."}
+                      </span>
+                    </div>
+                    {/* Satellite availability indicators */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        himawariStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${himawariStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        Himawari
+                      </span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        goesWestStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${goesWestStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        GOES-West
+                      </span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        goesEastStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${goesEastStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        GOES-East
+                      </span>
+                    </div>
+                    {himawariStatus === "ready" && himawariFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHimawariPlaying(false);
+                              setHimawariFrameIndex((i) =>
+                                i === 0 ? himawariFrames.length - 1 : i - 1
+                              );
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsHimawariPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isHimawariPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHimawariPlaying(false);
+                              setHimawariFrameIndex((i) => (i + 1) % himawariFrames.length);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {himawariFrames.length} frames · every {HIMAWARI_CADENCE_MINUTES} min (real
+                          timestamps only)
+                        </p>
+                      </div>
+                    )}
+                    {himawariStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving satellite frames...</p>
+                    )}
+                    {himawariStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        Satellite imagery is temporarily unavailable.
+                      </p>
+                    )}
+                    <p className="text-[11px] text-slate-400">{HIMAWARI_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Multi-geostationary IR composite (Band 13, 10.3 µm). Himawari covers Asia-Pacific, GOES-West covers Americas/Pacific, GOES-East covers Americas/Atlantic. Gaps near Africa/Europe reflect no geostationary coverage from these three satellites.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "rain" && rainProduct === "observed" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{IMERG_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        ~{IMERG_NOMINAL_RESOLUTION_KM} km (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observed</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {imergFrames[imergFrameIndex] ? formatIstTime(imergFrames[imergFrameIndex]!) : "Resolving..."}
+                      </span>
+                    </div>
+                    {imergStatus === "ready" && imergFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsImergPlaying(false);
+                              setImergFrameIndex((i) => (i === 0 ? imergFrames.length - 1 : i - 1));
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsImergPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isImergPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsImergPlaying(false);
+                              setImergFrameIndex((i) => (i + 1) % imergFrames.length);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {imergFrames.length} frames · every {IMERG_CADENCE_MINUTES} min (real timestamps
+                          only)
+                        </p>
+                      </div>
+                    )}
+                    {imergStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest GPM IMERG frames...</p>
+                    )}
+                    {imergStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        Satellite precipitation is temporarily unavailable.
+                      </p>
+                    )}
+                    <p className="text-[11px] text-slate-400">{IMERG_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Real satellite-derived precipitation - typically runs 3-6h behind now (genuine
+                      NRT processing latency, not a bug).
+                    </p>
+                  </div>
+                )}
+
+                {((weatherMode === "rain" && rainProduct === "forecast") ||
+                  (weatherMode === "clouds" && cloudProduct === "forecast") ||
+                  weatherMode === "pressure") && (
                   <div className="mt-3 space-y-3 text-sm text-slate-700">
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-slate-500">Active</span>
@@ -9788,24 +12090,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                             )
                           : "Loading..."}
                       </span>
-                    </div>
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="text-slate-500">Opacity</span>
-                        <span className="font-medium text-slate-900">
-                          {Math.round(weatherFieldOpacity * 100)}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={Math.round(weatherFieldOpacity * 100)}
-                        onChange={(event) =>
-                          setWeatherFieldOpacity(Number(event.target.value) / 100)
-                        }
-                        className="w-full accent-atlas-cobalt"
-                      />
                     </div>
 
                     {weatherFieldStatus === "ready" && weatherFieldFrames.length > 0 && (
@@ -9864,6 +12148,498 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                     )}
 
                     <WeatherFieldLegend mode={weatherMode} />
+
+                    {weatherMode === "pressure" && (
+                      <label className="flex items-center gap-2 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={showPressureExtrema}
+                          onChange={(event) => setShowPressureExtrema(event.target.checked)}
+                          className="accent-atlas-cobalt"
+                        />
+                        Show H/L centers
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {weatherMode === "temperature" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Mode
+                      </p>
+                      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setTemperatureProduct("surface")}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                            temperatureProduct === "surface"
+                              ? "bg-white text-slate-900 shadow-sm"
+                              : "text-slate-500 hover:text-slate-900"
+                          }`}
+                        >
+                          Surface Temperature
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTemperatureProduct("forecast")}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                            temperatureProduct === "forecast"
+                              ? "bg-white text-slate-900 shadow-sm"
+                              : "text-slate-500 hover:text-slate-900"
+                          }`}
+                        >
+                          Air Temperature Forecast
+                        </button>
+                      </div>
+                    </div>
+
+                    {temperatureProduct === "surface" ? (
+                      <>
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Platform
+                          </p>
+                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                            {(["auto", "SNPP", "NOAA20", "NOAA21"] as const).map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => setLstPlatform(option)}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
+                                  lstPlatform === option
+                                    ? "bg-white text-slate-900 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-900"
+                                }`}
+                              >
+                                {option === "auto" ? "Auto" : option}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Observation
+                          </p>
+                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                            {(["auto", "day", "night"] as const).map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => setLstDayNightSelection(option)}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
+                                  lstDayNightSelection === option
+                                    ? "bg-white text-slate-900 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-900"
+                                }`}
+                              >
+                                {option}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {lstCoverage && (
+                          <div className="rounded-xl bg-amber-50 border border-amber-200 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-amber-800">Coverage over India</span>
+                              <span className="text-xs font-mono text-amber-700">
+                                {lstCoverage.coveragePercent}% ({lstCoverage.tilesValid}/{lstCoverage.tilesChecked} tiles)
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-amber-700 mt-1">
+                              VIIRS is a polar-orbiting sensor with swath gaps. Blank regions = no satellite pass / cloud / invalid QA.
+                              Not interpolated or fabricated.
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Satellite</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {lstResolved ? lstResolved.satelliteLabel : "Resolving..."}
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Platform</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {lstResolved ? lstResolved.platform : "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Instrument</span>
+                          <span className="text-right font-medium text-slate-900">{VIIRS_LST_INSTRUMENT}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Product</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {VIIRS_LST_PRODUCT_NAME} ({lstEffectiveDayNight === "day" ? "Day" : "Night"})
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Resolution</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {VIIRS_LST_NOMINAL_RESOLUTION_M} m (nominal, Level 7 / maxzoom 7)
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Observation</span>
+                          <span className="text-right font-medium text-slate-900">{lstDate ?? "Loading..."}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Source</span>
+                          <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                        </div>
+
+
+                        {lstStatus === "ready" && lstAvailableDates.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsLstPlaying(false);
+                                  stepLstDate(-1);
+                                }}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                Prev Day
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsLstPlaying((current) => !current)}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                {isLstPlaying ? "Pause" : "Play"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsLstPlaying(false);
+                                  stepLstDate(1);
+                                }}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                Next Day
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsLstPlaying(false);
+                                if (lstAvailableDates[0]) setLstDate(lstAvailableDates[0]);
+                              }}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            >
+                              Latest
+                            </button>
+                          </div>
+                        )}
+                        {lstStatus === "loading" && (
+                          <p className="text-xs text-slate-500">Loading latest VIIRS surface temperature...</p>
+                        )}
+                        {lstStatus === "unavailable" && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-amber-700">Surface temperature temporarily unavailable.</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLstResolvedDay(undefined);
+                                setLstResolvedNight(undefined);
+                              }}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Debug panel */}
+                        <div className="border-t border-slate-200 pt-2 mt-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={showLstDebug}
+                              onChange={(e) => setShowLstDebug(e.target.checked)}
+                              className="rounded border-slate-300 accent-atlas-cobalt"
+                            />
+                            <span className="text-xs text-slate-600">Debug pixel inspector (dev only)</span>
+                          </label>
+                          {showLstDebug && lstResolved && (
+                            <div className="mt-2 p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono space-y-1 text-slate-700">
+                              <div><strong>Layer:</strong> {lstResolved.layer}</div>
+                              <div><strong>Platform:</strong> {lstResolved.platform}</div>
+                              <div><strong>Day/Night:</strong> {lstResolved.dayNight}</div>
+                              <div><strong>Date:</strong> {lstResolved.date}</div>
+                              <div><strong>TileMatrixSet:</strong> {VIIRS_LST_TILE_MATRIX_SET}</div>
+                              <div><strong>Tile Size:</strong> {VIIRS_LST_TILE_SIZE}×{VIIRS_LST_TILE_SIZE}</div>
+                              <div><strong>Native Max Zoom:</strong> {VIIRS_LST_NATIVE_MAX_ZOOM}</div>
+                              <div><strong>Format:</strong> {VIIRS_LST_FORMAT}</div>
+                              <div><strong>Nominal Resolution:</strong> {VIIRS_LST_NOMINAL_RESOLUTION_M} m</div>
+                              <div><strong>Projection:</strong> Web Mercator (EPSG:3857)</div>
+                              <div><strong>Product Name:</strong> {VIIRS_LST_PRODUCT_NAME}</div>
+                              <div><strong>Attribution:</strong> {VIIRS_LST_ATTRIBUTION}</div>
+                              <hr className="border-slate-200 my-1" />
+                              <div className="text-amber-700"><strong>NOTE:</strong> GIBS serves pre-colorized browse images.</div>
+                              <div className="text-amber-700">No raw Kelvin/Celsius values available per pixel.</div>
+                              <div className="text-amber-700">Click-to-inspect shows "Pixel temperature lookup unavailable".</div>
+                              <div className="text-amber-700">Cloud/invalid pixels = transparent (not fabricated).</div>
+                              {lstCoverage && (
+                                <>
+                                  <hr className="border-slate-200 my-1" />
+                                  <div><strong>Coverage:</strong> {lstCoverage.coveragePercent}% over India</div>
+                                  <div><strong>Valid tiles:</strong> {lstCoverage.tilesValid}/{lstCoverage.tilesChecked}</div>
+                                  <div><strong>India bounds:</strong> {lstCoverage.indiaBounds.west}°–{lstCoverage.indiaBounds.east}°E, {lstCoverage.indiaBounds.south}°–{lstCoverage.indiaBounds.north}°N</div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-slate-400">
+                          Land Surface Temperature (soil/vegetation/roofs/roads), not air temperature. Colour scale is
+                          NASA&apos;s official LST palette. Cloud-covered/invalid areas are transparent - not fabricated.
+                        </p>
+                        <p className="text-[11px] text-slate-400">{VIIRS_LST_ATTRIBUTION}</p>
+                      </>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Model</span>
+                          <span className="text-right font-medium text-slate-900">BharatFS</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Resolution</span>
+                          <span className="text-right font-medium text-slate-900">~6 km</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Variable</span>
+                          <span className="text-right font-medium text-slate-900">2 m Air Temperature</span>
+                        </div>
+                        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          BharatFS data access not configured. No official machine-readable BharatFS API/GRIB
+                          distribution was found during research - see the report for what access would be needed.
+                          Surface Temperature (NASA VIIRS) remains fully available above.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {weatherMode === "satellite" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Satellite</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {satelliteResolved ? satelliteResolved.product.satelliteLabel : "Resolving..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">{GIBS_INSTRUMENT}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{GIBS_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {GIBS_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observation</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {satelliteDate ?? "Loading..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                    </div>
+
+
+                    {satelliteStatus === "ready" && satelliteAvailableDates.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSatellitePlaying(false);
+                              stepSatelliteDate(-1);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsSatellitePlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isSatellitePlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSatellitePlaying(false);
+                              stepSatelliteDate(1);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {satelliteAvailableDates.length} recent day
+                          {satelliteAvailableDates.length === 1 ? "" : "s"} available · Status: Latest available
+                        </p>
+                      </div>
+                    )}
+                    {satelliteStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest NASA GIBS imagery...</p>
+                    )}
+                    {satelliteStatus === "unavailable" && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-700">
+                          Satellite imagery is temporarily unavailable (NOAA-21/NOAA-20/SNPP all unreachable).
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetGibsSatelliteResolution();
+                            setSatelliteResolved(undefined);
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-slate-400">{GIBS_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      VIIRS is polar-orbiting: it images the Earth in swaths through the day, not
+                      all at once. Black areas are regions today&apos;s pass hasn&apos;t covered yet
+                      (or cloud/no-data) - not a rendering error.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "vegetation" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">{NDVI_INSTRUMENT}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{NDVI_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {NDVI_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Composite period</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {ndviResolved ? ndviResolved.date : "Resolving..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                    </div>
+
+
+                    {ndviStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest NDVI composite...</p>
+                    )}
+                    {ndviStatus === "unavailable" && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-700">
+                          Vegetation imagery is temporarily unavailable (no recent composite reachable).
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetNdviResolution();
+                            setNdviResolved(undefined);
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-slate-400">{NDVI_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Brown/tan = sparse vegetation · green = dense vegetation.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "fire" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA FIRMS</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Detections</span>
+                      <span className="text-right font-medium text-slate-900">{fireDetections.length}</span>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Time window</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {([24, 48, 72] as const).map((hours) => (
+                          <button
+                            key={hours}
+                            type="button"
+                            onClick={() => setFireHours(hours)}
+                            className={`flex-1 rounded-xl border px-2 py-1.5 text-xs font-medium transition-colors ${
+                              fireHours === hours
+                                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            {hours}h
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#ffd700" }} /> Low
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#ff9900" }} /> Moderate
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#e81e1e" }} /> High
+                      </span>
+                      <span>confidence</span>
+                    </div>
+                    {fireStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Loading NASA FIRMS detections...</p>
+                    )}
+                    {fireStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        {fireMessage ?? "NASA FIRMS is temporarily unavailable."}
+                      </p>
+                    )}
+                    {fireStatus === "ready" && fireDetections.length === 0 && (
+                      <p className="text-xs text-slate-500">No active fires detected near this view.</p>
+                    )}
+                    <p className="text-[11px] text-slate-400">
+                      VIIRS NOAA-21 + NOAA-20 NRT · pans/zooms refresh detections automatically.
+                    </p>
                   </div>
                 )}
               </div>
@@ -9936,22 +12712,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                       RainViewer composite
                     </span>
                   </div>
-                  <div>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className="text-slate-500">Opacity</span>
-                      <span className="font-medium text-slate-900">
-                        {Math.round(radarOpacity * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={Math.round(radarOpacity * 100)}
-                      onChange={(event) => setRadarOpacity(Number(event.target.value) / 100)}
-                      className="w-full accent-atlas-cobalt"
-                    />
-                  </div>
                 </div>
 
                 {isRadarEnabled && radarStatus === "ready" && radarFrames.length > 0 && (
@@ -9986,7 +12746,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                       </button>
                     </div>
                     <p className="text-xs text-slate-400">
-                      {radarFrameIndex + 1} / {radarFrames.length} frames Â· past â†’ now
+                      {radarFrameIndex + 1} / {radarFrames.length} frames · past → now
                     </p>
                   </div>
                 )}
@@ -10027,22 +12787,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                         ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
                         : "Loading..."}
                     </span>
-                  </div>
-                  <div>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className="text-slate-500">Opacity</span>
-                      <span className="font-medium text-slate-900">
-                        {Math.round(windOpacity * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={Math.round(windOpacity * 100)}
-                      onChange={(event) => setWindOpacity(Number(event.target.value) / 100)}
-                      className="w-full accent-atlas-cobalt"
-                    />
                   </div>
                   <div>
                     <div className="mb-2 flex items-center justify-between gap-3">
@@ -10107,22 +12851,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                             }).format(new Date(aqiGrid.fetchedAt))
                           : "Loading..."}
                       </span>
-                    </div>
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="text-slate-500">Opacity</span>
-                        <span className="font-medium text-slate-900">
-                          {Math.round(aqiOpacity * 100)}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={Math.round(aqiOpacity * 100)}
-                        onChange={(event) => setAqiOpacity(Number(event.target.value) / 100)}
-                        className="w-full accent-atlas-cobalt"
-                      />
                     </div>
 
                     {aqiStatus === "loading" && (
@@ -10193,22 +12921,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                       ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
                       : "Loading..."}
                   </span>
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-slate-500">Opacity</span>
-                    <span className="font-medium text-slate-900">
-                      {Math.round(windOpacity * 100)}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={Math.round(windOpacity * 100)}
-                    onChange={(event) => setWindOpacity(Number(event.target.value) / 100)}
-                    className="w-full accent-atlas-cobalt"
-                  />
                 </div>
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -10358,10 +13070,20 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
                 {weatherPanel.current?.weather.status === "AVAILABLE" && weatherPanel.current.weather.data ? (
                   <div className="space-y-2">
+                    <WeatherCurrentHero
+                      temperatureC={weatherPanel.current.weather.data.temperatureC}
+                      feelsLikeC={weatherPanel.current.weather.data.feelsLikeC}
+                      code={weatherPanel.current.weather.data.weatherCode}
+                      isDay={weatherPanel.current.weather.data.isDay}
+                      windSpeedKmh={weatherPanel.current.weather.data.windSpeedKmh}
+                      updatedLabel={formatIstTime(weatherPanel.current.weather.data.observationTime)}
+                      size="md"
+                    />
+                    <div className="!mt-3 border-t border-slate-200 pt-2" />
                     {selectedWeatherMetrics.has("temperature") && (
                       <WeatherRow
                         label="Temperature"
-                        value={formatMetric(weatherPanel.current.weather.data.temperatureC, "Â°C")}
+                        value={formatMetric(weatherPanel.current.weather.data.temperatureC, "°C")}
                       />
                     )}
                     {selectedWeatherMetrics.has("humidity") && (
@@ -10437,7 +13159,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                   {weatherPanel.current?.weather.data?.observationTime
                     ? `Observed: ${formatIstTime(
                         weatherPanel.current.weather.data.observationTime
-                      )} Â· `
+                      )} · `
                     : ""}
                   AQI is modeled, not an official CPCB reading.
                 </p>
@@ -10466,13 +13188,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                       return (
                         <div key={day.date} className="rounded-2xl bg-white p-3 shadow-sm">
                           <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">
-                                {formatForecastDate(day.date)}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                {weatherCodeLabel(day.weatherCode)}
-                              </p>
+                            <div className="flex items-center gap-2">
+                              <WeatherConditionIcon code={day.weatherCode} isDay size={22} />
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {formatForecastDate(day.date)}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {weatherCodeLabel(day.weatherCode)}
+                                </p>
+                              </div>
                             </div>
                             <div className="text-right text-xs text-slate-500">
                               <p>Rain {formatMetric(day.precipitationSumMm, "mm")}</p>
@@ -10485,8 +13210,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
                                 <span>Temperature</span>
                                 <span>
-                                  {formatMetric(day.temperatureMinC, "Â°C")} to{" "}
-                                  {formatMetric(day.temperatureMaxC, "Â°C")}
+                                  {formatMetric(day.temperatureMinC, "°C")} to{" "}
+                                  {formatMetric(day.temperatureMaxC, "°C")}
                                 </span>
                               </div>
                               <div className="relative h-2 rounded-full bg-slate-200">
@@ -10569,7 +13294,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                     {selectedWeatherMetrics.has("temperature") && (
                       <WeatherRow
                         label="Temperature"
-                        value={formatMetric(weatherHoverCard.data.weather.data.temperatureC, "Â°C")}
+                        value={formatMetric(weatherHoverCard.data.weather.data.temperatureC, "°C")}
                       />
                     )}
                     {selectedWeatherMetrics.has("humidity") && (
@@ -10621,9 +13346,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
                 <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.68)" }}>
                   {weatherHoverCard.data.weather.data?.observationTime &&
-                    `Observed: ${formatIstTime(weatherHoverCard.data.weather.data.observationTime)} Â· `}
+                    `Observed: ${formatIstTime(weatherHoverCard.data.weather.data.observationTime)} · `}
                   Source: Open-Meteo
-                  {selectedWeatherMetrics.has("aqi") ? " Â· AQI is modeled, not an official CPCB reading" : ""}
+                  {selectedWeatherMetrics.has("aqi") ? " · AQI is modeled, not an official CPCB reading" : ""}
                 </p>
               </div>
             )}

@@ -9,6 +9,7 @@ const OPEN_METEO_BASE = "https://api.open-meteo.com/v1";
 
 export interface OpenMeteoCurrent {
   temperature_2m: number | null;
+  apparent_temperature: number | null;
   relative_humidity_2m: number | null;
   precipitation: number | null;
   rain: number | null;
@@ -16,6 +17,7 @@ export interface OpenMeteoCurrent {
   wind_direction_10m: number | null;
   surface_pressure: number | null;
   weather_code: number | null;
+  is_day: number | null;
   time: string;
 }
 
@@ -50,7 +52,7 @@ export interface OpenMeteoAqiResponse {
   current: OpenMeteoAqiCurrent;
 }
 
-function compassDirection(degrees: number | null): string | null {
+export function compassDirection(degrees: number | null): string | null {
   if (degrees == null) return null;
   const dirs: string[] = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
   const idx = Math.round(((degrees % 360) + 360) % 360 / 22.5) % 16;
@@ -65,7 +67,7 @@ export async function fetchOpenMeteoWeather(
   const params = new URLSearchParams({
     latitude: String(lat),
     longitude: String(lng),
-    current: "temperature_2m,relative_humidity_2m,precipitation,rain,wind_speed_10m,wind_direction_10m,surface_pressure,weather_code",
+    current: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,wind_speed_10m,wind_direction_10m,surface_pressure,weather_code,is_day",
     daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max",
     timezone: "auto",
     forecast_days: "7",
@@ -98,6 +100,7 @@ export function openMeteoToWeatherResponse(data: OpenMeteoWeatherResponse) {
     latitude: 0,
     longitude: 0,
     temperatureC: c.temperature_2m,
+    feelsLikeC: c.apparent_temperature,
     relativeHumidityPercent: c.relative_humidity_2m,
     precipitationMm: c.precipitation,
     rainMm: c.rain,
@@ -107,6 +110,7 @@ export function openMeteoToWeatherResponse(data: OpenMeteoWeatherResponse) {
     surfacePressureHpa: c.surface_pressure,
     observationTime: c.time,
     weatherCode: c.weather_code,
+    isDay: c.is_day == null ? null : c.is_day === 1,
     source: "Open-Meteo" as const,
     dataStatus: "LIVE" as const,
     fetchedAt: new Date().toISOString(),

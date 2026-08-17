@@ -42,6 +42,7 @@ _SHORT_NAME_SLOTS = {
     "10v": "v",
     "prate": "prate",
     "tcc": "tcdc",
+    "prmsl": "prmsl",
 }
 GFS_DX = 0.25
 GFS_DY = 0.25
@@ -72,6 +73,8 @@ def build_gfs_filter_url(run_date: date, cycle_hour: int, forecast_hour: int) ->
             "var_PRATE": "on",
             "lev_entire_atmosphere": "on",
             "var_TCDC": "on",
+            "lev_mean_sea_level": "on",
+            "var_PRMSL": "on",
             "dir": directory,
         }
     )
@@ -125,6 +128,23 @@ def _normalize_grid_values(
     if not j_scans_positively:
         rows = list(reversed(rows))
     return [value for row in rows for value in row]
+
+
+def _rotate_grid_longitude(
+    values: list[float], width: int, height: int, shift: int
+) -> list[float]:
+    """Rotate every row of a row-major (south→north, west→east) scalar grid
+    left by `shift` columns so the antimeridian (lon 180°) becomes column 0.
+    This converts a native 0..360° GFS longitude grid into the -180..180°
+    domain the frontend's MapLibre projection renders against."""
+    if shift <= 0 or shift >= width:
+        return values
+    out: list[float] = []
+    for row in range(height):
+        base = row * width
+        row_vals = values[base : base + width]
+        out.extend(row_vals[shift:] + row_vals[:shift])
+    return out
 
 
 def decode_combined_grid(grib_bytes: bytes) -> dict[str, Any]:
@@ -186,7 +206,7 @@ def decode_combined_grid(grib_bytes: bytes) -> dict[str, Any]:
         except OSError:
             pass
 
-    missing = {slot for slot in ("u", "v", "tmp", "prate", "tcdc") if slot not in slots}
+    missing = {slot for slot in ("u", "v", "tmp", "prate", "tcdc", "prmsl") if slot not in slots}
     if missing:
         raise UpstreamUnavailableError(f"NOAA NOMADS GFS missing fields: {sorted(missing)}")
 
@@ -194,6 +214,30 @@ def decode_combined_grid(grib_bytes: bytes) -> dict[str, Any]:
     v_meta = slots["v"]
     if u_meta["width"] != v_meta["width"] or u_meta["height"] != v_meta["height"]:
         raise UpstreamUnavailableError("NOAA NOMADS GFS")
+
+    width = u_meta["width"]
+    height = u_meta["height"]
+    # GFS longitudes are natively 0..360 (column 0 = lon 0°E), but the frontend
+    # projects every field against a -180..180° domain via `bounds`. Rotate each
+    # grid left by the column offset of the antimeridian (lon 180°) so column 0
+    # maps to -180°, aligning the field with the map. Without this the entire
+    # field - temperature, wind, rain and cloud - is drawn 180° east of its true
+    # location (e.g. India shows eastern-Pacific values).
+    gfs_longitudes = sorted(float(v) for v in u_meta["longitudes"])
+    shift = next((i for i, lon in enumerate(gfs_longitudes) if lon >= 180.0), 0)
+    if shift:
+        for slot in ("u", "v", "tmp", "prate", "tcdc", "prmsl"):
+            slots[slot]["values"] = _rotate_grid_longitude(
+                slots[slot]["values"], width, height, shift
+            )
+        rotated_longitudes: list[float] = []
+        for i in range(width):
+            lon = gfs_longitudes[(i + shift) % width]
+            if lon > 180.0:
+                lon -= 360.0
+            rotated_longitudes.append(lon)
+    else:
+        rotated_longitudes = gfs_longitudes
 
     return {
         "run_time": _to_utc_from_gfs(u_meta["data_date"], u_meta["data_time"]).isoformat(),
@@ -207,12 +251,13 @@ def decode_combined_grid(grib_bytes: bytes) -> dict[str, Any]:
         "dx": GFS_DX,
         "dy": GFS_DY,
         "latitudes": u_meta["latitudes"],
-        "longitudes": u_meta["longitudes"],
+        "longitudes": rotated_longitudes,
         "u": slots["u"]["values"],
         "v": slots["v"]["values"],
         "tmp": slots["tmp"]["values"],
         "prate": slots["prate"]["values"],
         "tcdc": slots["tcdc"]["values"],
+        "prmsl": slots["prmsl"]["values"],
     }
 
 
@@ -295,7 +340,9 @@ async def get_gfs_wind_frame(redis: Redis, forecast_hour: int) -> GfsWindFrameRe
 
 
 async def get_gfs_field_frame(
-    redis: Redis, forecast_hour: int, variable: Literal["temperature", "precipitation", "clouds"]
+    redis: Redis,
+    forecast_hour: int,
+    variable: Literal["temperature", "precipitation", "clouds", "pressure"],
 ) -> GfsWeatherFieldFrameResponse:
     grid = await _get_combined_grid(redis, forecast_hour)
 
@@ -306,6 +353,10 @@ async def get_gfs_field_frame(
         # PRATE is kg m-2 s-1; 1 kg m-2 == 1 mm, so ×3600 yields mm/h.
         values = [max(0.0, rate * 3600.0) for rate in grid["prate"]]
         unit = "mm/h"
+    elif variable == "pressure":
+        # PRMSL is in Pa; ÷100 yields hPa.
+        values = [pa / 100.0 for pa in grid["prmsl"]]
+        unit = "hPa"
     else:  # clouds
         values = grid["tcdc"]
         unit = "%"

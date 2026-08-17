@@ -60,6 +60,7 @@ function findDemFile(z: number): string {
     ...(z <= 8 ? roots.map((root) => path.join(root, "India_DEM_overview.tif")) : []),
     process.env.INDIA_DEM_PATH,
     ...roots.map((root) => path.join(root, "India_DEM.tif")),
+    ...roots.map((root) => path.join(root, "India_SRTM_30M_EPSG3857.tif")),
   ].filter((candidate): candidate is string => Boolean(candidate));
   const found = candidates.find((candidate) => existsSync(candidate));
   if (!found) throw new Error("India_DEM.tif was not found; set INDIA_DEM_PATH if it was moved");

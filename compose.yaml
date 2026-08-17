@@ -138,8 +138,8 @@ services:
     env_file:
       - .env
     environment:
-      - INDIA_DEM_PATH=/app/DEM_Terrain/India_DEM.tif
-      - INDIA_DEM_OVERVIEW_PATH=/app/DEM_Terrain/India_DEM_overview.tif
+      - INDIA_DEM_PATH=/app/DEM_Terrain/India_SRTM_30M_EPSG3857.tif
+      - INDIA_DEM_OVERVIEW_PATH=/app/DEM_Terrain/India_SRTM_30M_EPSG3857.tif
     volumes:
       - ./DEM_Terrain:/app/DEM_Terrain:ro
     depends_on:

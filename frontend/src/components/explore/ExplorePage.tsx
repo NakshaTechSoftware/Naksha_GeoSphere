@@ -23,6 +23,7 @@ import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
 import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
+import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -274,6 +275,10 @@ export function ExplorePage() {
   // the user finishes drawing a shape.
   const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
   const aoiMenuRef = useRef<HTMLDivElement>(null);
+
+  // Weather toolbar - appears beside search bar when weather is active.
+  const [showWeatherToolbar, setShowWeatherToolbar] = useState(false);
+  const [weatherToolbarMode, setWeatherToolbarMode] = useState<WeatherLayerKey | null>(null);
 
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
@@ -815,6 +820,13 @@ export function ExplorePage() {
           onDrawingToolChange={setActiveAOITool}
           onAttributeInfo={setAttributeInfo}
           onDrillContextChange={setDrillContext}
+          onWeatherToolbarChange={(visible) => {
+            setShowWeatherToolbar(visible);
+            if (visible) {
+              // Sync toolbar mode from map viewer
+              setWeatherToolbarMode(mapViewerRef.current?.getWeatherMode() as WeatherLayerKey | null);
+            }
+          }}
         />
 
         {/* Floating search bar */}
@@ -933,6 +945,19 @@ export function ExplorePage() {
               </div>
             )}
           </div>
+
+          {/* Weather layer toolbar - appears beside search bar when weather is active */}
+          {showWeatherToolbar && (
+            <WeatherLayerToolbar
+              activeLayer={weatherToolbarMode}
+              onLayerSelect={(layer) => {
+                const mode = layer ?? "none";
+                mapViewerRef.current?.setWeatherMode(mode as any);
+                setWeatherToolbarMode(layer);
+              }}
+              className="flex-shrink-0"
+            />
+          )}
 
           {/* Spacer to push items to the right */}
           <div className="flex-1" />
@@ -1175,7 +1200,7 @@ export function ExplorePage() {
         )}
 
         {showLocationEnvironment && storedLocation && (
-          <aside className="absolute bottom-6 right-4 z-20 w-[min(28rem,calc(100vw-2rem))]">
+          <aside className="absolute bottom-6 right-4 top-20 z-20 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto">
             <LocationEnvironmentPanel
               latitude={storedLocation.latitude}
               longitude={storedLocation.longitude}

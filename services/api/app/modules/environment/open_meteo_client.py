@@ -40,8 +40,8 @@ WEATHER_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 AIR_QUALITY_BASE_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 _WEATHER_CURRENT_VARS = (
-    "temperature_2m,relative_humidity_2m,precipitation,rain,"
-    "wind_speed_10m,wind_direction_10m,surface_pressure"
+    "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,"
+    "wind_speed_10m,wind_direction_10m,surface_pressure,weather_code,is_day"
 )
 _WEATHER_DAILY_VARS = (
     "weather_code,temperature_2m_max,temperature_2m_min,"
@@ -49,7 +49,7 @@ _WEATHER_DAILY_VARS = (
 )
 _WEATHER_HOURLY_VARS = (
     "temperature_2m,precipitation_probability,precipitation,"
-    "wind_speed_10m,wind_direction_10m"
+    "wind_speed_10m,wind_direction_10m,weather_code,is_day"
 )
 _AIR_QUALITY_CURRENT_VARS = (
     "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,us_aqi,european_aqi"
@@ -154,6 +154,7 @@ def parse_weather(raw: dict[str, Any], latitude: float, longitude: float) -> Wea
         latitude=latitude,
         longitude=longitude,
         temperature_c=current.get("temperature_2m"),
+        feels_like_c=current.get("apparent_temperature"),
         relative_humidity_percent=current.get("relative_humidity_2m"),
         precipitation_mm=current.get("precipitation"),
         rain_mm=current.get("rain"),
@@ -162,6 +163,8 @@ def parse_weather(raw: dict[str, Any], latitude: float, longitude: float) -> Wea
         wind_direction_compass=degrees_to_compass(wind_direction),
         surface_pressure_hpa=current.get("surface_pressure"),
         observation_time=_parse_local_time(current.get("time")),
+        weather_code=current.get("weather_code"),
+        is_day=bool(current["is_day"]) if current.get("is_day") is not None else None,
     )
 
 
@@ -221,6 +224,10 @@ def parse_hourly_forecast(raw: dict[str, Any]) -> list[HourlyForecastPoint]:
                 wind_direction_compass=degrees_to_compass(
                     _value_at(hourly.get("wind_direction_10m"), index)
                 ),
+                weather_code=_value_at(hourly.get("weather_code"), index),
+                is_day=bool(_value_at(hourly.get("is_day"), index))
+                if _value_at(hourly.get("is_day"), index) is not None
+                else None,
             )
         )
         if len(points) >= 24:

@@ -5,5 +5,6 @@
  */
 export const config = {
   apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8200",
+  internalApiUrl: process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8200",
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? "Naksha GeoSphere",
 } as const;

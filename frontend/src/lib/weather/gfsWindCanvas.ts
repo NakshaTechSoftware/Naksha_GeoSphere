@@ -415,7 +415,13 @@ function interpolateWind(
   };
 }
 
-function sampleInterpolatedVector(
+/**
+ * Bilinearly interpolates the U/V wind vector (m/s) at an arbitrary
+ * geographic point from a GFS wind frame's grid. Exported so the wind
+ * cursor inspector (Explore map) samples the exact same decoded grid the
+ * particle animation renders from - never a separate data source.
+ */
+export function sampleInterpolatedVector(
   frame: GfsWindFrameResponse,
   lon: number,
   lat: number

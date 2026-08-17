@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # weather/air-quality (no key required) keep working either way.
     data_gov_in_api_key: str | None = None
 
+    # NASA FIRMS (Fire Information for Resource Management System) MAP_KEY,
+    # obtained from https://firms.modaps.eosdis.nasa.gov/api/area/. Optional:
+    # when unset, the fire-detections endpoint degrades to "unavailable"
+    # rather than failing application startup.
+    nasa_firms_map_key: str | None = None
+
     @field_validator("cors_origins", "trusted_hosts", mode="before")
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:

@@ -14,9 +14,12 @@ import type {
   CurrentEnvironmentResponse,
   DailyForecastDay,
   DailyForecastResponse,
+  FireDetection,
   GfsWeatherFieldFrameResponse,
   GfsWindFrameResponse,
   GeoJsonFeatureCollection,
+  HourlyForecastPoint,
+  HourlyForecastResponse,
   LocationSummaryResponse,
   ModeledAirQuality,
   ModeledAqiSection,
@@ -270,6 +273,7 @@ interface RawWeatherObservation {
   latitude: number;
   longitude: number;
   temperature_c: number | null;
+  feels_like_c: number | null;
   relative_humidity_percent: number | null;
   precipitation_mm: number | null;
   rain_mm: number | null;
@@ -278,10 +282,33 @@ interface RawWeatherObservation {
   wind_direction_compass: string | null;
   surface_pressure_hpa: number | null;
   observation_time: string | null;
+  weather_code: number | null;
+  is_day: boolean | null;
   source: "Open-Meteo";
 }
 
 interface RawWeatherResponse extends RawWeatherObservation {
+  data_status: "LIVE" | "STALE";
+  fetched_at: string;
+}
+
+interface RawHourlyForecastPoint {
+  time: string;
+  temperature_c: number | null;
+  precipitation_probability_percent: number | null;
+  precipitation_mm: number | null;
+  wind_speed_kmh: number | null;
+  wind_direction_degrees: number | null;
+  wind_direction_compass: string | null;
+  weather_code: number | null;
+  is_day: boolean | null;
+}
+
+interface RawHourlyForecastResponse {
+  latitude: number;
+  longitude: number;
+  points: RawHourlyForecastPoint[];
+  source: "Open-Meteo";
   data_status: "LIVE" | "STALE";
   fetched_at: string;
 }
@@ -399,6 +426,7 @@ function mapWeatherObservation(raw: RawWeatherObservation): WeatherObservation {
     latitude: raw.latitude,
     longitude: raw.longitude,
     temperatureC: raw.temperature_c,
+    feelsLikeC: raw.feels_like_c,
     relativeHumidityPercent: raw.relative_humidity_percent,
     precipitationMm: raw.precipitation_mm,
     rainMm: raw.rain_mm,
@@ -407,7 +435,23 @@ function mapWeatherObservation(raw: RawWeatherObservation): WeatherObservation {
     windDirectionCompass: raw.wind_direction_compass,
     surfacePressureHpa: raw.surface_pressure_hpa,
     observationTime: raw.observation_time,
+    weatherCode: raw.weather_code,
+    isDay: raw.is_day,
     source: raw.source,
+  };
+}
+
+function mapHourlyForecastPoint(raw: RawHourlyForecastPoint): HourlyForecastPoint {
+  return {
+    time: raw.time,
+    temperatureC: raw.temperature_c,
+    precipitationProbabilityPercent: raw.precipitation_probability_percent,
+    precipitationMm: raw.precipitation_mm,
+    windSpeedKmh: raw.wind_speed_kmh,
+    windDirectionDegrees: raw.wind_direction_degrees,
+    windDirectionCompass: raw.wind_direction_compass,
+    weatherCode: raw.weather_code,
+    isDay: raw.is_day,
   };
 }
 
@@ -564,6 +608,26 @@ export async function fetchDailyForecast(
   };
 }
 
+/** Next-24-hour hourly forecast (temperature/precipitation/wind) for an arbitrary coordinate (Open-Meteo). */
+export async function fetchHourlyForecast(
+  latitude: number,
+  longitude: number,
+  signal?: AbortSignal,
+): Promise<HourlyForecastResponse> {
+  const raw = await environmentGet<RawHourlyForecastResponse>(
+    `/api/v1/environment/hourly-forecast?latitude=${latitude}&longitude=${longitude}`,
+    signal,
+  );
+  return {
+    latitude: raw.latitude,
+    longitude: raw.longitude,
+    points: raw.points.map(mapHourlyForecastPoint),
+    source: raw.source,
+    dataStatus: raw.data_status,
+    fetchedAt: raw.fetched_at,
+  };
+}
+
 /** Karnataka-canary NOAA GFS 0.25° 10m wind frame for one forecast hour. */
 export async function fetchGfsWindFrame(
   forecastHour: number,
@@ -579,7 +643,7 @@ export async function fetchGfsWindFrame(
 interface RawGfsWeatherFieldFrameResponse {
   source: "NOAA GFS";
   model: "GFS 0.25°";
-  variable: "temperature" | "precipitation" | "clouds";
+  variable: "temperature" | "precipitation" | "clouds" | "pressure";
   run_time: string;
   forecast_time: string;
   forecast_hour: number;
@@ -621,7 +685,7 @@ function mapGfsWeatherFieldFrame(raw: RawGfsWeatherFieldFrameResponse): GfsWeath
 /** All-India NOAA GFS 0.25° scalar field (temperature / precipitation / clouds)
  * for one forecast hour, served from the unified weather-map pipeline. */
 export async function fetchGfsWeatherFieldFrame(
-  variable: "temperature" | "precipitation" | "clouds",
+  variable: "temperature" | "precipitation" | "clouds" | "pressure",
   forecastHour: number,
   signal?: AbortSignal,
 ): Promise<GfsWeatherFieldFrameResponse> {
@@ -630,6 +694,52 @@ export async function fetchGfsWeatherFieldFrame(
     signal
   );
   return mapGfsWeatherFieldFrame(raw);
+}
+
+interface RawFireDetection {
+  lat: number;
+  lon: number;
+  brightness: number | null;
+  bright_ti5: number | null;
+  confidence: number | null;
+  frp: number | null;
+  scan: number | null;
+  track: number | null;
+  version: string | null;
+  acquired_at: string;
+  satellite: string;
+  instrument: string;
+  day_night: "day" | "night";
+}
+
+/** NASA FIRMS active-fire detections within `hours` of now, in a bounding box
+ * around (latitude, longitude). Routed through the backend so the FIRMS
+ * MAP_KEY never reaches the browser. */
+export async function fetchFireDetections(
+  latitude: number,
+  longitude: number,
+  hours = 24,
+  signal?: AbortSignal,
+): Promise<FireDetection[]> {
+  const raw = await environmentGet<RawFireDetection[]>(
+    `/api/v1/environment/fire/?lat=${latitude}&lon=${longitude}&hours=${hours}`,
+    signal,
+  );
+  return raw.map((d) => ({
+    lat: d.lat,
+    lon: d.lon,
+    brightness: d.brightness,
+    brightTi5: d.bright_ti5,
+    confidence: d.confidence,
+    frp: d.frp,
+    scan: d.scan,
+    track: d.track,
+    version: d.version,
+    acquiredAt: d.acquired_at,
+    satellite: d.satellite,
+    instrument: d.instrument,
+    dayNight: d.day_night,
+  }));
 }
 
 /** Modeled/gridded air quality for an arbitrary coordinate (Open-Meteo). Never

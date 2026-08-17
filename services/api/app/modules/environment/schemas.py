@@ -66,6 +66,7 @@ class WeatherObservation(BaseModel):
     latitude: float
     longitude: float
     temperature_c: float | None = None
+    feels_like_c: float | None = None
     relative_humidity_percent: float | None = None
     precipitation_mm: float | None = None
     rain_mm: float | None = None
@@ -74,6 +75,8 @@ class WeatherObservation(BaseModel):
     wind_direction_compass: str | None = None
     surface_pressure_hpa: float | None = None
     observation_time: datetime | None = None
+    weather_code: int | None = None
+    is_day: bool | None = None
     source: Literal["Open-Meteo"] = "Open-Meteo"
 
 
@@ -121,6 +124,8 @@ class HourlyForecastPoint(BaseModel):
     wind_speed_kmh: float | None = None
     wind_direction_degrees: float | None = None
     wind_direction_compass: str | None = None
+    weather_code: int | None = None
+    is_day: bool | None = None
 
 
 class HourlyForecastResponse(BaseModel):
@@ -178,7 +183,7 @@ class GfsWeatherFieldFrameResponse(BaseModel):
 
     source: Literal["NOAA GFS"] = "NOAA GFS"
     model: Literal["GFS 0.25°"] = "GFS 0.25°"
-    variable: Literal["temperature", "precipitation", "clouds"]
+    variable: Literal["temperature", "precipitation", "clouds", "pressure"]
     run_time: datetime
     forecast_time: datetime
     forecast_hour: int

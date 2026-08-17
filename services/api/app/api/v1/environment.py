@@ -8,13 +8,16 @@ never reaches the frontend (spec section X).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 
 from app.core.config import Settings, get_settings
 from app.modules.environment import aggregator
 from app.modules.environment import gfs_wind
 from app.modules.environment import gfs_weather
-from app.modules.environment.exceptions import StationNotFoundError
+from app.modules.environment import mosdac_cloud
+from app.modules.environment.exceptions import StationNotFoundError, UpstreamUnavailableError
 from app.modules.environment.geojson import stations_to_geojson
 from app.modules.environment.schemas import (
     AirQualityResponse,
@@ -25,6 +28,7 @@ from app.modules.environment.schemas import (
     CpcbSummaryResponse,
     CurrentEnvironmentResponse,
     DailyForecastResponse,
+    HourlyForecastResponse,
     GfsWeatherFieldFrameResponse,
     GfsWindFrameResponse,
     GeoJsonFeatureCollection,
@@ -79,6 +83,16 @@ async def get_daily_forecast(
     return await aggregator.get_daily_forecast(get_redis_client(), latitude, longitude)
 
 
+@router.get("/hourly-forecast", response_model=HourlyForecastResponse)
+async def get_hourly_forecast(
+    latitude: float = Latitude,
+    longitude: float = Longitude,
+) -> HourlyForecastResponse:
+    """Next-24-hour Open-Meteo hourly forecast (temperature, precipitation
+    probability/amount, wind) for an arbitrary coordinate."""
+    return await aggregator.get_hourly_forecast(get_redis_client(), latitude, longitude)
+
+
 @router.get("/wind/gfs", response_model=GfsWindFrameResponse)
 async def get_gfs_wind_canary(
     forecast_hour: int = Query(
@@ -122,6 +136,37 @@ async def get_weather_map_gfs_clouds(
 ) -> GfsWeatherFieldFrameResponse:
     """All-India NOAA GFS 0.25° total cloud cover (%, TCDC) for one forecast hour."""
     return await gfs_weather.get_gfs_field_frame(get_redis_client(), forecast_hour, "clouds")
+
+
+@router.get("/weather-map/gfs/pressure", response_model=GfsWeatherFieldFrameResponse)
+async def get_weather_map_gfs_pressure(
+    forecast_hour: int = Query(0, ge=0, le=6, description="NOAA GFS forecast hour (0 through 6)."),
+) -> GfsWeatherFieldFrameResponse:
+    """All-India NOAA GFS 0.25° mean sea-level pressure (hPa, PRMSL) for one forecast hour."""
+    return await gfs_weather.get_gfs_field_frame(get_redis_client(), forecast_hour, "pressure")
+
+
+@router.get("/weather-map/mosdac/cloud")
+async def get_mosdac_cloud_frame(
+    day_night: Literal["day", "night"] = Query("day", description="Day or night product"),
+    product_id: str | None = Query(None, description="Specific INSAT product ID (optional)"),
+) -> dict:
+    """
+    Get the latest available INSAT geostationary cloud frame from MOSDAC WMS.
+
+    Returns a frame with tile URL template for MapLibre raster source.
+    Uses INSAT-3DS (primary) or INSAT-3D/3DR (fallback) operational products.
+    """
+    frame = await mosdac_cloud.get_latest_insat_cloud_frame(day_night, product_id)
+    if not frame:
+        raise UpstreamUnavailableError("MOSDAC INSAT")
+    return frame
+
+
+@router.get("/weather-map/mosdac/products")
+async def list_mosdac_products() -> list[dict]:
+    """List available INSAT satellite products for cloud visualization."""
+    return mosdac_cloud.get_available_insat_products()
 
 
 @router.get("/location-summary", response_model=LocationSummaryResponse)

@@ -58,7 +58,7 @@ export function WeatherLayerToolbar({ activeLayer, onLayerSelect, className }: W
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 rounded-2xl bg-white/90 p-1.5 shadow-lg backdrop-blur-md",
+        "flex flex-row flex-wrap items-center gap-1 rounded-2xl bg-white/90 p-1.5 shadow-lg backdrop-blur-md",
         className
       )}
     >
@@ -70,16 +70,15 @@ export function WeatherLayerToolbar({ activeLayer, onLayerSelect, className }: W
             key={layer.key}
             onClick={() => onLayerSelect(isActive ? null : layer.key)}
             className={cn(
-              "group relative flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-200",
+              "group relative flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-200",
               isActive
                 ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-md"
                 : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             )}
             title={layer.label}
           >
-            <Icon size={20} />
-            {/* Tooltip */}
-            <span className="pointer-events-none absolute left-full ml-2 whitespace-nowrap rounded-lg bg-gray-900 px-2.5 py-1 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+            <Icon size={18} />
+            <span className="pointer-events-none absolute bottom-full mb-2 whitespace-nowrap rounded-lg bg-gray-900 px-2.5 py-1 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
               {layer.label}
             </span>
           </button>

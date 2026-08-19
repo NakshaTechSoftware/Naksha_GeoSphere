@@ -13,7 +13,7 @@ import type {
   FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { booleanIntersects } from "@turf/turf";
+import { booleanIntersects, bbox } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
@@ -630,6 +630,10 @@ export type AOITool = "freehand" | "polygon" | "rectangle";
 export interface AOIResult {
   geometry: GeoJSON.Polygon;
   areaSqKm: number;
+  /** Properties collected from the parent boundary that overlaps this AOI. */
+  parentProperties?: Record<string, unknown>;
+  /** Parcel key for Bhoomi owner lookup, if the AOI intersects a cadastral parcel. */
+  aoiParcel?: ParcelLandRecordKey;
 }
 
 // One key/value row of the right-click attribute-info window (boundary type badge + title +
@@ -1015,6 +1019,56 @@ const VILLAGE_CADASTRALS_SOURCE_ID = "village-cadastrals-data";
 const VILLAGE_CADASTRALS_FILL_LAYER_ID = "village-cadastrals-fill";
 const VILLAGE_CADASTRALS_LINE_LAYER_ID = "village-cadastrals-line";
 const VILLAGE_CADASTRALS_LABELS_LAYER_ID = "village-cadastrals-labels";
+
+// Every fill-layer id used for boundary queries (e.g. finding which parent boundary
+// an AOI falls inside). When a new boundary layer is added, register its fill id here.
+const ALL_BOUNDARY_FILL_LAYERS = [
+  STATE_DISTRICTS_FILL_LAYER_ID,
+  KARNATAKA_STATE_FILL_LAYER_ID,
+  DISTRICT_TALUKS_FILL_LAYER_ID,
+  TALUK_HOBLIES_FILL_LAYER_ID,
+  HOBLI_VILLAGES_FILL_LAYER_ID,
+  VILLAGE_CADASTRALS_FILL_LAYER_ID,
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
+  ROADS_DISTRICTS_FILL_LAYER_ID,
+  ROADS_TALUKS_FILL_LAYER_ID,
+  ROADS_HOBLIES_FILL_LAYER_ID,
+  ROADS_VILLAGES_FILL_LAYER_ID,
+  STATE_ASSEMBLY_FILL_LAYER_ID,
+  STATE_PARLIAMENT_FILL_LAYER_ID,
+  STATE_POLICE_FILL_LAYER_ID,
+  POLICE_HOBLIES_FILL_LAYER_ID,
+  POLICE_VILLAGES_FILL_LAYER_ID,
+  CIVIC_DISTRICTS_FILL_LAYER_ID,
+  CIVIC_PINCODES_FILL_LAYER_ID,
+  GP_DISTRICTS_FILL_LAYER_ID,
+  GP_TALUKS_FILL_LAYER_ID,
+  GP_BOUNDARIES_FILL_LAYER_ID,
+];
+
+// Candidate name-property keys for the core admin-hierarchy layers, keyed by the same
+// "-fill"-stripped short id used as parentProperties' keys. Mirrors the key lists
+// ExplorePage reads aoiDistrict/aoiTaluk/aoiHobli/aoiVillage from, and the NAME_KEYS map
+// the bulk export API walks the hierarchy with - real KGIS source files aren't
+// consistently named across levels/districts, so several fallbacks are tried per level.
+const HIERARCHY_NAME_KEYS: Record<string, string[]> = {
+  "state-districts": ["dtname"],
+  "district-taluks": ["KGISTalukName", "subdist_nm", "name", "taluk_name", "TALUK_NAME", "TalukName"],
+  "taluk-hoblies": ["KGISHobliName", "hobli_name", "name"],
+  "hobli-villages": [
+    "KGISVillageName",
+    "village_name",
+    "Village_Name",
+    "vill_nm",
+    "village",
+    "vname",
+    "VILLNAME",
+    "name",
+  ],
+};
 
 // Cadastral (survey/parcel) overlay palette: bright white on satellite imagery (so the grid
 // pops against the darker aerial backdrop, with survey numbers carrying a dark halo), classic
@@ -2034,9 +2088,135 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       cancelDrawing(map);
       return;
     }
-    completedAOIRef.current = { geometry: polygon, areaSqKm };
+
+    // Query all boundary fill layers for features that intersect with the drawn AOI.
+    // This lets the export modal attach the parent boundary's attributes to the file.
+    // queryRenderedFeatures takes its bbox in screen pixels, not geographic
+    // coordinates, so the polygon's lng/lat bbox has to be projected first (via all
+    // four corners, since the map may be rotated).
+    const parentProperties: Record<string, unknown> = {};
+    const [minLng, minLat, maxLng, maxLat] = bbox(polygon) as [number, number, number, number];
+    const corners: [number, number][] = [
+      [minLng, minLat],
+      [minLng, maxLat],
+      [maxLng, minLat],
+      [maxLng, maxLat],
+    ];
+    const screenPoints = corners.map((c) => map.project(c));
+    const aoiScreenBbox: [PointLike, PointLike] = [
+      [Math.min(...screenPoints.map((p) => p.x)), Math.min(...screenPoints.map((p) => p.y))],
+      [Math.max(...screenPoints.map((p) => p.x)), Math.max(...screenPoints.map((p) => p.y))],
+    ];
+    for (const layerId of ALL_BOUNDARY_FILL_LAYERS) {
+      if (!map.getLayer(layerId)) continue;
+      const layerShort = layerId.replace(/-fill$/, "");
+      const features = map.queryRenderedFeatures(aoiScreenBbox, { layers: [layerId] });
+      const nameKeys = HIERARCHY_NAME_KEYS[layerShort];
+      if (nameKeys) {
+        // For the core admin-hierarchy layers (district/taluk/hobli/village), only treat
+        // the AOI as scoped to this level when exactly one distinct feature of that level
+        // actually intersects it. Grabbing an arbitrary first match (like the layers
+        // below still do, for display-only purposes) would silently mis-scope the export
+        // hierarchy whenever the AOI spans multiple districts/taluks/hoblis/villages.
+        const distinct = new Map<string, GeoJSON.Feature>();
+        for (const f of features) {
+          if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+          const props = (f.properties ?? {}) as Record<string, unknown>;
+          const name = nameKeys
+            .map((k) => props[k])
+            .find((v): v is string => typeof v === "string" && v.trim().length > 0);
+          if (!name) continue;
+          distinct.set(name.trim().toLowerCase(), f as unknown as GeoJSON.Feature);
+        }
+        if (distinct.size === 1) {
+          const [f] = [...distinct.values()];
+          parentProperties[layerShort] = { ...f!.properties };
+        }
+      } else {
+        for (const f of features) {
+          if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+          // Use the first match per layer — for the non-hierarchy layers below, one
+          // representative is sufficient since nothing keys the export scope off them.
+          parentProperties[layerShort] = { ...f.properties };
+          break;
+        }
+      }
+    }
+
+    // Parent boundary layers are removed from the map during drill-down (e.g.
+    // state-districts is removed when the user drills into a district), so
+    // queryRenderedFeatures won't find them. Fill in the admin hierarchy from
+    // the selection refs so the export modal always knows the full chain.
+    const districtName = selectedDistrictNameRef.current;
+    const talukName = selectedTalukNameRef.current;
+    const hobliName = selectedHobliNameRef.current;
+    const villageName = selectedVillageNameRef.current;
+    if (districtName && !parentProperties["state-districts"]) {
+      parentProperties["state-districts"] = { dtname: districtName };
+    }
+    if (talukName && !parentProperties["district-taluks"]) {
+      parentProperties["district-taluks"] = { KGISTalukName: talukName };
+    }
+    if (hobliName && !parentProperties["taluk-hoblies"]) {
+      parentProperties["taluk-hoblies"] = { KGISHobliName: hobliName };
+    }
+    if (villageName && !parentProperties["hobli-villages"]) {
+      parentProperties["hobli-villages"] = { KGISVillageName: villageName };
+    }
+
+    // Check if the AOI falls within exactly one cadastral parcel and, if so, extract
+    // the Bhoomi parcel key so owners can be looked up for the export. An AOI that
+    // spans several parcels must NOT collapse to one of them - re-query the cadastral
+    // layer on its own (rather than reusing parentProperties' single first-match
+    // representative above) and count how many distinct parcels actually intersect.
+    let aoiParcel: ParcelLandRecordKey | undefined;
+    if (map.getLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID)) {
+      const cadastralFeatures = map.queryRenderedFeatures(aoiScreenBbox, {
+        layers: [VILLAGE_CADASTRALS_FILL_LAYER_ID],
+      });
+      const distinctParcels = new Map<string, Record<string, unknown>>();
+      for (const f of cadastralFeatures) {
+        if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+        const props = (f.properties ?? {}) as Record<string, unknown>;
+        const survey = String(props.Surveynumber_Old ?? props.surveynumberi ?? "").trim();
+        if (!survey) continue;
+        const surnoc = String(props.Surnoc ?? "*").trim() || "*";
+        const hissa = String(props.HissaNo ?? "*").trim() || "*";
+        distinctParcels.set(`${survey}|${surnoc}|${hissa}`, props);
+      }
+      if (distinctParcels.size === 1) {
+        const cadastralProps = [...distinctParcels.values()][0]!;
+        aoiParcel = {
+          district: String(cadastralProps._parent_district ?? ""),
+          taluk: String(cadastralProps._parent_subdistrict ?? ""),
+          hobli: String(cadastralProps._parent_hobli ?? ""),
+          village: String(cadastralProps._parent_village_name ?? ""),
+          survey: String(cadastralProps.Surveynumber_Old ?? cadastralProps.surveynumberi ?? "").trim(),
+          surnoc: String(cadastralProps.Surnoc ?? "*").trim() || "*",
+          hissa: String(cadastralProps.HissaNo ?? "*").trim() || "*",
+        };
+      }
+    }
+
+    // Flatten the nested per-layer properties into a single flat object so the
+    // export API can write them as feature attributes. Each key is prefixed with
+    // the layer name to avoid collisions across boundary levels.
+    const flatProperties: Record<string, unknown> = {};
+    for (const [layer, props] of Object.entries(parentProperties)) {
+      for (const [k, v] of Object.entries(props as Record<string, unknown>)) {
+        flatProperties[`${layer}_${k}`] = v;
+      }
+    }
+    const result: AOIResult = { geometry: polygon, areaSqKm };
+    if (Object.keys(flatProperties).length > 0) {
+      result.parentProperties = flatProperties;
+    }
+    if (aoiParcel) {
+      result.aoiParcel = aoiParcel;
+    }
+    completedAOIRef.current = result;
     drawSessionRef.current = null;
-    onAOIChangeRef.current?.({ geometry: polygon, areaSqKm });
+    onAOIChangeRef.current?.(result);
     publishAOIData(map, null, null);
   };
 
@@ -5961,6 +6141,31 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
         mapRef.current = map;
 
+        // --- Middle-click panning (works independently of MapLibre's dragPan, so it
+        // continues to function even when a drawing tool disables dragPan).
+        const canvas = map.getCanvas();
+        let midPanLast: { x: number; y: number } | null = null;
+        const onMidPointerDown = (e: PointerEvent) => {
+          if (e.button !== 1 || !drawingToolRef.current) return;
+          midPanLast = { x: e.clientX, y: e.clientY };
+          canvas.setPointerCapture(e.pointerId);
+        };
+        const onMidPointerMove = (e: PointerEvent) => {
+          if (!midPanLast) return;
+          const dx = midPanLast.x - e.clientX;
+          const dy = midPanLast.y - e.clientY;
+          midPanLast = { x: e.clientX, y: e.clientY };
+          map.panBy([dx, dy], { animate: false });
+        };
+        const onMidPointerUp = (e: PointerEvent) => {
+          if (e.button !== 1 || !midPanLast) return;
+          midPanLast = null;
+          canvas.releasePointerCapture(e.pointerId);
+        };
+        canvas.addEventListener("pointerdown", onMidPointerDown);
+        canvas.addEventListener("pointermove", onMidPointerMove);
+        canvas.addEventListener("pointerup", onMidPointerUp);
+
         // --- AOI drawing handlers (Free Hand / Polygon / Rectangle). These all no-op unless
         // a tool is armed via setDrawingTool. The layer-specific boundary handlers are
         // guarded with the same check so a click/drag while drawing doesn't also select
@@ -8970,12 +9175,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (drawingToolRef.current) {
         const session = drawSessionRef.current;
         if (event.key === "Escape") {
-          // Escape cancels the in-progress shape, or disarms the tool if nothing is being
-          // drawn - in both cases the loaded boundaries stay put. preventDefault also stops
-          // Escape from triggering unrelated browser/button behavior.
+          // Escape cancels the in-progress shape, or - if nothing is being drawn - disarms
+          // the tool AND clears the last completed AOI (unlike a deliberate tool switch,
+          // which leaves it on the map for later export). Either way the loaded boundaries
+          // stay put. preventDefault also stops Escape from triggering unrelated
+          // browser/button behavior.
           event.preventDefault();
           if (session) cancelDrawing(map);
-          else disarmDrawingTool(map);
+          else {
+            disarmDrawingTool(map);
+            clearCompletedAOI(map);
+          }
         } else if (session && session.tool === "polygon") {
           if (event.key === "Enter") {
             // Enter finishes the polygon (same as double-clicking). preventDefault keeps a
@@ -10117,11 +10327,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         className="hidden"
       />
 
-      {/* Layers Control */}
+      {/* Layers Control - the small stacked-layers badge icon on the preview tile is
+          dropped here; the preview thumbnail + "Layers" label stay as the button. */}
       {!isLoading && !loadError && (
         <LayersControl
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
+          showBadgeIcon={false}
         />
       )}
 

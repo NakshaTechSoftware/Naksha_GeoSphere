@@ -543,6 +543,14 @@ export function ExplorePage() {
   // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
   // the panel closes rather than tracking its own copy of the feature.
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  // Controls the export modal for a drawn AOI (separate from the attribute-panel export).
+  const [aoiExportOpen, setAoiExportOpen] = useState(false);
+  const [aoiOwners, setAoiOwners] = useState<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] }
+  >({ status: "idle" });
 
   // Owner names for the selected cadastral parcel. They aren't in the cadastral GeoJSON, so
   // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
@@ -592,6 +600,37 @@ export function ExplorePage() {
     parcel?.surnoc,
     parcel?.hissa,
   ]);
+
+  // Fetch Bhoomi owner details for a drawn AOI's cadastral parcel when the export
+  // modal opens. The parcel key is extracted from the intersecting cadastral layer
+  // in IndiaMapViewer.completeAOI.
+  useEffect(() => {
+    if (!aoiExportOpen || !aoiInfo?.aoiParcel) {
+      setAoiOwners({ status: "idle" });
+      return;
+    }
+    const parcel = aoiInfo.aoiParcel;
+    const controller = new AbortController();
+    setAoiOwners({ status: "loading" });
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
+          { signal: controller.signal },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        setAoiOwners({ status: "ok", rows: data.owners ?? [] });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setAoiOwners({
+          status: "error",
+          message: error instanceof Error ? error.message : "Lookup failed",
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [aoiExportOpen, aoiInfo?.aoiParcel?.district, aoiInfo?.aoiParcel?.taluk, aoiInfo?.aoiParcel?.hobli, aoiInfo?.aoiParcel?.village, aoiInfo?.aoiParcel?.survey, aoiInfo?.aoiParcel?.surnoc, aoiInfo?.aoiParcel?.hissa]);
 
   // Real state/district/taluk names, fetched once on mount, that back the dynamic
   // suggestion categories below (as opposed to the hardcoded Bengaluru ward/zone lists).
@@ -1214,7 +1253,8 @@ export function ExplorePage() {
         />
 
         {/* Floating search bar */}
-        <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
+        <div ref={aoiMenuRef} className="absolute left-4 right-4 top-4 z-20">
+        <div className="flex items-center gap-3">
           {/* Search Bar - takes the full width on mobile (common phone resolutions) where
               the Draw AOI and User Profile controls are hidden. */}
           {/* min-w-0 is critical: without it the wrapper's min-width defaults to auto,
@@ -1434,7 +1474,10 @@ export function ExplorePage() {
             >
               <button
                 type="button"
-                onClick={() => setShowAOIMenu((prev) => !prev)}
+                onClick={() => {
+                  setShowAOIMenu((prev) => !prev);
+                  setAttributeInfo(null);
+                }}
                 aria-haspopup="menu"
                 aria-expanded={showAOIMenu}
                 className={`flex items-center gap-2 whitespace-nowrap py-2.5 text-sm font-medium transition-colors ${
@@ -1486,7 +1529,7 @@ export function ExplorePage() {
                 role="menu"
                 // Stretched left-0/right-0 (instead of w-full) so the dropdown, borders
                 // included, is exactly as wide as the button it hangs from
-                className="aoi-menu-in absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
+                className="aoi-menu-in absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
               >
                 {AOI_TOOLS.map(({ id, label, Icon }) => (
                   <button
@@ -1496,6 +1539,7 @@ export function ExplorePage() {
                     onClick={() => {
                       setActiveAOITool(id);
                       setShowAOIMenu(false);
+                      setAttributeInfo(null);
                       mapViewerRef.current?.setDrawingTool(id);
                     }}
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
@@ -1517,6 +1561,62 @@ export function ExplorePage() {
           <div className="hidden md:block">
             <UserProfile />
           </div>
+        </div>
+
+        {/* Mobile Draw AOI button - round icon below the search bar, aligned right.
+            Visible only on common phone resolutions. On tap it shows a small dropdown
+            with the same AOI tool options as the desktop pill. */}
+        <div className="absolute right-2 top-[4.5rem] z-20 md:hidden">
+          <button
+            type="button"
+            onClick={() => setShowAOIMenu((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showAOIMenu}
+            className={`flex h-11 w-11 items-center justify-center rounded-full border shadow-md transition-colors ${
+              activeAOITool
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+            aria-label="Draw area of interest"
+          >
+            {activeAOITool ? (
+              (() => {
+                const ActiveIcon = AOI_TOOLS.find((t) => t.id === activeAOITool)!.Icon;
+                return <ActiveIcon className="h-5 w-5" />;
+              })()
+            ) : (
+              <DrawAOIIcon className="h-5 w-5" />
+            )}
+          </button>
+
+          {showAOIMenu && (
+            <div
+              role="menu"
+              className="aoi-menu-in absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
+            >
+              {AOI_TOOLS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setActiveAOITool(id);
+                    setShowAOIMenu(false);
+                    mapViewerRef.current?.setDrawingTool(id);
+                  }}
+                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
+                    activeAOITool === id
+                      ? "bg-gray-100 text-obsidian-graphite"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
@@ -1730,6 +1830,14 @@ export function ExplorePage() {
             <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur">
               {aoiInfo ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => setAoiExportOpen(true)}
+                    className="rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-atlas-cobalt"
+                    aria-label="Export drawn area of interest"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
                   <span className="flex items-center gap-2 text-sm font-medium text-obsidian-graphite">
                     <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />
                     AOI area: {formatAreaSqKm(aoiInfo.areaSqKm)}

@@ -7,13 +7,38 @@ import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { saveExportFile } from "@/lib/nativeDownload";
 
 export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
-type BulkLevel = Exclude<AdminLevel, "state">;
+// "state" is included: an AOI spanning multiple districts scopes to the state, and the
+// state's own dissolved boundary is now offered in the checklist just like every other
+// level offers its own boundary.
+type BulkLevel = AdminLevel;
 
 export interface ExportFeatureModalProps {
   title: string;
   geometry?: GeoJSON.Geometry;
   properties?: Record<string, unknown>;
   hierarchy?: AttributeHierarchy;
+  /** When set (e.g. a drawn AOI), the bulk export filters features to only those
+   *  intersecting this polygon, and the level checklist is always shown. */
+  aoiGeometry?: GeoJSON.Polygon;
+  /** District name detected from the AOI's parent properties. When set, the hierarchy
+   *  is scoped to that district so the checklist shows Taluk → Survey Plot instead of
+   *  the full state → Survey Plot range. */
+  aoiDistrict?: string;
+  /** Taluk name detected from the AOI's parent properties. When set alongside aoiDistrict,
+   *  the hierarchy is scoped to that taluk so the checklist shows Hobli → Survey Plot. */
+  aoiTaluk?: string;
+  /** Hobli name detected from the AOI's parent properties. When set alongside aoiDistrict
+   *  and aoiTaluk, the hierarchy is scoped to that hobli so the checklist shows
+   *  Village → Survey Plot. */
+  aoiHobli?: string;
+  /** Village name detected from the AOI's parent properties. When set alongside the
+   *  full admin chain, the hierarchy is scoped to that village so the checklist shows
+   *  only Survey Plot. */
+  aoiVillage?: string;
+  /** When the AOI falls within a survey plot, this parcel key is set. The modal skips
+   *  the level checklist and exports the AOI polygon with the parcel's attributes
+   *  and owner details directly. */
+  aoiParcel?: { district: string; taluk: string; hobli: string; village: string; survey: string; surnoc: string; hissa: string };
   // Bhoomi owner rows already fetched for the attribute panel. When available they're
   // merged into the exported feature's properties so the file carries the owner details.
   owners?:
@@ -34,6 +59,7 @@ const EXPORT_FORMAT_OPTIONS: { id: ExportFormat; label: string; hint: string }[]
 ];
 
 const LEVEL_LABEL: Record<BulkLevel, string> = {
+  state: "State",
   district: "District",
   taluk: "Taluk",
   hobli: "Hobli",
@@ -41,16 +67,14 @@ const LEVEL_LABEL: Record<BulkLevel, string> = {
   survey_plot: "Survey Plot",
 };
 
-const LEVEL_ORDER: BulkLevel[] = ["district", "taluk", "hobli", "village", "survey_plot"];
+const LEVEL_ORDER: BulkLevel[] = ["state", "district", "taluk", "hobli", "village", "survey_plot"];
 
-// Levels offered in the checklist: the clicked level itself (for district/taluk/hobli/village -
-// a state click has no boundary of its own to include) plus everything below it, in hierarchy
-// order. A survey-plot click offers nothing - it's already the leaf, so the dialog falls back
-// to the plain single-feature flow below.
+// Levels offered in the checklist: the clicked level itself plus everything below it, in
+// hierarchy order. A survey-plot click offers nothing - it's already the leaf, so the
+// dialog falls back to the plain single-feature flow below.
 function offeredLevels(hierarchy: AttributeHierarchy | undefined): BulkLevel[] {
   if (!hierarchy || hierarchy.level === "survey_plot") return [];
-  const startIndex = hierarchy.level === "state" ? 0 : LEVEL_ORDER.indexOf(hierarchy.level);
-  return LEVEL_ORDER.slice(startIndex);
+  return LEVEL_ORDER.slice(LEVEL_ORDER.indexOf(hierarchy.level));
 }
 
 type Progress = { message: string; current?: number; total?: number };
@@ -69,11 +93,36 @@ export function ExportFeatureModal({
   geometry,
   properties,
   hierarchy,
+  aoiGeometry,
+  aoiDistrict,
+  aoiTaluk,
+  aoiHobli,
+  aoiVillage,
+  aoiParcel,
   owners,
   onClose,
 }: ExportFeatureModalProps) {
   const [format, setFormat] = useState<ExportFormat>("geojson");
-  const levels = useMemo(() => offeredLevels(hierarchy), [hierarchy]);
+  // When an AOI geometry is provided, build a hierarchy scoped to the deepest
+  // detected admin level (village > hobli > taluk > district > state) so the
+  // checklist shows the appropriate sub-levels.
+  // When the AOI falls within a survey plot, skip the level checklist entirely
+  // and export the parcel directly via the single-feature path.
+  const isSurveyPlotAoi = !!aoiGeometry && !!aoiParcel;
+  const effectiveHierarchy = isSurveyPlotAoi
+    ? { level: "survey_plot" as const, state: "Karnataka", district: aoiParcel.district, taluk: aoiParcel.taluk, hobli: aoiParcel.hobli, village: aoiParcel.village }
+    : aoiGeometry
+      ? aoiDistrict && aoiTaluk && aoiHobli && aoiVillage
+        ? { level: "village" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk, hobli: aoiHobli, village: aoiVillage }
+        : aoiDistrict && aoiTaluk && aoiHobli
+          ? { level: "hobli" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk, hobli: aoiHobli }
+          : aoiDistrict && aoiTaluk
+            ? { level: "taluk" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk }
+            : aoiDistrict
+              ? { level: "district" as const, state: "Karnataka", district: aoiDistrict }
+              : { level: "state" as const, state: "Karnataka" }
+      : hierarchy;
+  const levels = useMemo(() => offeredLevels(effectiveHierarchy), [effectiveHierarchy]);
   const [selectedLevels, setSelectedLevels] = useState<Set<BulkLevel>>(() => new Set(levels));
   const [state, setState] = useState<ModalState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
@@ -166,7 +215,7 @@ export function ExportFeatureModal({
   };
 
   const runBulkExport = async () => {
-    if (!hierarchy || selectedLevels.size === 0) {
+    if (!effectiveHierarchy || selectedLevels.size === 0) {
       setState({ status: "error", message: "Pick at least one boundary level to export." });
       return;
     }
@@ -179,14 +228,15 @@ export function ExportFeatureModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           exportFormat: format,
-          state: hierarchy.state,
-          district: hierarchy.district,
-          taluk: hierarchy.taluk,
-          hobli: hierarchy.hobli,
-          village: hierarchy.village,
-          clickedLevel: hierarchy.level,
+          state: effectiveHierarchy.state,
+          district: effectiveHierarchy.district,
+          taluk: effectiveHierarchy.taluk,
+          hobli: effectiveHierarchy.hobli,
+          village: effectiveHierarchy.village,
+          clickedLevel: effectiveHierarchy.level,
           selectedLevels: LEVEL_ORDER.filter((l) => selectedLevels.has(l)),
           nameHint: title,
+          ...(aoiGeometry ? { aoiGeometry } : {}),
         }),
         signal: controller.signal,
       });

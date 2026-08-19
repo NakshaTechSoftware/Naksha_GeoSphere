@@ -10,6 +10,10 @@ interface LayersControlProps {
   currentLayer: MapLayer;
   onLayerChange: (layer: MapLayer) => void;
   className?: string;
+  /** Whether the small stacked-layers badge icon (top-left corner of each preview tile)
+   *  is shown. Defaults to true; the Explore page turns it off and keeps just the preview
+   *  thumbnail + "Layers" label. */
+  showBadgeIcon?: boolean;
 }
 
 /**
@@ -20,6 +24,7 @@ export function LayersControl({
   currentLayer,
   onLayerChange,
   className = "",
+  showBadgeIcon = true,
 }: LayersControlProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -98,11 +103,13 @@ export function LayersControl({
                 <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
 
                 {/* Layer Icon - Top Left (hidden on mobile to match the anchor button) */}
-                <div className="absolute top-1.5 left-1.5 max-md:hidden">
-                  <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
-                    <Layers className="w-3.5 h-3.5 text-gray-700" strokeWidth={2.5} />
+                {showBadgeIcon && (
+                  <div className="absolute top-1.5 left-1.5 max-md:hidden">
+                    <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
+                      <Layers className="w-3.5 h-3.5 text-gray-700" strokeWidth={2.5} />
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Selected Check Mark - Top Right (hidden on mobile - the blue ring
                     alone marks the selection there) */}
@@ -161,11 +168,13 @@ export function LayersControl({
           <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent max-md:hidden" />
 
           {/* Icon */}
-          <div className="absolute top-1.5 left-1.5 max-md:hidden">
-            <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
-              <Layers className="w-4 h-4 text-gray-700" strokeWidth={2.5} />
+          {showBadgeIcon && (
+            <div className="absolute top-1.5 left-1.5 max-md:hidden">
+              <div className="w-7 h-7 rounded-lg bg-white shadow-md flex items-center justify-center">
+                <Layers className="w-4 h-4 text-gray-700" strokeWidth={2.5} />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* "Layers" Text */}
           <div className="absolute bottom-0 left-0 right-0 pb-1.5 max-md:hidden">

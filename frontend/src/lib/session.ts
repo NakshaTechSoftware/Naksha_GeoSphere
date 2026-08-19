@@ -16,10 +16,16 @@
  */
 
 import { isNativeApp } from "./native";
+import type { StoredUserLocation } from "./userSession";
 
 export interface SessionUser {
   email: string;
   name: string;
+  /** Best-effort browser geolocation captured at sign-in, used to personalize
+   *  AQI/weather/environment data (see components/environment). Optional -
+   *  older sessions and sign-ins where the user declined the permission
+   *  prompt simply omit it. */
+  preferredLocation?: StoredUserLocation | null;
 }
 
 const SESSION_USER_KEY = "user";

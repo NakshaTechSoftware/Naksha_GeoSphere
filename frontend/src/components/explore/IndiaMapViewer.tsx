@@ -17,7 +17,224 @@ import { booleanIntersects } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
+import {
+  WEATHER_TERRAIN_DEM_SOURCE_ID,
+  WEATHER_TERRAIN_LAYER_IDS,
+  applyWeatherTerrainWeatherMode,
+  ensureWeatherTerrain,
+  isWeatherTerrainReady,
+  resolveWeatherTerrainProvider,
+  setWeatherTerrainVisible,
+  type WeatherTerrainProvider,
+} from "../../lib/weather/weatherTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
+import { STATE_FACTS } from "../../data/state-facts";
+import { WeatherConditionIcon, WeatherCurrentHero } from "../weather/WeatherUI";
+import { ChevronDown, CloudRain, CloudSun, Compass, Droplets, Gauge, Leaf, Thermometer, Wind } from "lucide-react";
+import {
+  ApiRequestError,
+  ApiUnavailableError,
+  fetchAqiGrid,
+  fetchCurrentEnvironment,
+  fetchDailyForecast,
+  fetchFireDetections,
+  fetchGfsWeatherFieldFrame,
+  fetchGfsWindFrame,
+  fetchNationalAqiStationsGeoJson,
+} from "@/lib/api-client";
+import { formatIstTime, formatMetric } from "@/lib/environmentFormat";
+import { GfsWindCanvasAnimator, sampleInterpolatedVector } from "@/lib/weather/gfsWindCanvas";
+import { compassDirection } from "@/lib/weather/openMeteoFallback";
+import { AqiGridCanvasRenderer } from "@/lib/weather/aqiGridCanvas";
+import {
+  fieldLegendStops,
+  fieldUnit,
+  renderFieldToImageSource,
+  windSpeedValues,
+} from "@/lib/weather/gfsFieldRenderer";
+import {
+  GIBS_ATTRIBUTION,
+  GIBS_INSTRUMENT,
+  GIBS_NATIVE_MAX_ZOOM,
+  GIBS_NOMINAL_RESOLUTION_M,
+  GIBS_PRODUCT_NAME,
+  GIBS_TILE_SIZE,
+  gibsTileUrlTemplate,
+  probeGibsDate,
+  recentGibsDates,
+  resetGibsSatelliteResolution,
+  resolveGibsSatellite,
+  type ResolvedGibsSatellite,
+} from "@/lib/weather/nasaGibs";
+import {
+  computeIsobars,
+  cropGrid,
+  findPressureExtrema,
+  type IsobarLine,
+  type PressureExtremum,
+} from "@/lib/weather/pressureIsobars";
+import {
+  HIMAWARI_ATTRIBUTION,
+  HIMAWARI_CADENCE_MINUTES,
+  HIMAWARI_INSTRUMENT,
+  HIMAWARI_NATIVE_MAX_ZOOM,
+  HIMAWARI_NOMINAL_RESOLUTION_M,
+  HIMAWARI_PRODUCT_NAME,
+  HIMAWARI_TILE_SIZE,
+  himawariTileUrlTemplate,
+  recentHimawariFrames,
+} from "@/lib/weather/nasaHimawari";
+import {
+  GEO_HIMAWARI,
+  GEO_GOES_WEST,
+  GEO_GOES_EAST,
+  GEO_SATELLITES,
+  geoCloudTileUrlTemplate,
+  recentGeoFrames,
+  type GeoSatelliteDef,
+} from "@/lib/weather/nasaGeoCloudComposite";
+import {
+  IMERG_ATTRIBUTION,
+  IMERG_CADENCE_MINUTES,
+  IMERG_NATIVE_MAX_ZOOM,
+  IMERG_NOMINAL_RESOLUTION_KM,
+  IMERG_PRODUCT_NAME,
+  IMERG_TILE_SIZE,
+  imergTileUrlTemplate,
+  recentImergFrames,
+} from "@/lib/weather/nasaImerg";
+import {
+  NDVI_ATTRIBUTION,
+  NDVI_INSTRUMENT,
+  NDVI_NATIVE_MAX_ZOOM,
+  NDVI_NOMINAL_RESOLUTION_M,
+  NDVI_PRODUCT_NAME,
+  NDVI_TILE_SIZE,
+  ndviTileUrlTemplate,
+  resetNdviResolution,
+  resolveNdvi,
+  type ResolvedNdvi,
+} from "@/lib/weather/nasaVegetation";
+import {
+  VIIRS_LST_ATTRIBUTION,
+  VIIRS_LST_INSTRUMENT,
+  VIIRS_LST_NATIVE_MAX_ZOOM,
+  VIIRS_LST_NOMINAL_RESOLUTION_M,
+  VIIRS_LST_PRODUCT_NAME,
+  VIIRS_LST_TILE_SIZE,
+  VIIRS_LST_TILE_MATRIX_SET,
+  VIIRS_LST_FORMAT,
+  isDaytimeIst,
+  probeViirsLstDate,
+  recentViirsLstDates,
+  resolveViirsLst,
+  checkViirsLstCoverage,
+  viirsLstTileUrlTemplate,
+  type ResolvedViirsLst,
+  type ViirsLstDayNight,
+  type ViirsLstCoverageReport,
+  type ViirsLstProductInfo,
+  VIIRS_LST_PRODUCTS,
+} from "@/lib/weather/nasaViirsLst";
+import {
+  buildRainViewerTileUrl,
+  fetchRainViewerWeatherMaps,
+  formatRadarTimeIST,
+  RAINVIEWER_FRAME_INTERVAL_MS,
+  RAINVIEWER_REFRESH_INTERVAL_MS,
+  type RainViewerRadarFrame,
+} from "@/lib/weather/rainViewerProvider";
+
+import type {
+  AqiGridResponse,
+  CurrentEnvironmentResponse,
+  DailyForecastResponse,
+  FireDetection,
+  GeoJsonFeatureCollection,
+  GfsWeatherFieldFrameResponse,
+  GfsWindFrameResponse,
+} from "@/types/environment";
+
+// A single active all-India weather-map field. Exactly one is shown at a time.
+type WeatherMapMode =
+  | "none"
+  | "temperature"
+  | "rain"
+  | "wind"
+  | "clouds"
+  | "pressure"
+  | "air-quality"
+  | "satellite"
+  | "vegetation"
+  | "fire";
+
+// Sensible per-layer defaults instead of one hardcoded 92% for every product
+// (which washed out the satellite/terrain basemap under every raster). Rain's
+// no-rain pixels are already fully transparent so a higher opacity only ever
+// affects real precipitation; clouds and pressure keep enough basemap context
+// visible underneath, and pressure specifically stays subtle now that isobars
+// (mathematically derived contour lines) carry the primary analytical signal.
+/** Fixed internal display opacity for all weather overlay layers.
+ *  These values are NOT user-configurable — opacity sliders have been removed. */
+const DISPLAY_OPACITY = {
+  // Band 13 Clean IR colorizes its ENTIRE footprint by brightness
+  // temperature, not just actual clouds (clear sky still gets a colour,
+  // just a warmer/darker one) - so unlike VIIRS true-color, there's no
+  // real per-pixel "no data" signal to make clear-sky areas transparent
+  // without guessing a threshold. Kept translucent instead, so the
+  // basemap/terrain and (now boundary-layer-order-fixed) admin boundaries
+  // stay visible underneath rather than being fully covered.
+  observedCloud: 0.7,
+  observedRain: 0.88,
+  trueColor: 1.00,
+  vegetation: 0.88,
+  pressure: 0.60,
+  windScalar: 0.50,
+  radar: 0.82,
+  fire: 1.00,
+  cloudFill: 0.60,
+  lst: 0.92,
+  aqi: 0.70,
+} as const;
+
+/** Wind speed/direction under the cursor (Ventusky-style inspector). */
+interface WindCursorState {
+  screenX: number;
+  screenY: number;
+  speedKmh: number | null; // null = no data at this point - never fabricated as 0
+  directionDeg: number | null;
+  compass: string | null;
+  loading: boolean;
+}
+
+/**
+ * Meteorological wind direction (degrees the wind is blowing FROM, not
+ * toward) from east/north vector components. u/v point in the direction the
+ * wind is travelling, so the FROM bearing is the reverse: atan2(-u, -v).
+ * 0=N, 90=E, 180=S, 270=W.
+ */
+function windDirectionFromVector(u: number, v: number): number {
+  const deg = (Math.atan2(-u, -v) * 180) / Math.PI;
+  return (deg + 360) % 360;
+}
+
+/**
+ * Where to insert a weather raster layer so administrative boundaries and
+ * their labels stay legible on top of it. Naively inserting "before the
+ * first symbol layer" only protects text labels - `india-boundary-line`
+ * and `india-boundary-fill` are `line`/`fill` type, not `symbol`, so that
+ * check alone lets a raster end up above the boundary outline itself while
+ * still sitting below its label, silently burying the India outline (and
+ * any state boundaries) under cloud/satellite/rain imagery. Anchoring on
+ * the boundary line layer specifically (present from initial map load)
+ * keeps every boundary layer, and everything added after it, above.
+ */
+function findWeatherImageryInsertionPoint(map: MapLibreMap): string | undefined {
+  const layers = map.getStyle().layers ?? [];
+  const boundaryLine = layers.find((l) => l.id === "india-boundary-line");
+  if (boundaryLine) return boundaryLine.id;
+  return layers.find((l: any) => l.type === "symbol" || l.id?.includes("label"))?.id;
+}
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -31,6 +248,25 @@ function queryRenderedFeaturesSafe(
     return map.queryRenderedFeatures(point, options);
   } catch {
     return [];
+  }
+}
+
+// Hover/selection feature-state updates (mousemove/mouseleave/click handlers) can fire after
+// the boundary layer they target has already been torn down by a mode switch or drill-down
+// clear (e.g. leaving a district's fill layer just as its source is removed) - MapLibre
+// throws "The source '...' does not exist in the map's style" in that race instead of
+// silently no-oping. Checking the source exists first (and swallowing any residual throw)
+// keeps hover highlighting robust without adding a guard at every one of the ~130 call sites.
+function setFeatureStateSafe(
+  map: MapLibreMap,
+  feature: { source: string; sourceLayer?: string; id: string | number },
+  state: Record<string, unknown>
+) {
+  try {
+    if (!map.getSource(feature.source)) return;
+    map.setFeatureState(feature, state);
+  } catch {
+    /* source/feature disappeared between the event firing and this call - ignore */
   }
 }
 
@@ -757,6 +993,7 @@ export interface IndiaMapViewerHandle {
   setWeatherMode: (mode: WeatherMapMode) => void;
   /** Whether any weather control is active (weather menu open, mode selected, radar, wind). */
   isWeatherControlActive: () => boolean;
+  setRoadsClickScope: (scope: "none" | "district" | "state") => void;
 }
 
 export interface IndiaMapViewerProps {
@@ -1929,6 +2166,225 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Shown briefly when the user picks the Terrain base layer but the India DEM file
+  // isn't on this server (dev machines without DEM_Terrain/). Prevents a flood of 500
+  // tile errors that would otherwise break the map style.
+  const [terrainUnavailable, setTerrainUnavailable] = useState(false);
+  useEffect(() => {
+    if (!terrainUnavailable) return;
+    const timer = setTimeout(() => setTerrainUnavailable(false), 5000);
+    return () => clearTimeout(timer);
+  }, [terrainUnavailable]);
+  const isTerrainDataAvailable = async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/terrain/status");
+      if (!res.ok) return false;
+      const data = (await res.json()) as { available?: boolean };
+      return data.available === true;
+    } catch {
+      return false;
+    }
+  };
+  // Small non-blocking toast for drill-down layers that fail to load (e.g. no
+  // boundary data uploaded yet for a state/place) — surfaces what was
+  // previously only a console.warn/console.error, without blocking the map.
+  const [layerNotice, setLayerNotice] = useState<string | null>(null);
+  const layerNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showLayerNotice = useCallback((message: string) => {
+    setLayerNotice(message);
+    if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
+    layerNoticeTimeoutRef.current = setTimeout(() => setLayerNotice(null), 4500);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (layerNoticeTimeoutRef.current) clearTimeout(layerNoticeTimeoutRef.current);
+    };
+  }, []);
+
+  // Weather click panel (left-side icon + dropdown + fixed right-side panel).
+  // selectedWeatherMetricsRef mirrors the state into the map's click-handler
+  // closures, which are only set up once on mount.
+  const [showWeatherMenu, setShowWeatherMenu] = useState(false);
+  const [selectedWeatherMetrics, setSelectedWeatherMetrics] = useState<Set<WeatherMetricKey>>(
+    new Set()
+  );
+  const [isRadarEnabled, setIsRadarEnabled] = useState(false);
+  const [radarStatus, setRadarStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  // RainViewer composite: the fetched frame list + tile host, the active
+  // frame index, and playback state for the past→now animation.
+  const [radarFrames, setRadarFrames] = useState<RainViewerRadarFrame[]>([]);
+  const [radarHost, setRadarHost] = useState<string>("");
+  const [radarFrameIndex, setRadarFrameIndex] = useState(0);
+  const [isRadarPlaying, setIsRadarPlaying] = useState(false);
+
+  // Unified all-India weather map: exactly one field is active at a time.
+  const [weatherMode, setWeatherMode] = useState<WeatherMapMode>("none");
+  const [isWindEnabled, setIsWindEnabled] = useState(false);
+  const [windDensity, setWindDensity] = useState(0.6);
+  const [windFrames, setWindFrames] = useState<GfsWindFrameResponse[]>([]);
+  const [activeWindFrameIndex, setActiveWindFrameIndex] = useState(0);
+  const [isWindPlaying, setIsWindPlaying] = useState(false);
+  const [windStatus, setWindStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  const [windStatusMessage, setWindStatusMessage] = useState<string | null>(null);
+
+  // Wind speed/direction under the cursor (Ventusky-style inspector). Kept as
+  // one small object in state - the decoded U/V grid itself stays in
+  // `windFrames`/refs, never duplicated into rapidly-changing state.
+  const [windCursor, setWindCursor] = useState<WindCursorState | null>(null);
+  const activeWindFrameRef = useRef<GfsWindFrameResponse | null>(null);
+  const windCursorRafRef = useRef<number | null>(null);
+  const pendingWindPointRef = useRef<{ x: number; y: number; lng: number; lat: number } | null>(null);
+
+  // Reset View: shows only once the map has been rotated/tilted away from
+  // the default north-up, flat orientation.
+  const [mapTransformDirty, setMapTransformDirty] = useState(false);
+  const mapTransformDirtyRef = useRef(false);
+
+  // Pressure isobars + H/L centers, derived mathematically from the active
+  // GFS pressure frame (see pressureIsobars.ts) - recomputed once per frame,
+  // never per render/pan/zoom.
+  const [pressureIsobars, setPressureIsobars] = useState<IsobarLine[]>([]);
+  const [pressureExtrema, setPressureExtrema] = useState<PressureExtremum[]>([]);
+  const [showPressureExtrema, setShowPressureExtrema] = useState(true);
+
+  // Scalar forecast fields (temperature / rain / clouds) rendered as a raster
+  // image source. `weatherFieldFrames` holds one frame per forecast hour.
+  const [weatherFieldFrames, setWeatherFieldFrames] = useState<GfsWeatherFieldFrameResponse[]>([]);
+  const [weatherFieldIndex, setWeatherFieldIndex] = useState(0);
+  const [isWeatherFieldPlaying, setIsWeatherFieldPlaying] = useState(false);
+  const [weatherFieldStatus, setWeatherFieldStatus] = useState<"idle" | "loading" | "ready" | "unavailable">(
+    "idle"
+  );
+  const [weatherFieldMessage, setWeatherFieldMessage] = useState<string | null>(null);
+
+  // Temperature: Surface Temperature (NASA VIIRS LST, default) vs Air
+  // Temperature Forecast (BharatFS - see the dedicated effect below).
+  const [temperatureProduct, setTemperatureProduct] = useState<"surface" | "forecast">("surface");
+
+  // Clouds/Rain: real satellite Observed imagery (Himawari IR / GPM IMERG,
+  // default - see the dedicated effects below) vs the NOAA GFS Forecast
+  // model field (existing pipeline). Same observed/forecast split as
+  // Temperature above, applied to the two other layers where a genuine
+  // observation product exists.
+  const [cloudProduct, setCloudProduct] = useState<"observed" | "forecast">("observed");
+  const [rainProduct, setRainProduct] = useState<"observed" | "forecast">("observed");
+
+  // Observed Cloud: Multi-geostationary composite (Himawari-9 + GOES-West + GOES-East).
+  // All three use the same Band 13 Clean Infrared product (10.3 µm thermal IR),
+  // so they blend seamlessly. Himawari covers Asia-Pacific, GOES-West covers
+  // Americas/Pacific, GOES-East covers Americas/Atlantic – together they give
+  // global cloud coverage.
+  const [himawariFrames, setHimawariFrames] = useState<string[]>([]);
+  const [himawariFrameIndex, setHimawariFrameIndex] = useState(0);
+  const [isHimawariPlaying, setIsHimawariPlaying] = useState(false);
+  const [himawariStatus, setHimawariStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GOES-West frames share the same timestamps as Himawari (10-min cadence).
+  const [goesWestFrames, setGoesWestFrames] = useState<string[]>([]);
+  const [goesWestStatus, setGoesWestStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GOES-East frames share the same timestamps as Himawari (10-min cadence).
+  const [goesEastFrames, setGoesEastFrames] = useState<string[]>([]);
+  const [goesEastStatus, setGoesEastStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  // GFS cloud fill: global cloud fraction from NOAA GFS model, rendered
+  // underneath geostationary tiles to fill gaps between satellite disks.
+  const [cloudFillFrame, setCloudFillFrame] = useState<any>(null);
+
+  // Observed Rain: NASA GIBS GPM IMERG 30-minute near-real-time precipitation.
+  const [imergFrames, setImergFrames] = useState<string[]>([]);
+  const [imergFrameIndex, setImergFrameIndex] = useState(0);
+  const [isImergPlaying, setIsImergPlaying] = useState(false);
+  const [imergStatus, setImergStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [lstDayNightSelection, setLstDayNightSelection] = useState<"auto" | ViirsLstDayNight>("auto");
+  const [lstPlatform, setLstPlatform] = useState<"auto" | "SNPP" | "NOAA20" | "NOAA21">("auto");
+  const [lstResolvedDay, setLstResolvedDay] = useState<ResolvedViirsLst | null | undefined>(undefined);
+  const [lstResolvedNight, setLstResolvedNight] = useState<ResolvedViirsLst | null | undefined>(undefined);
+  const [lstDate, setLstDate] = useState<string | null>(null);
+  const [lstAvailableDates, setLstAvailableDates] = useState<string[]>([]);
+  const [lstStatus, setLstStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [isLstPlaying, setIsLstPlaying] = useState(false);
+  const [lstCoverage, setLstCoverage] = useState<ViirsLstCoverageReport | null>(null);
+  const [showLstDebug, setShowLstDebug] = useState(false);
+
+  // NASA GIBS VIIRS true-color Satellite mode.
+  const [satelliteResolved, setSatelliteResolved] = useState<ResolvedGibsSatellite | null | undefined>(undefined);
+  const [satelliteDate, setSatelliteDate] = useState<string | null>(null);
+  const [isSatellitePlaying, setIsSatellitePlaying] = useState(false);
+  const [satelliteStatus, setSatelliteStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+
+  // NASA GIBS MODIS NDVI Vegetation mode.
+  const [ndviResolved, setNdviResolved] = useState<ResolvedNdvi | null | undefined>(undefined);
+  const [ndviStatus, setNdviStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+
+  // NASA FIRMS active-fire detections (Fire mode).
+  const [fireDetections, setFireDetections] = useState<FireDetection[]>([]);
+  const [fireStatus, setFireStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [fireMessage, setFireMessage] = useState<string | null>(null);
+  const [fireHours, setFireHours] = useState<24 | 48 | 72>(24);
+  const [selectedFireDetection, setSelectedFireDetection] = useState<
+    { detection: FireDetection; screenX: number; screenY: number } | null
+  >(null);
+
+  // Air Quality weather-map mode: official CPCB station points + modeled surface.
+  const [aqiGrid, setAqiGrid] = useState<AqiGridResponse | null>(null);
+  const [aqiStationsGeoJson, setAqiStationsGeoJson] = useState<GeoJsonFeatureCollection | null>(
+    null
+  );
+  const [aqiStatus, setAqiStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [aqiMessage, setAqiMessage] = useState<string | null>(null);
+
+  const [weatherPanel, setWeatherPanel] = useState<WeatherPanelState>({ status: "idle" });
+  // Mirrors isWeatherControlActive (computed further below) into a ref, so the map's
+  // click listener - set up once on mount - can read the live value without stale
+  // closures. Used to suppress the boundary attribute-info popup while any weather
+  // control is active, since a left-click can't open both at once.
+  const isWeatherControlActiveRef = useRef(false);
+  const selectedWeatherMetricsRef = useRef(selectedWeatherMetrics);
+  const weatherRequestIdRef = useRef(0);
+  useEffect(() => {
+    selectedWeatherMetricsRef.current = selectedWeatherMetrics;
+    if (selectedWeatherMetrics.size === 0) {
+      weatherRequestIdRef.current += 1;
+      setWeatherPanel({ status: "idle" });
+    }
+  }, [selectedWeatherMetrics]);
+  const weatherMenuRef = useRef<HTMLDivElement>(null);
+  const windAnimatorRef = useRef<GfsWindCanvasAnimator | null>(null);
+  const aqiGridRendererRef = useRef<AqiGridCanvasRenderer | null>(null);
+  const windAutoFocusedRef = useRef(false);
+  const [weatherHoverCard] = useState<WeatherHoverCardData | null>(null);
+
+  // Notify the parent (ExplorePage) when the weather toolbar should show/hide, and more
+  // broadly when ANY weather control is active - the parent also uses this to disable the
+  // boundary-layer Filters panel, since a left-click can't simultaneously drill into a
+  // boundary AND open the weather click-to-inspect popup. Mirrors isWeatherControlActive
+  // below (metrics selected or radar/wind toggled on both count, even with the dropdown
+  // closed and no weatherMode field active).
+  useEffect(() => {
+    const visible =
+      showWeatherMenu ||
+      weatherMode !== "none" ||
+      selectedWeatherMetrics.size > 0 ||
+      isRadarEnabled ||
+      isWindEnabled;
+    onWeatherToolbarChangeRef.current?.(visible);
+  }, [showWeatherMenu, weatherMode, selectedWeatherMetrics, isRadarEnabled, isWindEnabled]);
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (weatherMenuRef.current && !weatherMenuRef.current.contains(e.target as Node)) {
+        setShowWeatherMenu(false);
+      }
+    };
+    // Use `click` (not `mousedown`) so a press on the horizontal Weather toolbar -
+    // which lives outside `weatherMenuRef` - still delivers its `onClick` (which
+    // sets the weather mode) before this handler closes the menu. With `mousedown`
+    // the menu-close re-render unmounted the toolbar before the `click` fired,
+    // making the toolbar's first product selection impossible to activate.
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
@@ -2496,7 +2952,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
   const clearStateSelection = (map: MapLibreMap) => {
     if (selectedStateIdRef.current !== null) {
-      map.setFeatureState(
+      setFeatureStateSafe(map, 
         { source: STATE_SOURCE_ID, id: selectedStateIdRef.current },
         { selected: false }
       );
@@ -2510,7 +2966,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (feature.id === undefined) return;
     clearStateSelection(map);
     selectedStateIdRef.current = feature.id;
-    map.setFeatureState({ source: STATE_SOURCE_ID, id: feature.id }, { selected: true });
+    setFeatureStateSafe(map, { source: STATE_SOURCE_ID, id: feature.id }, { selected: true });
     const stateName = feature.properties?.st_nm as string | undefined;
     if (stateName) focusStateBorders(map, stateName);
     if (feature.geometry) {
@@ -5644,7 +6100,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedStateNameRef.current = snap.state;
       if (snap.stateId !== null) {
         selectedStateIdRef.current = snap.stateId;
-        map.setFeatureState(
+        setFeatureStateSafe(map, 
           { source: STATE_SOURCE_ID, id: snap.stateId },
           { selected: true }
         );
@@ -5658,7 +6114,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedDistrictIdRef.current = snap.districts.selectedId;
       selectedDistrictNameRef.current = snap.districts.selectedName;
       if (snap.districts.selectedId !== null) {
-        map.setFeatureState(
+        setFeatureStateSafe(map, 
           { source: STATE_DISTRICTS_SOURCE_ID, id: snap.districts.selectedId },
           { selected: true }
         );
@@ -5670,7 +6126,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedTalukIdRef.current = snap.taluks.selectedId;
       selectedTalukNameRef.current = snap.taluks.selectedName;
       if (snap.taluks.selectedId !== null) {
-        map.setFeatureState(
+        setFeatureStateSafe(map, 
           { source: DISTRICT_TALUKS_SOURCE_ID, id: snap.taluks.selectedId },
           { selected: true }
         );
@@ -5689,7 +6145,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedHobliIdRef.current = snap.hoblies.selectedId;
       selectedHobliNameRef.current = snap.hoblies.selectedName;
       if (snap.hoblies.selectedId !== null) {
-        map.setFeatureState(
+        setFeatureStateSafe(map, 
           { source: TALUK_HOBLIES_SOURCE_ID, id: snap.hoblies.selectedId },
           { selected: true }
         );
@@ -5708,7 +6164,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       selectedVillageIdRef.current = snap.villages.selectedId;
       selectedVillageNameRef.current = snap.villages.selectedName;
       if (snap.villages.selectedId !== null) {
-        map.setFeatureState(
+        setFeatureStateSafe(map, 
           { source: HOBLI_VILLAGES_SOURCE_ID, id: snap.villages.selectedId },
           { selected: true }
         );
@@ -5755,101 +6211,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!next) return;
     drillUndoStackRef.current.push(captureDrillSnapshot(map));
     applyDrillSnapshot(map, next);
-  };
-
-  // Clears every loaded boundary layer and resets drill state back to the blank initial
-  // map. Used by the Escape key handler and the search-bar clear path.
-  const clearAllMapState = (map: MapLibreMap) => {
-    // Clear drill undo/redo stacks.
-    drillUndoStackRef.current = [];
-    drillRedoStackRef.current = [];
-
-    // Remove every custom boundary layer and source.
-    const style = map.getStyle();
-    const boundaryLayerIds = Object.keys(style.sources).filter(
-      (id) =>
-        id === STATE_SOURCE_ID ||
-        id === STATE_LABELS_SOURCE_ID ||
-        id === STATE_DISTRICTS_SOURCE_ID ||
-        id === STATE_DISTRICTS_LABELS_SOURCE_ID ||
-        id === STATE_ASSEMBLY_SOURCE_ID ||
-        id === STATE_PARLIAMENT_SOURCE_ID ||
-        id === STATE_POLICE_SOURCE_ID ||
-        id.startsWith("police-") ||
-        id === DISTRICT_TALUKS_SOURCE_ID ||
-        id === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
-        id === TALUK_HOBLIES_SOURCE_ID ||
-        id === TALUK_HOBLIES_LABELS_SOURCE_ID ||
-        id === HOBLI_VILLAGES_SOURCE_ID ||
-        id === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
-        id === VILLAGE_CADASTRALS_SOURCE_ID
-    );
-    boundaryLayerIds.forEach((sourceId) => {
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
-    });
-
-    const boundaryLayers = style.layers.filter(
-      (l) =>
-        l.id === "states-fill-default" ||
-        l.id === "states-borders-default" ||
-        l.id === "states-labels-default" ||
-        l.id.startsWith("states-") ||
-        l.id === STATE_DISTRICTS_FILL_LAYER_ID ||
-        l.id === STATE_DISTRICTS_LINE_LAYER_ID ||
-        l.id === STATE_DISTRICTS_LABELS_LAYER_ID ||
-        l.id === STATE_ASSEMBLY_FILL_LAYER_ID ||
-        l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
-        l.id === STATE_ASSEMBLY_LABELS_LAYER_ID ||
-        l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
-        l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
-        l.id === STATE_PARLIAMENT_LABELS_LAYER_ID ||
-        l.id === STATE_POLICE_FILL_LAYER_ID ||
-        l.id === STATE_POLICE_LINE_LAYER_ID ||
-        l.id === STATE_POLICE_LABEL_LAYER_ID ||
-        l.id.startsWith("police-") ||
-        l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
-        l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
-        l.id === DISTRICT_TALUKS_LABELS_LAYER_ID ||
-        l.id === TALUK_HOBLIES_FILL_LAYER_ID ||
-        l.id === TALUK_HOBLIES_LINE_LAYER_ID ||
-        l.id === TALUK_HOBLIES_LABELS_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_FILL_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_LINE_LAYER_ID ||
-        l.id === HOBLI_VILLAGES_LABELS_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
-        l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID
-    );
-    boundaryLayers.forEach((layer) => {
-      if (map.getLayer(layer.id)) map.removeLayer(layer.id);
-    });
-
-    // Remove extra Bengaluru overlay layers.
-    for (const key of extraLayerKeysRef.current) {
-      const baseId = extraLayerIdFromKey(key);
-      for (const suffix of ["-fill", "-line", "-label"]) {
-        if (map.getLayer(`${baseId}${suffix}`)) map.removeLayer(`${baseId}${suffix}`);
-      }
-      if (map.getSource(`${baseId}-data`)) map.removeSource(`${baseId}-data`);
-    }
-    extraLayerKeysRef.current.clear();
-
-    // Reset boundary layer mode and notify the parent.
-    boundaryLayerModeRef.current = "administrative";
-    onBoundariesClearedRef.current?.();
-
-    // Restore India boundary visibility if present.
-    for (const id of ["india-boundary-line", "india-boundary-fill", "india-boundary-label", "india-boundary-label-hover"]) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
-    }
-
-    // Show the national boundary + states fill again.
-    if (map.getLayer("states-fill-default")) {
-      map.setLayoutProperty("states-fill-default", "visibility", "visible");
-    }
-    if (map.getLayer("states-borders-default")) {
-      map.setLayoutProperty("states-borders-default", "visibility", "visible");
-    }
   };
 
   // Selects a district by name within a state already present in the default states layer
@@ -5910,14 +6271,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!feature) return false;
 
     if (selectedDistrictIdRef.current !== null && selectedDistrictIdRef.current !== index) {
-      map.setFeatureState(
+      setFeatureStateSafe(map, 
         { source: STATE_DISTRICTS_SOURCE_ID, id: selectedDistrictIdRef.current },
         { selected: false }
       );
       clearDistrictTaluks(map);
     }
     selectedDistrictIdRef.current = index;
-    map.setFeatureState({ source: STATE_DISTRICTS_SOURCE_ID, id: index }, { selected: true });
+    setFeatureStateSafe(map, { source: STATE_DISTRICTS_SOURCE_ID, id: index }, { selected: true });
 
     if (feature.geometry) {
       map.fitBounds(boundsOfGeometry(feature.geometry), {
@@ -5965,13 +6326,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!feature) return false;
 
     if (selectedTalukIdRef.current !== null && selectedTalukIdRef.current !== index) {
-      map.setFeatureState(
+      setFeatureStateSafe(map, 
         { source: DISTRICT_TALUKS_SOURCE_ID, id: selectedTalukIdRef.current },
         { selected: false }
       );
     }
     selectedTalukIdRef.current = index;
-    map.setFeatureState({ source: DISTRICT_TALUKS_SOURCE_ID, id: index }, { selected: true });
+    setFeatureStateSafe(map, { source: DISTRICT_TALUKS_SOURCE_ID, id: index }, { selected: true });
 
     if (feature.geometry) {
       map.fitBounds(boundsOfGeometry(feature.geometry), {
@@ -6035,13 +6396,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!feature) return false;
 
     if (selectedHobliIdRef.current !== null && selectedHobliIdRef.current !== index) {
-      map.setFeatureState(
+      setFeatureStateSafe(map, 
         { source: TALUK_HOBLIES_SOURCE_ID, id: selectedHobliIdRef.current },
         { selected: false }
       );
     }
     selectedHobliIdRef.current = index;
-    map.setFeatureState({ source: TALUK_HOBLIES_SOURCE_ID, id: index }, { selected: true });
+    setFeatureStateSafe(map, { source: TALUK_HOBLIES_SOURCE_ID, id: index }, { selected: true });
 
     if (feature.geometry) {
       map.fitBounds(boundsOfGeometry(feature.geometry), {
@@ -6107,13 +6468,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!feature) return false;
 
     if (selectedVillageIdRef.current !== null && selectedVillageIdRef.current !== index) {
-      map.setFeatureState(
+      setFeatureStateSafe(map, 
         { source: HOBLI_VILLAGES_SOURCE_ID, id: selectedVillageIdRef.current },
         { selected: false }
       );
     }
     selectedVillageIdRef.current = index;
-    map.setFeatureState({ source: HOBLI_VILLAGES_SOURCE_ID, id: index }, { selected: true });
+    setFeatureStateSafe(map, { source: HOBLI_VILLAGES_SOURCE_ID, id: index }, { selected: true });
 
     if (feature.geometry) {
       map.fitBounds(boundsOfGeometry(feature.geometry), {
@@ -6293,6 +6654,107 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     };
   }, [isRadarEnabled]);
 
+  // Adds a raster XYZ source for the active RainViewer frame and keeps it below
+  // the admin boundaries / AOI layers but above the satellite basemap.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const cleanup = () => {
+      if (map.getLayer(RAINVIEWER_RADAR_LAYER_ID)) map.removeLayer(RAINVIEWER_RADAR_LAYER_ID);
+      if (map.getSource(RAINVIEWER_RADAR_SOURCE_ID)) map.removeSource(RAINVIEWER_RADAR_SOURCE_ID);
+    };
+
+    if (!isRadarEnabled || radarHost === "" || radarFrames.length === 0) {
+      cleanup();
+      return;
+    }
+
+    const frame = radarFrames[radarFrameIndex];
+    if (!frame) {
+      cleanup();
+      return;
+    }
+
+    const applyRadarOverlay = () => {
+      try {
+        const tileUrl = buildRainViewerTileUrl(radarHost, frame.path, "{z}", "{x}", "{y}");
+        const existingSource = map.getSource(RAINVIEWER_RADAR_SOURCE_ID) as
+          | { setTiles?: (tiles: string[]) => void }
+          | undefined;
+
+        if (!existingSource) {
+          map.addSource(RAINVIEWER_RADAR_SOURCE_ID, {
+            type: "raster",
+            tiles: [tileUrl],
+            tileSize: 512,
+            attribution: "RainViewer",
+          });
+          map.addLayer(
+            {
+              id: RAINVIEWER_RADAR_LAYER_ID,
+              type: "raster",
+              source: RAINVIEWER_RADAR_SOURCE_ID,
+              paint: {
+                "raster-opacity": DISPLAY_OPACITY.radar,
+                "raster-fade-duration": 150,
+              },
+            },
+            getRadarInsertBeforeId(map)
+          );
+        } else {
+          // Swapping the tile template reloads only the changed frame tiles.
+          existingSource.setTiles?.([tileUrl]);
+        }
+      } catch (error) {
+        console.error("Failed to apply RainViewer radar overlay:", error);
+        setRadarStatus("unavailable");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyRadarOverlay);
+      return () => {
+        map.off("load", applyRadarOverlay);
+      };
+    }
+
+    applyRadarOverlay();
+  }, [isRadarEnabled, radarHost, radarFrames, radarFrameIndex]);
+
+  // Past→now animation playback.
+  useEffect(() => {
+    if (!isRadarEnabled || !isRadarPlaying || radarFrames.length === 0) return;
+    const intervalId = window.setInterval(() => {
+      setRadarFrameIndex((prev) => {
+        if (radarFrames.length === 0) return prev;
+        return (prev + 1) % radarFrames.length;
+      });
+    }, RAINVIEWER_FRAME_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [isRadarEnabled, isRadarPlaying, radarFrames.length]);
+
+  const radarGoPrev = () => {
+    setIsRadarPlaying(false);
+    setRadarFrameIndex((prev) =>
+      radarFrames.length ? (prev - 1 + radarFrames.length) % radarFrames.length : 0
+    );
+  };
+  const radarGoNext = () => {
+    setIsRadarPlaying(false);
+    setRadarFrameIndex((prev) => (radarFrames.length ? (prev + 1) % radarFrames.length : 0));
+  };
+  const radarTogglePlay = () => {
+    setIsRadarPlaying((prev) => {
+      const next = !prev;
+      // When pausing, snap to the latest ("now") frame.
+      if (!next) {
+        setRadarFrameIndex(() => (radarFrames.length ? radarFrames.length - 1 : 0));
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!isWindEnabled) {
       setWindFrames([]);
@@ -6364,6 +6826,285 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       controller.abort();
     };
   }, [isWindEnabled]);
+
+  // Renders the active wind frame: a smooth wind-speed colour field (same U/V
+  // data the particles read) plus the animated particle/streamline canvas on
+  // top, via GfsWindCanvasAnimator. Re-applies whenever the frame, density, or
+  // enabled state changes; torn down (animator destroyed, layers removed) on
+  // every re-run and on unmount.
+  useEffect(() => {
+    const map = mapRef.current;
+    const activeWindFrame = windFrames[activeWindFrameIndex] ?? null;
+    if (!map) return;
+
+    const removeWindSpeedSurface = () => {
+      if (map.getLayer(GFS_WIND_SPEED_LAYER_ID)) map.removeLayer(GFS_WIND_SPEED_LAYER_ID);
+      if (map.getSource(GFS_WIND_SPEED_SOURCE_ID)) map.removeSource(GFS_WIND_SPEED_SOURCE_ID);
+    };
+
+    let handleViewportChange: (() => void) | null = null;
+
+    const cleanupMapListeners = () => {
+      if (handleViewportChange) {
+        map.off("move", handleViewportChange);
+        map.off("zoom", handleViewportChange);
+        map.off("rotate", handleViewportChange);
+        map.off("pitch", handleViewportChange);
+        map.off("resize", handleViewportChange);
+        handleViewportChange = null;
+      }
+    };
+
+    const destroyWindAnimator = () => {
+      windAnimatorRef.current?.destroy();
+      windAnimatorRef.current = null;
+    };
+
+    const applyWindOverlay = () => {
+      cleanupMapListeners();
+      destroyWindAnimator();
+      removeWindSpeedSurface();
+
+      if (!isWindEnabled || !activeWindFrame) {
+        return;
+      }
+
+      // Smooth wind-speed colour field underneath the particle canvas, from
+      // the SAME U/V data the particles animate from (section 19: continuous
+      // speed surface + streamlines must agree, since both read one frame).
+      try {
+        const speeds = windSpeedValues(activeWindFrame.u, activeWindFrame.v);
+        const result = renderFieldToImageSource({
+          width: activeWindFrame.width,
+          height: activeWindFrame.height,
+          dx: activeWindFrame.dx,
+          dy: activeWindFrame.dy,
+          bounds: activeWindFrame.bounds,
+          values: speeds,
+          variable: "wind",
+        });
+        if (result) {
+          removeWindSpeedSurface();
+          map.addSource(GFS_WIND_SPEED_SOURCE_ID, {
+            type: "image",
+            url: result.url,
+            coordinates: result.coordinates,
+          });
+          const firstLabelId = findWeatherImageryInsertionPoint(map);
+          map.addLayer(
+            {
+              id: GFS_WIND_SPEED_LAYER_ID,
+              type: "raster",
+              source: GFS_WIND_SPEED_SOURCE_ID,
+              paint: {
+                "raster-opacity": 0.8,
+                "raster-fade-duration": 0,
+                "raster-resampling": "linear",
+              },
+            },
+            firstLabelId
+          );
+          // Re-apply terrain muting now that gfs-wind-speed-layer actually
+          // exists, so the detail hillshade floats directly above it instead
+          // of the "no target yet" top-of-stack fallback.
+          applyWeatherTerrainWeatherMode(map, "wind");
+        }
+      } catch (error) {
+        console.error("Failed to render wind-speed surface:", error);
+      }
+
+      try {
+        const overlayHost = map.getContainer().parentElement ?? map.getContainer();
+        if (getComputedStyle(overlayHost).position === "static") {
+          overlayHost.style.position = "relative";
+        }
+
+        if (!windAnimatorRef.current) {
+          windAnimatorRef.current = new GfsWindCanvasAnimator(activeWindFrame, {
+            onInvalidate: () => map.triggerRepaint(),
+          });
+        } else {
+          windAnimatorRef.current.setFrame(activeWindFrame);
+        }
+        // Set the map BEFORE resizing so screen-space particle spawning
+        // uses the correct projection.  The animator keeps the last valid
+        // wind field alive during zoom — it does NOT clear on viewport change.
+        windAnimatorRef.current.setMap(map);
+        windAnimatorRef.current.setDensity(windDensity);
+        windAnimatorRef.current.attachTo(overlayHost);
+        windAnimatorRef.current.getCanvas().style.opacity = String(DISPLAY_OPACITY.windScalar);
+        const syncAnimatorCanvasToMap = () => {
+          if (!windAnimatorRef.current) return;
+          windAnimatorRef.current.resize(
+            map.getContainer().clientWidth,
+            map.getContainer().clientHeight,
+            window.devicePixelRatio || 1
+          );
+          // Do NOT clear() here — the animation loop continuously redraws.
+          // Clearing on every move/zoom wipes particles between frames,
+          // causing the sparse/empty appearance during zoom.
+        };
+
+        syncAnimatorCanvasToMap();
+        handleViewportChange = () => syncAnimatorCanvasToMap();
+        map.on("move", handleViewportChange);
+        map.on("zoom", handleViewportChange);
+        map.on("rotate", handleViewportChange);
+        map.on("pitch", handleViewportChange);
+        map.on("resize", handleViewportChange);
+        windAnimatorRef.current.start();
+        setWindStatus("ready");
+      } catch (error) {
+        console.error("Failed to apply NOAA GFS wind overlay:", error);
+        setWindStatus("unavailable");
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      map.once("load", applyWindOverlay);
+      return () => {
+        map.off("load", applyWindOverlay);
+        cleanupMapListeners();
+        destroyWindAnimator();
+        removeWindSpeedSurface();
+      };
+    }
+
+    applyWindOverlay();
+    return () => {
+      cleanupMapListeners();
+      destroyWindAnimator();
+      removeWindSpeedSurface();
+    };
+  }, [activeWindFrameIndex, isWindEnabled, windDensity, windFrames]);
+
+  // Keeps a ref to the currently-visualized wind frame in sync, so the
+  // mousemove handler below (registered once per Wind ON/OFF toggle, not
+  // once per frame) always samples the live frame without going stale and
+  // without needing to re-attach the map listener on every frame change.
+  useEffect(() => {
+    activeWindFrameRef.current = windFrames[activeWindFrameIndex] ?? null;
+  }, [windFrames, activeWindFrameIndex]);
+
+  // ── Wind speed/direction under the cursor (Ventusky-style inspector) ───────
+  // Samples the SAME decoded GFS U/V grid the particle animation reads from
+  // (gfsWindCanvas.ts's sampleInterpolatedVector - bilinear interpolation
+  // between the 4 surrounding grid cells, exactly what the particles use to
+  // move). No separate data source, no per-mousemove network request: this
+  // is a pure client-side lookup into data already in memory.
+  const sampleWindAtPending = useCallback(() => {
+    windCursorRafRef.current = null;
+    const pending = pendingWindPointRef.current;
+    if (!pending) return;
+    const frame = activeWindFrameRef.current;
+    if (!frame) {
+      // Wind enabled but the frame hasn't loaded yet - loading state, not a fake value.
+      setWindCursor({
+        screenX: pending.x,
+        screenY: pending.y,
+        speedKmh: null,
+        directionDeg: null,
+        compass: null,
+        loading: true,
+      });
+      return;
+    }
+    const vector = sampleInterpolatedVector(frame, pending.lng, pending.lat);
+    if (!vector) {
+      // Genuinely no data at this point (e.g. near the grid's latitude edge) - never fabricate 0.
+      setWindCursor({
+        screenX: pending.x,
+        screenY: pending.y,
+        speedKmh: null,
+        directionDeg: null,
+        compass: null,
+        loading: false,
+      });
+      return;
+    }
+    const speedMs = Math.sqrt(vector.u * vector.u + vector.v * vector.v);
+    // Direction is meaningless at (near-)zero wind speed - atan2(0,0) would
+    // otherwise report a spurious "N" for genuinely calm air.
+    const hasDirection = speedMs > 0.15; // ~0.5 km/h
+    const directionDeg = hasDirection ? windDirectionFromVector(vector.u, vector.v) : null;
+    setWindCursor({
+      screenX: pending.x,
+      screenY: pending.y,
+      speedKmh: speedMs * 3.6,
+      directionDeg,
+      compass: directionDeg != null ? compassDirection(directionDeg) : null,
+      loading: false,
+    });
+  }, []);
+
+  const scheduleWindSample = useCallback(
+    (screenX: number, screenY: number, lng: number, lat: number) => {
+      pendingWindPointRef.current = { x: screenX, y: screenY, lng, lat };
+      if (windCursorRafRef.current != null) return; // one pending RAF only
+      windCursorRafRef.current = window.requestAnimationFrame(sampleWindAtPending);
+    },
+    [sampleWindAtPending]
+  );
+
+  const handleWindMouseMove = useCallback(
+    (e: MapMouseEvent) => {
+      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
+    },
+    [scheduleWindSample]
+  );
+
+  const handleWindMouseLeave = useCallback(() => {
+    pendingWindPointRef.current = null;
+    if (windCursorRafRef.current != null) {
+      window.cancelAnimationFrame(windCursorRafRef.current);
+      windCursorRafRef.current = null;
+    }
+    setWindCursor(null);
+  }, []);
+
+  // Mobile/tablet: tap-to-inspect (no persistent hover). Reuses the same
+  // sampler as desktop mousemove. Draw AOI takes priority - if a drawing
+  // tool is armed, the tap belongs to AOI drawing, not the wind inspector.
+  const handleWindClick = useCallback(
+    (e: MapMouseEvent) => {
+      if (drawingToolRef.current) return;
+      scheduleWindSample(e.point.x, e.point.y, e.lngLat.lng, e.lngLat.lat);
+    },
+    [scheduleWindSample]
+  );
+
+  // Attaches/detaches exactly one set of listeners per Wind ON/OFF toggle -
+  // stable function references throughout (useCallback above), so `off()`
+  // always removes the exact listener `on()` added. Wind OFF tears down
+  // every trace: listeners, pending RAF, pending sample point, tooltip state.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isWindEnabled) {
+      setWindCursor(null);
+      if (windCursorRafRef.current != null) {
+        window.cancelAnimationFrame(windCursorRafRef.current);
+        windCursorRafRef.current = null;
+      }
+      pendingWindPointRef.current = null;
+      return;
+    }
+
+    map.on("mousemove", handleWindMouseMove);
+    map.on("mouseout", handleWindMouseLeave);
+    map.on("click", handleWindClick);
+
+    return () => {
+      map.off("mousemove", handleWindMouseMove);
+      map.off("mouseout", handleWindMouseLeave);
+      map.off("click", handleWindClick);
+      if (windCursorRafRef.current != null) {
+        window.cancelAnimationFrame(windCursorRafRef.current);
+        windCursorRafRef.current = null;
+      }
+      pendingWindPointRef.current = null;
+      setWindCursor(null);
+    };
+  }, [isWindEnabled, handleWindMouseMove, handleWindMouseLeave, handleWindClick]);
 
   // Syncs the legacy wind toggle with the unified weather-map mode so the wind
   // pipeline activates exactly when "Wind" is the selected weather-map mode.
@@ -7978,6 +8719,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (cancelled || !containerRef.current) return;
 
         registerSatelliteProtocol(maplibregl, () => mapRef.current);
+        registerViirsNoDataProtocol(maplibregl);
+        void registerPmtilesProtocol(maplibregl);
 
         // Get appropriate style based on current layer
         const getMapStyle = () => {
@@ -8491,8 +9234,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         // India still loads the states AND shows the country panel; clicking a district
         // still drills into its taluks AND shows the district panel). A click on empty map
         // leaves an open panel untouched - Escape or the panel's X button dismiss it.
+        // Suppressed while any weather control is active - a left-click there opens the
+        // weather click-to-inspect popup instead, and the two can't coexist.
         map.on("click", (e) => {
           if (drawingToolRef.current) return;
+          if (isWeatherControlActiveRef.current) return;
           reportAttributeInfo(e);
         });
 
@@ -8661,13 +9407,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (feature && feature.id !== undefined && feature.id !== hoveredBoundaryId) {
                 if (hoveredBoundaryId !== null) {
-                  map.setFeatureState(
+                  setFeatureStateSafe(map, 
                     { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
                     { hover: false }
                   );
                 }
                 hoveredBoundaryId = feature.id;
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
                   { hover: true }
                 );
@@ -8676,7 +9422,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             });
             map.on("mouseleave", "india-boundary-fill", () => {
               if (hoveredBoundaryId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: INDIA_BOUNDARY_SOURCE_ID, id: hoveredBoundaryId },
                   { hover: false }
                 );
@@ -8691,10 +9437,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (feature && feature.id !== undefined) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: INDIA_BOUNDARY_SOURCE_ID, id: feature.id },
                   { selected: true }
                 );
@@ -8712,12 +9458,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             // the await - so the getSource check alone cannot stop two concurrent calls from
             // both reaching map.addSource, which throws "Source already exists". This flag is
             // set synchronously at entry (before any await) to serialize the loads.
-            let indiaStatesLoading = false;
             const loadIndiaStates = async () => {
               // Guard against re-entry: the boundary click handler can fire again after the
               // states are already loaded (e.g. a second click on the country), which would
-              // otherwise throw "Source already exists".
-              if (map.getSource(STATE_SOURCE_ID)) return;
+              // otherwise throw "Source already exists". The loadingIndiaStatesRef half of
+              // this check catches the narrower race where a second call starts before the
+              // first has reached addSource yet - map.getSource() alone can't see that.
+              if (map.getSource(STATE_SOURCE_ID) || loadingIndiaStatesRef.current) return;
+              loadingIndiaStatesRef.current = true;
             try {
             let statesResponse: Response;
             try {
@@ -8835,13 +9583,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredStateId !== null && hoveredStateId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_SOURCE_ID, id: hoveredStateId },
                   { hover: false }
                 );
               }
               hoveredStateId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_SOURCE_ID, id: hoveredStateId },
                 { hover: true }
               );
@@ -8850,7 +9598,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", "states-fill-default", () => {
               if (hoveredStateId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_SOURCE_ID, id: hoveredStateId },
                   { hover: false }
                 );
@@ -8865,7 +9613,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               console.log("=== STATE CLICK EVENT ===");
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
@@ -8983,13 +9731,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredDistrictId !== null && hoveredDistrictId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_DISTRICTS_SOURCE_ID, id: hoveredDistrictId },
                   { hover: false }
                 );
               }
               hoveredDistrictId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_DISTRICTS_SOURCE_ID, id: hoveredDistrictId },
                 { hover: true }
               );
@@ -8998,7 +9746,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", STATE_DISTRICTS_FILL_LAYER_ID, () => {
               if (hoveredDistrictId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_DISTRICTS_SOURCE_ID, id: hoveredDistrictId },
                   { hover: false }
                 );
@@ -9016,13 +9764,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredGpDistrictId !== null && hoveredGpDistrictId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_DISTRICTS_SOURCE_ID, id: hoveredGpDistrictId },
                   { hover: false }
                 );
               }
               hoveredGpDistrictId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: GP_DISTRICTS_SOURCE_ID, id: hoveredGpDistrictId },
                 { hover: true }
               );
@@ -9031,7 +9779,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", GP_DISTRICTS_FILL_LAYER_ID, () => {
               if (hoveredGpDistrictId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_DISTRICTS_SOURCE_ID, id: hoveredGpDistrictId },
                   { hover: false }
                 );
@@ -9046,7 +9794,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -9066,7 +9814,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Clicking the same district that already has taluks loaded: toggle off.
               if (selectedGpDistrictIdRef.current === feature.id && taluksAlreadyLoaded) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_DISTRICTS_SOURCE_ID, id: selectedGpDistrictIdRef.current },
                   { selected: false }
                 );
@@ -9079,7 +9827,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Deselect the previous district if clicking a different one.
               if (selectedGpDistrictIdRef.current !== null && selectedGpDistrictIdRef.current !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_DISTRICTS_SOURCE_ID, id: selectedGpDistrictIdRef.current },
                   { selected: false }
                 );
@@ -9087,7 +9835,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               selectedGpDistrictIdRef.current = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: GP_DISTRICTS_SOURCE_ID, id: selectedGpDistrictIdRef.current },
                 { selected: true }
               );
@@ -9120,13 +9868,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredCivicDistrictId !== null && hoveredCivicDistrictId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_DISTRICTS_SOURCE_ID, id: hoveredCivicDistrictId },
                   { hover: false }
                 );
               }
               hoveredCivicDistrictId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: CIVIC_DISTRICTS_SOURCE_ID, id: hoveredCivicDistrictId },
                 { hover: true }
               );
@@ -9135,7 +9883,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", CIVIC_DISTRICTS_FILL_LAYER_ID, () => {
               if (hoveredCivicDistrictId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_DISTRICTS_SOURCE_ID, id: hoveredCivicDistrictId },
                   { hover: false }
                 );
@@ -9150,7 +9898,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -9170,7 +9918,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Clicking the same district that already has pincodes loaded: toggle off.
               if (selectedCivicDistrictIdRef.current === feature.id && pincodesAlreadyLoaded) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_DISTRICTS_SOURCE_ID, id: selectedCivicDistrictIdRef.current },
                   { selected: false }
                 );
@@ -9183,7 +9931,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Deselect the previous district if clicking a different one.
               if (selectedCivicDistrictIdRef.current !== null && selectedCivicDistrictIdRef.current !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_DISTRICTS_SOURCE_ID, id: selectedCivicDistrictIdRef.current },
                   { selected: false }
                 );
@@ -9191,7 +9939,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               selectedCivicDistrictIdRef.current = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: CIVIC_DISTRICTS_SOURCE_ID, id: selectedCivicDistrictIdRef.current },
                 { selected: true }
               );
@@ -9224,13 +9972,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredCivicPincodeId !== null && hoveredCivicPincodeId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_PINCODES_SOURCE_ID, id: hoveredCivicPincodeId },
                   { hover: false }
                 );
               }
               hoveredCivicPincodeId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: CIVIC_PINCODES_SOURCE_ID, id: hoveredCivicPincodeId },
                 { hover: true }
               );
@@ -9239,7 +9987,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", CIVIC_PINCODES_FILL_LAYER_ID, () => {
               if (hoveredCivicPincodeId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: CIVIC_PINCODES_SOURCE_ID, id: hoveredCivicPincodeId },
                   { hover: false }
                 );
@@ -9256,13 +10004,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredGpTalukId !== null && hoveredGpTalukId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_TALUKS_SOURCE_ID, id: hoveredGpTalukId },
                   { hover: false }
                 );
               }
               hoveredGpTalukId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: GP_TALUKS_SOURCE_ID, id: hoveredGpTalukId },
                 { hover: true }
               );
@@ -9271,7 +10019,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", GP_TALUKS_FILL_LAYER_ID, () => {
               if (hoveredGpTalukId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_TALUKS_SOURCE_ID, id: hoveredGpTalukId },
                   { hover: false }
                 );
@@ -9286,7 +10034,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -9315,7 +10063,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Clicking the same taluk that already has GP boundaries loaded: toggle off.
               if (selectedGpTalukIdRef.current === feature.id && boundariesAlreadyLoaded) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_TALUKS_SOURCE_ID, id: selectedGpTalukIdRef.current },
                   { selected: false }
                 );
@@ -9328,7 +10076,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Deselect the previous taluk if clicking a different one.
               if (selectedGpTalukIdRef.current !== null && selectedGpTalukIdRef.current !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_TALUKS_SOURCE_ID, id: selectedGpTalukIdRef.current },
                   { selected: false }
                 );
@@ -9336,7 +10084,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               selectedGpTalukIdRef.current = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: GP_TALUKS_SOURCE_ID, id: selectedGpTalukIdRef.current },
                 { selected: true }
               );
@@ -9374,13 +10122,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredGpBoundaryId !== null && hoveredGpBoundaryId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_BOUNDARIES_SOURCE_ID, id: hoveredGpBoundaryId },
                   { hover: false }
                 );
               }
               hoveredGpBoundaryId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: GP_BOUNDARIES_SOURCE_ID, id: hoveredGpBoundaryId },
                 { hover: true }
               );
@@ -9389,7 +10137,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", GP_BOUNDARIES_FILL_LAYER_ID, () => {
               if (hoveredGpBoundaryId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: GP_BOUNDARIES_SOURCE_ID, id: hoveredGpBoundaryId },
                   { hover: false }
                 );
@@ -9406,15 +10154,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredKarnatakaStateId !== null && hoveredKarnatakaStateId !== feature.id) {
-                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+                setFeatureStateSafe(map, { source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
               }
               hoveredKarnatakaStateId = feature.id;
-              map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: true });
+              setFeatureStateSafe(map, { source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", KARNATAKA_STATE_FILL_LAYER_ID, () => {
               if (hoveredKarnatakaStateId !== null) {
-                map.setFeatureState({ source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
+                setFeatureStateSafe(map, { source: KARNATAKA_STATE_SOURCE_ID, id: hoveredKarnatakaStateId }, { hover: false });
               }
               hoveredKarnatakaStateId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9499,15 +10247,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredGbaCorporationId !== null && hoveredGbaCorporationId !== feature.id) {
-                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
               }
               hoveredGbaCorporationId = feature.id;
-              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: true });
+              setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", GBA_CORPORATIONS_FILL_LAYER_ID, () => {
               if (hoveredGbaCorporationId !== null) {
-                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: hoveredGbaCorporationId }, { hover: false });
               }
               hoveredGbaCorporationId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9532,7 +10280,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 selectedGbaCorporationIdRef.current === feature.id &&
                 loadedGbaZonesCorporationRef.current === corporationName.toLowerCase()
               ) {
-                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: false });
+                setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedGbaCorporationIdRef.current = null;
                 clearGbaZones(map);
                 clearGbaWards(map);
@@ -9540,10 +10288,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               if (selectedGbaCorporationIdRef.current !== null) {
-                map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: selectedGbaCorporationIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: selectedGbaCorporationIdRef.current }, { selected: false });
               }
               selectedGbaCorporationIdRef.current = feature.id;
-              map.setFeatureState({ source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: GBA_CORPORATIONS_SOURCE_ID, id: feature.id }, { selected: true });
               clearGbaZones(map);
               clearGbaWards(map);
               map.getCanvas().style.cursor = "wait";
@@ -9557,15 +10305,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredGbaZoneId !== null && hoveredGbaZoneId !== feature.id) {
-                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
               }
               hoveredGbaZoneId = feature.id;
-              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: true });
+              setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", GBA_ZONES_FILL_LAYER_ID, () => {
               if (hoveredGbaZoneId !== null) {
-                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: hoveredGbaZoneId }, { hover: false });
               }
               hoveredGbaZoneId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9591,17 +10339,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 selectedGbaZoneIdRef.current === feature.id &&
                 loadedGbaWardsZoneRef.current?.zone === zoneName.toLowerCase()
               ) {
-                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: false });
+                setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedGbaZoneIdRef.current = null;
                 clearGbaWards(map);
                 return;
               }
 
               if (selectedGbaZoneIdRef.current !== null) {
-                map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: selectedGbaZoneIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: selectedGbaZoneIdRef.current }, { selected: false });
               }
               selectedGbaZoneIdRef.current = feature.id;
-              map.setFeatureState({ source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: GBA_ZONES_SOURCE_ID, id: feature.id }, { selected: true });
               clearGbaWards(map);
               map.getCanvas().style.cursor = "wait";
               void loadGbaWards(map, corporation, zoneName).finally(() => {
@@ -9614,15 +10362,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredGbaWardId !== null && hoveredGbaWardId !== feature.id) {
-                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
               }
               hoveredGbaWardId = feature.id;
-              map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: true });
+              setFeatureStateSafe(map, { source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", GBA_WARDS_FILL_LAYER_ID, () => {
               if (hoveredGbaWardId !== null) {
-                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
+                setFeatureStateSafe(map, { source: GBA_WARDS_SOURCE_ID, id: hoveredGbaWardId }, { hover: false });
               }
               hoveredGbaWardId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9632,12 +10380,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (selectedGbaWardIdRef.current !== null) {
-                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: selectedGbaWardIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: GBA_WARDS_SOURCE_ID, id: selectedGbaWardIdRef.current }, { selected: false });
               }
               const isSame = selectedGbaWardIdRef.current === feature.id;
               selectedGbaWardIdRef.current = isSame ? null : feature.id;
               if (!isSame) {
-                map.setFeatureState({ source: GBA_WARDS_SOURCE_ID, id: feature.id }, { selected: true });
+                setFeatureStateSafe(map, { source: GBA_WARDS_SOURCE_ID, id: feature.id }, { selected: true });
               }
             });
 
@@ -9650,15 +10398,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredRoadsDistrictId !== null && hoveredRoadsDistrictId !== feature.id) {
-                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
               }
               hoveredRoadsDistrictId = feature.id;
-              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: true });
+              setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", ROADS_DISTRICTS_FILL_LAYER_ID, () => {
               if (hoveredRoadsDistrictId !== null) {
-                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: hoveredRoadsDistrictId }, { hover: false });
               }
               hoveredRoadsDistrictId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9702,7 +10450,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 selectedRoadsDistrictIdRef.current === feature.id &&
                 loadedRoadsTaluksDistrictRef.current === normalized
               ) {
-                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsDistrictIdRef.current = null;
                 selectedRoadsDistrictNameRef.current = null;
                 clearRoadsTaluks(map); // cascades into clearRoadsHighways too
@@ -9710,11 +10458,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               if (selectedRoadsDistrictIdRef.current !== null) {
-                map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: selectedRoadsDistrictIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: selectedRoadsDistrictIdRef.current }, { selected: false });
               }
               selectedRoadsDistrictIdRef.current = feature.id;
               selectedRoadsDistrictNameRef.current = districtName;
-              map.setFeatureState({ source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: ROADS_DISTRICTS_SOURCE_ID, id: feature.id }, { selected: true });
               map.getCanvas().style.cursor = "wait";
               if (roadsClickScopeRef.current === "district") {
                 // Opt-in heavier behavior - fetch this district's full highways right away
@@ -9764,15 +10512,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredRoadsTalukId !== null && hoveredRoadsTalukId !== feature.id) {
-                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
               }
               hoveredRoadsTalukId = feature.id;
-              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: true });
+              setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", ROADS_TALUKS_FILL_LAYER_ID, () => {
               if (hoveredRoadsTalukId !== null) {
-                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: hoveredRoadsTalukId }, { hover: false });
               }
               hoveredRoadsTalukId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9804,7 +10552,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 // highways if they were this taluk's own clipped view (double-clicked) - a
                 // district-wide ("District" click-scope) or statewide view should stay put,
                 // this is a boundaries-only click.
-                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsTalukIdRef.current = null;
                 selectedRoadsTalukNameRef.current = null;
                 selectedRoadsTalukGeometryRef.current = null;
@@ -9815,13 +10563,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               if (selectedRoadsTalukIdRef.current !== null) {
-                map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: selectedRoadsTalukIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: selectedRoadsTalukIdRef.current }, { selected: false });
               }
               selectedRoadsTalukIdRef.current = feature.id;
               selectedRoadsTalukNameRef.current = talukName;
               selectedRoadsTalukGeometryRef.current = feature.geometry;
               selectedRoadsHobliGeometryRef.current = null;
-              map.setFeatureState({ source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: ROADS_TALUKS_SOURCE_ID, id: feature.id }, { selected: true });
               // A different taluk's roads may still be showing from a previous double-click -
               // drop them now that a new taluk is selected, so they don't linger clipped to
               // the wrong polygon. Only when they were taluk-scoped to begin with - a
@@ -9868,15 +10616,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredRoadsHobliId !== null && hoveredRoadsHobliId !== feature.id) {
-                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
               }
               hoveredRoadsHobliId = feature.id;
-              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: true });
+              setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", ROADS_HOBLIES_FILL_LAYER_ID, () => {
               if (hoveredRoadsHobliId !== null) {
-                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: hoveredRoadsHobliId }, { hover: false });
               }
               hoveredRoadsHobliId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9908,7 +10656,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 // no roads at all, if the taluk was never double-clicked). Only touches the
                 // highways if they're already taluk-scoped - a district-wide/statewide view
                 // is untouched by this boundaries-only click.
-                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: false });
                 selectedRoadsHobliIdRef.current = null;
                 selectedRoadsHobliGeometryRef.current = null;
                 clearRoadsVillages(map);
@@ -9917,11 +10665,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
 
               if (selectedRoadsHobliIdRef.current !== null) {
-                map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: selectedRoadsHobliIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: selectedRoadsHobliIdRef.current }, { selected: false });
               }
               selectedRoadsHobliIdRef.current = feature.id;
               selectedRoadsHobliGeometryRef.current = feature.geometry;
-              map.setFeatureState({ source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: ROADS_HOBLIES_SOURCE_ID, id: feature.id }, { selected: true });
               // A different hobli's clip may still be active from a previous double-click -
               // fall back to the taluk's (or no filter) until this hobli is double-clicked.
               // Only when the highways are already taluk-scoped - see isRoadsHighwaysTalukScoped.
@@ -9962,15 +10710,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredRoadsVillageId !== null && hoveredRoadsVillageId !== feature.id) {
-                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
               }
               hoveredRoadsVillageId = feature.id;
-              map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: true });
+              setFeatureStateSafe(map, { source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", ROADS_VILLAGES_FILL_LAYER_ID, () => {
               if (hoveredRoadsVillageId !== null) {
-                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
+                setFeatureStateSafe(map, { source: ROADS_VILLAGES_SOURCE_ID, id: hoveredRoadsVillageId }, { hover: false });
               }
               hoveredRoadsVillageId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -9984,12 +10732,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (selectedRoadsVillageIdRef.current !== null) {
-                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: selectedRoadsVillageIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: ROADS_VILLAGES_SOURCE_ID, id: selectedRoadsVillageIdRef.current }, { selected: false });
               }
               const isSame = selectedRoadsVillageIdRef.current === feature.id;
               selectedRoadsVillageIdRef.current = isSame ? null : feature.id;
               if (!isSame) {
-                map.setFeatureState({ source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
+                setFeatureStateSafe(map, { source: ROADS_VILLAGES_SOURCE_ID, id: feature.id }, { selected: true });
               }
               roadsSelectionGenerationRef.current++;
               // Only touches the highways if they're already taluk-scoped - a district-wide/
@@ -10020,7 +10768,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               console.log("=== DISTRICT CLICK EVENT ===");
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
@@ -10052,7 +10800,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               // If clicking the same district that already has taluks loaded, toggle (deselect)
               if (selectedDistrictIdRef.current === feature.id && taluksAlreadyLoaded) {
                 // Toggle off - deselect district and clear taluks
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_DISTRICTS_SOURCE_ID, id: selectedDistrictIdRef.current },
                   { selected: false }
                 );
@@ -10070,7 +10818,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Deselect previous district if clicking a different one
               if (selectedDistrictIdRef.current !== null && selectedDistrictIdRef.current !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_DISTRICTS_SOURCE_ID, id: selectedDistrictIdRef.current },
                   { selected: false }
                 );
@@ -10080,7 +10828,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
               // Select the new district
               selectedDistrictIdRef.current = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_DISTRICTS_SOURCE_ID, id: selectedDistrictIdRef.current },
                 { selected: true }
               );
@@ -10126,13 +10874,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredAssemblyId !== null && hoveredAssemblyId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_ASSEMBLY_SOURCE_ID, id: hoveredAssemblyId },
                   { hover: false }
                 );
               }
               hoveredAssemblyId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_ASSEMBLY_SOURCE_ID, id: hoveredAssemblyId },
                 { hover: true }
               );
@@ -10141,7 +10889,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", STATE_ASSEMBLY_FILL_LAYER_ID, () => {
               if (hoveredAssemblyId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_ASSEMBLY_SOURCE_ID, id: hoveredAssemblyId },
                   { hover: false }
                 );
@@ -10154,12 +10902,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
               if (selectedAssemblyIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_ASSEMBLY_SOURCE_ID, id: selectedAssemblyIdRef.current },
                   { selected: false }
                 );
@@ -10169,7 +10917,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedAssemblyIdRef.current = wasSelected ? null : feature.id;
 
               if (selectedAssemblyIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_ASSEMBLY_SOURCE_ID, id: selectedAssemblyIdRef.current },
                   { selected: true }
                 );
@@ -10200,13 +10948,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredParliamentId !== null && hoveredParliamentId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_PARLIAMENT_SOURCE_ID, id: hoveredParliamentId },
                   { hover: false }
                 );
               }
               hoveredParliamentId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_PARLIAMENT_SOURCE_ID, id: hoveredParliamentId },
                 { hover: true }
               );
@@ -10215,7 +10963,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", STATE_PARLIAMENT_FILL_LAYER_ID, () => {
               if (hoveredParliamentId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_PARLIAMENT_SOURCE_ID, id: hoveredParliamentId },
                   { hover: false }
                 );
@@ -10228,12 +10976,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
               if (selectedParliamentIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_PARLIAMENT_SOURCE_ID, id: selectedParliamentIdRef.current },
                   { selected: false }
                 );
@@ -10243,7 +10991,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedParliamentIdRef.current = wasSelected ? null : feature.id;
 
               if (selectedParliamentIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_PARLIAMENT_SOURCE_ID, id: selectedParliamentIdRef.current },
                   { selected: true }
                 );
@@ -10270,13 +11018,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredPoliceId !== null && hoveredPoliceId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
                   { hover: false },
                 );
               }
               hoveredPoliceId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
                 { hover: true },
               );
@@ -10284,7 +11032,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             });
             map.on("mouseleave", STATE_POLICE_FILL_LAYER_ID, () => {
               if (hoveredPoliceId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_POLICE_SOURCE_ID, id: hoveredPoliceId },
                   { hover: false },
                 );
@@ -10296,11 +11044,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (selectedPoliceIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current },
                   { selected: false },
                 );
@@ -10308,7 +11056,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const wasSelected = selectedPoliceIdRef.current === feature.id;
               selectedPoliceIdRef.current = wasSelected ? null : feature.id;
               if (selectedPoliceIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current },
                   { selected: true },
                 );
@@ -10335,15 +11083,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
               if (hoveredPolicePointId !== null && hoveredPolicePointId !== feature.id) {
-                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
+                setFeatureStateSafe(map, { source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
               }
               hoveredPolicePointId = feature.id;
-              map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: feature.id }, { hover: true });
+              setFeatureStateSafe(map, { source: STATE_POLICE_SOURCE_ID, id: feature.id }, { hover: true });
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "pointer";
             });
             map.on("mouseleave", STATE_POLICE_POINT_LAYER_ID, () => {
               if (hoveredPolicePointId !== null) {
-                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
+                setFeatureStateSafe(map, { source: STATE_POLICE_SOURCE_ID, id: hoveredPolicePointId }, { hover: false });
               }
               hoveredPolicePointId = null;
               if (!drawingToolRef.current) map.getCanvas().style.cursor = "";
@@ -10353,10 +11101,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined || feature.geometry.type !== "Point") return;
               if (selectedPoliceIdRef.current !== null) {
-                map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current }, { selected: false });
+                setFeatureStateSafe(map, { source: STATE_POLICE_SOURCE_ID, id: selectedPoliceIdRef.current }, { selected: false });
               }
               selectedPoliceIdRef.current = feature.id;
-              map.setFeatureState({ source: STATE_POLICE_SOURCE_ID, id: feature.id }, { selected: true });
+              setFeatureStateSafe(map, { source: STATE_POLICE_SOURCE_ID, id: feature.id }, { selected: true });
               const coordinates = feature.geometry.coordinates as [number, number];
               map.easeTo({ center: coordinates, zoom: Math.max(map.getZoom(), 14), duration: 800 });
               const stationName = feature.properties?.station_name as string | undefined;
@@ -10375,13 +11123,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredTalukId !== null && hoveredTalukId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: DISTRICT_TALUKS_SOURCE_ID, id: hoveredTalukId },
                   { hover: false }
                 );
               }
               hoveredTalukId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: DISTRICT_TALUKS_SOURCE_ID, id: hoveredTalukId },
                 { hover: true }
               );
@@ -10390,7 +11138,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", DISTRICT_TALUKS_FILL_LAYER_ID, () => {
               if (hoveredTalukId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: DISTRICT_TALUKS_SOURCE_ID, id: hoveredTalukId },
                   { hover: false }
                 );
@@ -10403,7 +11151,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -10422,7 +11170,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               recordDrillAction(map);
 
               if (selectedTalukIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: DISTRICT_TALUKS_SOURCE_ID, id: selectedTalukIdRef.current },
                   { selected: false }
                 );
@@ -10433,7 +11181,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedTalukIdRef.current = wasSelected ? null : feature.id;
 
               if (selectedTalukIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: DISTRICT_TALUKS_SOURCE_ID, id: selectedTalukIdRef.current },
                   { selected: true }
                 );
@@ -10498,13 +11246,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredHobliId !== null && hoveredHobliId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: TALUK_HOBLIES_SOURCE_ID, id: hoveredHobliId },
                   { hover: false }
                 );
               }
               hoveredHobliId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: TALUK_HOBLIES_SOURCE_ID, id: hoveredHobliId },
                 { hover: true }
               );
@@ -10513,7 +11261,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", TALUK_HOBLIES_FILL_LAYER_ID, () => {
               if (hoveredHobliId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: TALUK_HOBLIES_SOURCE_ID, id: hoveredHobliId },
                   { hover: false }
                 );
@@ -10526,7 +11274,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -10545,7 +11293,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               recordDrillAction(map);
 
               if (selectedHobliIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: TALUK_HOBLIES_SOURCE_ID, id: selectedHobliIdRef.current },
                   { selected: false }
                 );
@@ -10555,7 +11303,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedHobliIdRef.current = wasSelected ? null : feature.id;
 
               if (selectedHobliIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: TALUK_HOBLIES_SOURCE_ID, id: selectedHobliIdRef.current },
                   { selected: true }
                 );
@@ -10616,13 +11364,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredVillageId !== null && hoveredVillageId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: HOBLI_VILLAGES_SOURCE_ID, id: hoveredVillageId },
                   { hover: false }
                 );
               }
               hoveredVillageId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: HOBLI_VILLAGES_SOURCE_ID, id: hoveredVillageId },
                 { hover: true }
               );
@@ -10631,7 +11379,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             map.on("mouseleave", HOBLI_VILLAGES_FILL_LAYER_ID, () => {
               if (hoveredVillageId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: HOBLI_VILLAGES_SOURCE_ID, id: hoveredVillageId },
                   { hover: false }
                 );
@@ -10654,13 +11402,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (!feature || feature.id === undefined) return;
 
               if (hoveredCadastralId !== null && hoveredCadastralId !== feature.id) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: VILLAGE_CADASTRALS_SOURCE_ID, id: hoveredCadastralId },
                   { hover: false }
                 );
               }
               hoveredCadastralId = feature.id;
-              map.setFeatureState(
+              setFeatureStateSafe(map, 
                 { source: VILLAGE_CADASTRALS_SOURCE_ID, id: hoveredCadastralId },
                 { hover: true }
               );
@@ -10668,7 +11416,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             };
             const onCadastralHoverEnd = () => {
               if (hoveredCadastralId !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: VILLAGE_CADASTRALS_SOURCE_ID, id: hoveredCadastralId },
                   { hover: false }
                 );
@@ -10689,7 +11437,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               // While the weather widget is enabled, clicks show weather for the clicked
               // point instead of drilling into the admin-boundary hierarchy underneath it.
-              if (selectedWeatherMetricsRef.current.size > 0) return;
+              if (isWeatherControlActiveRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
 
@@ -10715,7 +11463,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               recordDrillAction(map);
 
               if (selectedVillageIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: HOBLI_VILLAGES_SOURCE_ID, id: selectedVillageIdRef.current },
                   { selected: false }
                 );
@@ -10725,7 +11473,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               selectedVillageIdRef.current = wasSelected ? null : feature.id;
 
               if (selectedVillageIdRef.current !== null) {
-                map.setFeatureState(
+                setFeatureStateSafe(map, 
                   { source: HOBLI_VILLAGES_SOURCE_ID, id: selectedVillageIdRef.current },
                   { selected: true }
                 );
@@ -10833,6 +11581,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             }
             } catch (error) {
               console.error("Failed to load India state boundaries:", error);
+            } finally {
+              loadingIndiaStatesRef.current = false;
             }
             };
             loadIndiaStatesRef.current = loadIndiaStates;
@@ -11152,6 +11902,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // The map is back to its initial state - no drill context for scoped suggestions.
     onDrillContextChangeRef.current?.(null);
   };
+
+  // Reset View: bearing/pitch only, center and zoom (and every other piece of
+  // app state - AOI, weather mode, wind, selected location) are left alone.
+  // A single easeTo call - no source/layer/engine recreation of any kind.
+  const handleResetView = useCallback(() => {
+    mapRef.current?.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+  }, []);
 
   // Pressing Escape clears any loaded boundary (Karnataka, Bengaluru wards, or a manually
   // uploaded KML/KMZ) so the user can freshly load a new one. While an AOI drawing tool is
@@ -12294,6 +13051,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     isRadarEnabled ||
     isWindEnabled ||
     weatherMode !== "none";
+  useEffect(() => {
+    isWeatherControlActiveRef.current = isWeatherControlActive;
+  }, [isWeatherControlActive]);
 
   // ── Weather workspace terrain basemap ─────────────────────────────────────
   // Replaces the normal basemap with a Mapterhorn (Re:Earth-fallback) DEM
@@ -12517,6 +13277,1705 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
         />
+      )}
+
+      {/* Reset View - only shown once the map has been rotated/tilted away
+          from the default north-up, flat orientation. Sits above the scale
+          bar (bottom-right, native MapLibre control). */}
+      {!isLoading && !loadError && mapTransformDirty && (
+        <button
+          type="button"
+          onClick={handleResetView}
+          aria-label="Reset map view to north-up"
+          title="Reset view"
+          className="absolute bottom-16 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-white"
+        >
+          <Compass className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Wind speed/direction under the cursor (Ventusky-style). Zero listeners/
+          state when Wind is off - `windCursor` is only ever set while the
+          mousemove/click listeners above are attached. */}
+      {isWindEnabled &&
+        windCursor &&
+        (() => {
+          const TOOLTIP_WIDTH = 148;
+          const TOOLTIP_HEIGHT = windCursor.loading || windCursor.speedKmh == null ? 50 : 78;
+          const OFFSET = 14;
+          const containerWidth = containerRef.current?.clientWidth ?? 0;
+          const containerHeight = containerRef.current?.clientHeight ?? 0;
+
+          let left = windCursor.screenX + OFFSET;
+          let top = windCursor.screenY - OFFSET - TOOLTIP_HEIGHT;
+
+          if (containerWidth && left + TOOLTIP_WIDTH > containerWidth - 8) {
+            left = windCursor.screenX - OFFSET - TOOLTIP_WIDTH;
+          }
+          if (top < 8) {
+            top = windCursor.screenY + OFFSET;
+          }
+          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - TOOLTIP_WIDTH - 8));
+          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - TOOLTIP_HEIGHT - 8));
+
+          const activeFrame = windFrames[activeWindFrameIndex];
+
+          return (
+            <div
+              className="pointer-events-none absolute z-30 rounded-xl border border-white/60 bg-white/90 px-3 py-2 shadow-lg backdrop-blur-md"
+              style={{ left, top, width: TOOLTIP_WIDTH }}
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Wind</p>
+              {windCursor.loading ? (
+                <p className="mt-0.5 text-xs text-slate-500">Loading wind data...</p>
+              ) : windCursor.speedKmh == null ? (
+                <p className="mt-0.5 text-xs text-slate-500">No wind data</p>
+              ) : (
+                <>
+                  <p className="mt-0.5 text-base font-semibold text-obsidian-graphite">
+                    {windCursor.speedKmh.toFixed(1)} km/h
+                  </p>
+                  {windCursor.compass != null && windCursor.directionDeg != null && (
+                    <p className="text-xs text-slate-500">
+                      {windCursor.compass} · {Math.round(windCursor.directionDeg)}°
+                    </p>
+                  )}
+                  {activeFrame && (
+                    <p className="mt-0.5 text-[10px] text-slate-400">
+                      {formatIstTime(activeFrame.forecastTime)}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+      {/* Fire detection click popup - compact real FIRMS metadata, explicitly
+          not a fire perimeter (see the note in the panel itself). Dismissible
+          via the close button; also cleared automatically on mode change. */}
+      {weatherMode === "fire" &&
+        selectedFireDetection &&
+        (() => {
+          const POPUP_WIDTH = 220;
+          const POPUP_HEIGHT = 168;
+          const OFFSET = 14;
+          const containerWidth = containerRef.current?.clientWidth ?? 0;
+          const containerHeight = containerRef.current?.clientHeight ?? 0;
+          const { detection } = selectedFireDetection;
+
+          let left = selectedFireDetection.screenX + OFFSET;
+          let top = selectedFireDetection.screenY - OFFSET - POPUP_HEIGHT;
+          if (containerWidth && left + POPUP_WIDTH > containerWidth - 8) {
+            left = selectedFireDetection.screenX - OFFSET - POPUP_WIDTH;
+          }
+          if (top < 8) top = selectedFireDetection.screenY + OFFSET;
+          if (containerWidth) left = Math.max(8, Math.min(left, containerWidth - POPUP_WIDTH - 8));
+          if (containerHeight) top = Math.max(8, Math.min(top, containerHeight - POPUP_HEIGHT - 8));
+
+          const confidenceLabel =
+            detection.confidence == null
+              ? "—"
+              : detection.confidence >= 90
+              ? "High"
+              : detection.confidence >= 50
+              ? "Nominal"
+              : "Low";
+
+          return (
+            <div
+              className="absolute z-30 rounded-xl border border-white/60 bg-white/95 px-3.5 py-3 shadow-xl backdrop-blur-md"
+              style={{ left, top, width: POPUP_WIDTH }}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-600">
+                  Active Fire Detection
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFireDetection(null)}
+                  aria-label="Close"
+                  className="-mr-1 -mt-1 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  ×
+                </button>
+              </div>
+              <dl className="mt-1.5 space-y-1 text-xs">
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Acquired</dt>
+                  <dd className="font-medium text-slate-900">{formatIstTime(detection.acquiredAt)}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Satellite</dt>
+                  <dd className="font-medium text-slate-900">{detection.satellite}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Confidence</dt>
+                  <dd className="font-medium text-slate-900">{confidenceLabel}</dd>
+                </div>
+                {detection.frp != null && (
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">FRP</dt>
+                    <dd className="font-medium text-slate-900">{detection.frp.toFixed(1)} MW</dd>
+                  </div>
+                )}
+                <div className="flex justify-between gap-2">
+                  <dt className="text-slate-500">Source</dt>
+                  <dd className="font-medium text-slate-900">NASA FIRMS / VIIRS</dd>
+                </div>
+              </dl>
+              <p className="mt-2 border-t border-slate-100 pt-1.5 text-[10px] leading-snug text-slate-400">
+                This is an active-fire satellite detection, not a mapped fire perimeter.
+              </p>
+            </div>
+          );
+        })()}
+
+      {/* Non-blocking notice for a drill-down layer that failed to load (e.g.
+          no boundary data uploaded yet for this state/place) â€” small and
+          dismisses itself, never covers the map. */}
+      {layerNotice && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2">
+          <div className="pointer-events-auto rounded-lg bg-gray-900/90 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+            {layerNotice}
+          </div>
+        </div>
+      )}
+
+      {/* Weather menu: select which live metrics to include. When at least one
+          metric is enabled, left-clicking the map opens/updates the fixed
+          right-side weather panel and boundary drill-down is paused. */}
+      {!isLoading && !loadError && (
+        <div ref={weatherMenuRef} className="absolute left-4 top-20 z-20">
+          <button
+            type="button"
+            onClick={() => setShowWeatherMenu((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showWeatherMenu}
+            aria-label="Weather details"
+            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
+              isWeatherControlActive
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <CloudSun className="h-4 w-4" />
+            Weather
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
+                showWeatherMenu ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+              {(showWeatherMenu ||
+                isRadarEnabled ||
+                isWindEnabled ||
+                weatherMode !== "none" ||
+                selectedWeatherMetrics.size > 0) && (
+            <div
+              role="menu"
+              className="absolute left-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather
+              </p>
+
+              <div className="mt-4">
+                {(weatherMode === "rain" || weatherMode === "clouds") && (
+                  <div role="tablist" className="flex gap-1 rounded-xl bg-gray-100 p-1">
+                    {(["observed", "forecast"] as const).map((product) => {
+                      const active =
+                        weatherMode === "rain" ? rainProduct === product : cloudProduct === product;
+                      return (
+                        <button
+                          key={product}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() =>
+                            weatherMode === "rain" ? setRainProduct(product) : setCloudProduct(product)
+                          }
+                          className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                            active
+                              ? "bg-white text-obsidian-graphite shadow-sm"
+                              : "text-slate-500 hover:text-obsidian-graphite"
+                          }`}
+                        >
+                          {product}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {weatherMode === "clouds" && cloudProduct === "observed" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">Multi-Geo Composite</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Satellites</span>
+                      <span className="text-right font-medium text-slate-900">
+                        Himawari-9 + GOES-West + GOES-East
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{HIMAWARI_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Coverage</span>
+                      <span className="text-right font-medium text-slate-900">Asia-Pacific, Americas, Atlantic</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {HIMAWARI_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observed</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {himawariFrames[himawariFrameIndex]
+                          ? formatIstTime(himawariFrames[himawariFrameIndex]!)
+                          : "Resolving..."}
+                      </span>
+                    </div>
+                    {/* Satellite availability indicators */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        himawariStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${himawariStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        Himawari
+                      </span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        goesWestStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${goesWestStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        GOES-West
+                      </span>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                        goesEastStatus === "ready" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${goesEastStatus === "ready" ? "bg-green-500" : "bg-gray-400"}`} />
+                        GOES-East
+                      </span>
+                    </div>
+                    {himawariStatus === "ready" && himawariFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHimawariPlaying(false);
+                              setHimawariFrameIndex((i) =>
+                                i === 0 ? himawariFrames.length - 1 : i - 1
+                              );
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsHimawariPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isHimawariPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHimawariPlaying(false);
+                              setHimawariFrameIndex((i) => (i + 1) % himawariFrames.length);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {himawariFrames.length} frames · every {HIMAWARI_CADENCE_MINUTES} min (real
+                          timestamps only)
+                        </p>
+                      </div>
+                    )}
+                    {himawariStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving satellite frames...</p>
+                    )}
+                    {himawariStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        Satellite imagery is temporarily unavailable.
+                      </p>
+                    )}
+                    <p className="text-[11px] text-slate-400">{HIMAWARI_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Multi-geostationary IR composite (Band 13, 10.3 µm). Himawari covers Asia-Pacific, GOES-West covers Americas/Pacific, GOES-East covers Americas/Atlantic. Gaps near Africa/Europe reflect no geostationary coverage from these three satellites.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "rain" && rainProduct === "observed" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{IMERG_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        ~{IMERG_NOMINAL_RESOLUTION_KM} km (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observed</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {imergFrames[imergFrameIndex] ? formatIstTime(imergFrames[imergFrameIndex]!) : "Resolving..."}
+                      </span>
+                    </div>
+                    {imergStatus === "ready" && imergFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsImergPlaying(false);
+                              setImergFrameIndex((i) => (i === 0 ? imergFrames.length - 1 : i - 1));
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsImergPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isImergPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsImergPlaying(false);
+                              setImergFrameIndex((i) => (i + 1) % imergFrames.length);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {imergFrames.length} frames · every {IMERG_CADENCE_MINUTES} min (real timestamps
+                          only)
+                        </p>
+                      </div>
+                    )}
+                    {imergStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest GPM IMERG frames...</p>
+                    )}
+                    {imergStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        Satellite precipitation is temporarily unavailable.
+                      </p>
+                    )}
+                    <p className="text-[11px] text-slate-400">{IMERG_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Real satellite-derived precipitation - typically runs 3-6h behind now (genuine
+                      NRT processing latency, not a bug).
+                    </p>
+                  </div>
+                )}
+
+                {((weatherMode === "rain" && rainProduct === "forecast") ||
+                  (weatherMode === "clouds" && cloudProduct === "forecast") ||
+                  weatherMode === "pressure") && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Active</span>
+                      <span className="text-right font-medium capitalize text-slate-900">
+                        {weatherMode}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Model</span>
+                      <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {weatherFieldFrames[weatherFieldIndex]
+                          ? formatIstShortDateTime(
+                              weatherFieldFrames[weatherFieldIndex]!.forecastTime
+                            )
+                          : "Loading..."}
+                      </span>
+                    </div>
+
+                    {weatherFieldStatus === "ready" && weatherFieldFrames.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-slate-500">Frame</span>
+                          <span className="font-medium text-slate-900">
+                            {formatIstShortDateTime(
+                              weatherFieldFrames[weatherFieldIndex]?.forecastTime ?? ""
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setWeatherFieldIndex((current) =>
+                                current === 0 ? weatherFieldFrames.length - 1 : current - 1
+                              )
+                            }
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsWeatherFieldPlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isWeatherFieldPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setWeatherFieldIndex(
+                                (current) => (current + 1) % weatherFieldFrames.length
+                              )
+                            }
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {weatherFieldIndex + 1} / {weatherFieldFrames.length} frames · GFS forecast
+                        </p>
+                      </div>
+                    )}
+                    {weatherFieldStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Loading NOAA GFS forecast...</p>
+                    )}
+                    {weatherFieldStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        {weatherFieldMessage ?? "NOAA GFS forecast is temporarily unavailable."}
+                      </p>
+                    )}
+
+                    <WeatherFieldLegend mode={weatherMode} />
+
+                    {weatherMode === "pressure" && (
+                      <label className="flex items-center gap-2 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={showPressureExtrema}
+                          onChange={(event) => setShowPressureExtrema(event.target.checked)}
+                          className="accent-atlas-cobalt"
+                        />
+                        Show H/L centers
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {weatherMode === "temperature" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Mode
+                      </p>
+                      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setTemperatureProduct("surface")}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                            temperatureProduct === "surface"
+                              ? "bg-white text-slate-900 shadow-sm"
+                              : "text-slate-500 hover:text-slate-900"
+                          }`}
+                        >
+                          Surface Temperature
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTemperatureProduct("forecast")}
+                          className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                            temperatureProduct === "forecast"
+                              ? "bg-white text-slate-900 shadow-sm"
+                              : "text-slate-500 hover:text-slate-900"
+                          }`}
+                        >
+                          Air Temperature Forecast
+                        </button>
+                      </div>
+                    </div>
+
+                    {temperatureProduct === "surface" ? (
+                      <>
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Platform
+                          </p>
+                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                            {(["auto", "SNPP", "NOAA20", "NOAA21"] as const).map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => setLstPlatform(option)}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
+                                  lstPlatform === option
+                                    ? "bg-white text-slate-900 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-900"
+                                }`}
+                              >
+                                {option === "auto" ? "Auto" : option}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Observation
+                          </p>
+                          <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                            {(["auto", "day", "night"] as const).map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => setLstDayNightSelection(option)}
+                                className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
+                                  lstDayNightSelection === option
+                                    ? "bg-white text-slate-900 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-900"
+                                }`}
+                              >
+                                {option}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {lstCoverage && (
+                          <div className="rounded-xl bg-amber-50 border border-amber-200 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-amber-800">Coverage over India</span>
+                              <span className="text-xs font-mono text-amber-700">
+                                {lstCoverage.coveragePercent}% ({lstCoverage.tilesValid}/{lstCoverage.tilesChecked} tiles)
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-amber-700 mt-1">
+                              VIIRS is a polar-orbiting sensor with swath gaps. Blank regions = no satellite pass / cloud / invalid QA.
+                              Not interpolated or fabricated.
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Satellite</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {lstResolved ? lstResolved.satelliteLabel : "Resolving..."}
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Platform</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {lstResolved ? lstResolved.platform : "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Instrument</span>
+                          <span className="text-right font-medium text-slate-900">{VIIRS_LST_INSTRUMENT}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Product</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {VIIRS_LST_PRODUCT_NAME} ({lstEffectiveDayNight === "day" ? "Day" : "Night"})
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Resolution</span>
+                          <span className="text-right font-medium text-slate-900">
+                            {VIIRS_LST_NOMINAL_RESOLUTION_M} m (nominal, Level 7 / maxzoom 7)
+                          </span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Observation</span>
+                          <span className="text-right font-medium text-slate-900">{lstDate ?? "Loading..."}</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Source</span>
+                          <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                        </div>
+
+
+                        {lstStatus === "ready" && lstAvailableDates.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsLstPlaying(false);
+                                  stepLstDate(-1);
+                                }}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                Prev Day
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsLstPlaying((current) => !current)}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                {isLstPlaying ? "Pause" : "Play"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsLstPlaying(false);
+                                  stepLstDate(1);
+                                }}
+                                className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                Next Day
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsLstPlaying(false);
+                                if (lstAvailableDates[0]) setLstDate(lstAvailableDates[0]);
+                              }}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            >
+                              Latest
+                            </button>
+                          </div>
+                        )}
+                        {lstStatus === "loading" && (
+                          <p className="text-xs text-slate-500">Loading latest VIIRS surface temperature...</p>
+                        )}
+                        {lstStatus === "unavailable" && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-amber-700">Surface temperature temporarily unavailable.</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLstResolvedDay(undefined);
+                                setLstResolvedNight(undefined);
+                              }}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            >
+                              Retry
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Debug panel */}
+                        <div className="border-t border-slate-200 pt-2 mt-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={showLstDebug}
+                              onChange={(e) => setShowLstDebug(e.target.checked)}
+                              className="rounded border-slate-300 accent-atlas-cobalt"
+                            />
+                            <span className="text-xs text-slate-600">Debug pixel inspector (dev only)</span>
+                          </label>
+                          {showLstDebug && lstResolved && (
+                            <div className="mt-2 p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono space-y-1 text-slate-700">
+                              <div><strong>Layer:</strong> {lstResolved.layer}</div>
+                              <div><strong>Platform:</strong> {lstResolved.platform}</div>
+                              <div><strong>Day/Night:</strong> {lstResolved.dayNight}</div>
+                              <div><strong>Date:</strong> {lstResolved.date}</div>
+                              <div><strong>TileMatrixSet:</strong> {VIIRS_LST_TILE_MATRIX_SET}</div>
+                              <div><strong>Tile Size:</strong> {VIIRS_LST_TILE_SIZE}×{VIIRS_LST_TILE_SIZE}</div>
+                              <div><strong>Native Max Zoom:</strong> {VIIRS_LST_NATIVE_MAX_ZOOM}</div>
+                              <div><strong>Format:</strong> {VIIRS_LST_FORMAT}</div>
+                              <div><strong>Nominal Resolution:</strong> {VIIRS_LST_NOMINAL_RESOLUTION_M} m</div>
+                              <div><strong>Projection:</strong> Web Mercator (EPSG:3857)</div>
+                              <div><strong>Product Name:</strong> {VIIRS_LST_PRODUCT_NAME}</div>
+                              <div><strong>Attribution:</strong> {VIIRS_LST_ATTRIBUTION}</div>
+                              <hr className="border-slate-200 my-1" />
+                              <div className="text-amber-700"><strong>NOTE:</strong> GIBS serves pre-colorized browse images.</div>
+                              <div className="text-amber-700">No raw Kelvin/Celsius values available per pixel.</div>
+                              <div className="text-amber-700">Click-to-inspect shows "Pixel temperature lookup unavailable".</div>
+                              <div className="text-amber-700">Cloud/invalid pixels = transparent (not fabricated).</div>
+                              {lstCoverage && (
+                                <>
+                                  <hr className="border-slate-200 my-1" />
+                                  <div><strong>Coverage:</strong> {lstCoverage.coveragePercent}% over India</div>
+                                  <div><strong>Valid tiles:</strong> {lstCoverage.tilesValid}/{lstCoverage.tilesChecked}</div>
+                                  <div><strong>India bounds:</strong> {lstCoverage.indiaBounds.west}°–{lstCoverage.indiaBounds.east}°E, {lstCoverage.indiaBounds.south}°–{lstCoverage.indiaBounds.north}°N</div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-slate-400">
+                          Land Surface Temperature (soil/vegetation/roofs/roads), not air temperature. Colour scale is
+                          NASA&apos;s official LST palette. Cloud-covered/invalid areas are transparent - not fabricated.
+                        </p>
+                        <p className="text-[11px] text-slate-400">{VIIRS_LST_ATTRIBUTION}</p>
+                      </>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Model</span>
+                          <span className="text-right font-medium text-slate-900">BharatFS</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Resolution</span>
+                          <span className="text-right font-medium text-slate-900">~6 km</span>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-slate-500">Variable</span>
+                          <span className="text-right font-medium text-slate-900">2 m Air Temperature</span>
+                        </div>
+                        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          BharatFS data access not configured. No official machine-readable BharatFS API/GRIB
+                          distribution was found during research - see the report for what access would be needed.
+                          Surface Temperature (NASA VIIRS) remains fully available above.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {weatherMode === "satellite" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Satellite</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {satelliteResolved ? satelliteResolved.product.satelliteLabel : "Resolving..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">{GIBS_INSTRUMENT}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{GIBS_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {GIBS_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Observation</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {satelliteDate ?? "Loading..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                    </div>
+
+
+                    {satelliteStatus === "ready" && satelliteAvailableDates.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSatellitePlaying(false);
+                              stepSatelliteDate(-1);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsSatellitePlaying((current) => !current)}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            {isSatellitePlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSatellitePlaying(false);
+                              stepSatelliteDate(1);
+                            }}
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          {satelliteAvailableDates.length} recent day
+                          {satelliteAvailableDates.length === 1 ? "" : "s"} available · Status: Latest available
+                        </p>
+                      </div>
+                    )}
+                    {satelliteStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest NASA GIBS imagery...</p>
+                    )}
+                    {satelliteStatus === "unavailable" && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-700">
+                          Satellite imagery is temporarily unavailable (NOAA-21/NOAA-20/SNPP all unreachable).
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetGibsSatelliteResolution();
+                            setSatelliteResolved(undefined);
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-slate-400">{GIBS_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      VIIRS is polar-orbiting: it images the Earth in swaths through the day, not
+                      all at once. Black areas are regions today&apos;s pass hasn&apos;t covered yet
+                      (or cloud/no-data) - not a rendering error.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "vegetation" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Instrument</span>
+                      <span className="text-right font-medium text-slate-900">{NDVI_INSTRUMENT}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Product</span>
+                      <span className="text-right font-medium text-slate-900">{NDVI_PRODUCT_NAME}</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Resolution</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {NDVI_NOMINAL_RESOLUTION_M} m (nominal)
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Composite period</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {ndviResolved ? ndviResolved.date : "Resolving..."}
+                      </span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA GIBS</span>
+                    </div>
+
+
+                    {ndviStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Resolving latest NDVI composite...</p>
+                    )}
+                    {ndviStatus === "unavailable" && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-700">
+                          Vegetation imagery is temporarily unavailable (no recent composite reachable).
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetNdviResolution();
+                            setNdviResolved(undefined);
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-slate-400">{NDVI_ATTRIBUTION}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Brown/tan = sparse vegetation · green = dense vegetation.
+                    </p>
+                  </div>
+                )}
+
+                {weatherMode === "fire" && (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Source</span>
+                      <span className="text-right font-medium text-slate-900">NASA FIRMS</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Detections</span>
+                      <span className="text-right font-medium text-slate-900">{fireDetections.length}</span>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Time window</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {([24, 48, 72] as const).map((hours) => (
+                          <button
+                            key={hours}
+                            type="button"
+                            onClick={() => setFireHours(hours)}
+                            className={`flex-1 rounded-xl border px-2 py-1.5 text-xs font-medium transition-colors ${
+                              fireHours === hours
+                                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            {hours}h
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#ffd700" }} /> Low
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#ff9900" }} /> Moderate
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full" style={{ background: "#e81e1e" }} /> High
+                      </span>
+                      <span>confidence</span>
+                    </div>
+                    {fireStatus === "loading" && (
+                      <p className="text-xs text-slate-500">Loading NASA FIRMS detections...</p>
+                    )}
+                    {fireStatus === "unavailable" && (
+                      <p className="text-xs text-amber-700">
+                        {fireMessage ?? "NASA FIRMS is temporarily unavailable."}
+                      </p>
+                    )}
+                    {fireStatus === "ready" && fireDetections.length === 0 && (
+                      <p className="text-xs text-slate-500">No active fires detected near this view.</p>
+                    )}
+                    <p className="text-[11px] text-slate-400">
+                      VIIRS NOAA-21 + NOAA-20 NRT · pans/zooms refresh detections automatically.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Click Map · Details
+                  </p>
+                  <p className="mb-3 text-xs text-slate-500">
+                    Enable metrics, then click the map to open current conditions + a 5-day
+                    forecast in the right-side panel.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {WEATHER_METRICS.map(({ key, label, Icon }) => (
+                      <label
+                        key={key}
+                        className={`flex cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors ${
+                          selectedWeatherMetrics.has(key)
+                            ? "border-atlas-cobalt bg-atlas-cobalt/11 text-atlas-cobalt"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="accent-atlas-cobalt"
+                          checked={selectedWeatherMetrics.has(key)}
+                          onChange={() =>
+                            setSelectedWeatherMetrics((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            })
+                          }
+                        />
+                        <Icon className="h-4 w-4 flex-shrink-0 text-slate-400" />
+                        <span className="truncate">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Radar</p>
+                    <p className="text-xs text-slate-500">Observed India composite</p>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+                    <input
+                      type="checkbox"
+                      className="accent-atlas-cobalt"
+                      checked={isRadarEnabled}
+                      onChange={(event) => setIsRadarEnabled(event.target.checked)}
+                    />
+                    <span className="font-medium">On</span>
+                  </label>
+                </div>
+
+                <div className="mt-3 space-y-3 text-sm text-slate-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Coverage</span>
+                    <span className="text-right font-medium text-slate-900">
+                      India Radar Composite
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Source</span>
+                    <span className="text-right font-medium text-slate-900">
+                      RainViewer composite
+                    </span>
+                  </div>
+                </div>
+
+                {isRadarEnabled && radarStatus === "ready" && radarFrames.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="font-medium text-slate-900">
+                        {formatRadarTimeIST(radarFrames[radarFrameIndex]?.time ?? 0)} IST
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={radarGoPrev}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={radarTogglePlay}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        {isRadarPlaying ? "Pause" : "Play"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={radarGoNext}
+                        className="flex-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      {radarFrameIndex + 1} / {radarFrames.length} frames · past → now
+                    </p>
+                  </div>
+                )}
+
+                {isRadarEnabled && radarStatus === "loading" && (
+                  <p className="mt-3 text-xs text-slate-500">Loading India radar composite...</p>
+                )}
+                {isRadarEnabled && radarStatus === "ready" && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Composite of multiple radars. Coverage varies by region; gaps are normal.
+                  </p>
+                )}
+                {isRadarEnabled && radarStatus === "unavailable" && (
+                  <p className="mt-3 text-xs text-amber-700">
+                    Radar is temporarily unavailable. The base map keeps working.
+                  </p>
+                )}
+              </div>
+
+              {weatherMode === "wind" && (
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Wind</p>
+                      <p className="text-xs text-slate-500">Animated NOAA GFS flow field</p>
+                    </div>
+                  </div>
+
+                <div className="mt-3 space-y-3 text-sm text-slate-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Model</span>
+                    <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-slate-500">Valid</span>
+                    <span className="text-right font-medium text-slate-900">
+                      {windFrames[activeWindFrameIndex]
+                        ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
+                        : "Loading..."}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="text-slate-500">Particle Density</span>
+                      <span className="font-medium text-slate-900">
+                        {Math.round(windDensity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={20}
+                      max={100}
+                      value={Math.round(windDensity * 100)}
+                      onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
+                      className="w-full accent-atlas-cobalt"
+                    />
+                  </div>
+                </div>
+
+                {isWindEnabled && windStatus === "loading" && (
+                  <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
+                )}
+                {isWindEnabled && windStatus === "ready" && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Live particles are projected directly from the NOAA U/V wind field.
+                  </p>
+                )}
+                {isWindEnabled && windStatus === "unavailable" && (
+                  <p className="mt-3 text-xs text-amber-700">
+                    {windStatusMessage ?? "NOAA GFS wind is temporarily unavailable."}
+                  </p>
+                )}
+              </div>
+              )}
+
+              {weatherMode === "air-quality" && (
+                <div className="mt-4 border-t border-slate-200/80 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Air Quality</p>
+                      <p className="text-xs text-slate-500">Modeled US AQI surface + official CPCB stations</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Modeled Surface</span>
+                      <span className="text-right font-medium text-slate-900">Open-Meteo</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Official Stations</span>
+                      <span className="text-right font-medium text-slate-900">CPCB / data.gov.in</span>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-slate-500">Valid</span>
+                      <span className="text-right font-medium text-slate-900">
+                        {aqiGrid
+                          ? new Intl.DateTimeFormat("en-IN", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                              timeZone: "Asia/Kolkata",
+                            }).format(new Date(aqiGrid.fetchedAt))
+                          : "Loading..."}
+                      </span>
+                    </div>
+
+                    {aqiStatus === "loading" && (
+                      <p className="mt-3 text-xs text-slate-500">Loading air quality data...</p>
+                    )}
+                    {aqiStatus === "unavailable" && (
+                      <p className="mt-3 text-xs text-amber-700">
+                        {aqiMessage ?? "Air quality data is temporarily unavailable."}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+        </div>
+      )}
+
+      {/*
+      {!isLoading && !loadError && (
+        <div ref={windControlRef} className="absolute left-4 top-52 z-20">
+          <button
+            type="button"
+            onClick={() => setShowWindPanel((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showWindPanel}
+            aria-label="Wind overlay"
+            className={`flex items-center gap-2 rounded-full border px-3 py-2.5 text-sm font-medium shadow-md transition-colors ${
+              showWindPanel || isWindEnabled
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Wind className="h-4 w-4" />
+            Wind
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
+                showWindPanel ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {(showWindPanel || isWindEnabled) && (
+            <div className="absolute left-0 top-full z-30 mt-2 w-72 overflow-hidden rounded-2xl border border-white/70 bg-white/94 p-4 shadow-xl backdrop-blur-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather
+              </p>
+              <label className="mt-3 flex cursor-pointer items-center gap-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  className="accent-atlas-cobalt"
+                  checked={isWindEnabled}
+                  onChange={(event) => setIsWindEnabled(event.target.checked)}
+                />
+                <span className="font-medium">Wind</span>
+              </label>
+
+              <div className="mt-4 space-y-3 text-sm text-slate-700">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-slate-500">Model</span>
+                  <span className="text-right font-medium text-slate-900">NOAA GFS 0.25°</span>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-slate-500">Valid</span>
+                  <span className="text-right font-medium text-slate-900">
+                    {windFrames[activeWindFrameIndex]
+                      ? formatIstShortDateTime(windFrames[activeWindFrameIndex]!.forecastTime)
+                      : "Loading..."}
+                  </span>
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-slate-500">Particle Density</span>
+                    <span className="font-medium text-slate-900">
+                      {Math.round(windDensity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={20}
+                    max={100}
+                    value={Math.round(windDensity * 100)}
+                    onChange={(event) => setWindDensity(Number(event.target.value) / 100)}
+                    className="w-full accent-atlas-cobalt"
+                  />
+                </div>
+              </div>
+
+              {isWindEnabled && windStatus === "loading" && (
+                <p className="mt-3 text-xs text-slate-500">Loading NOAA GFS wind frames...</p>
+              )}
+              {isWindEnabled && windStatus === "unavailable" && (
+                <p className="mt-3 text-xs text-amber-700">
+                  NOAA GFS wind is temporarily unavailable.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      */}
+
+      {isWindEnabled && windFrames.length >= 3 && !isLoading && !loadError && (
+        <div className="absolute bottom-6 left-1/2 z-20 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 rounded-3xl border border-white/70 bg-white/92 p-4 shadow-2xl backdrop-blur-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Wind Forecast
+              </p>
+              <p className="text-sm font-medium text-slate-900">NOAA GFS 0.25°</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() =>
+                  setActiveWindFrameIndex((current) =>
+                    current === 0 ? windFrames.length - 1 : current - 1
+                  )
+                }
+              >
+                â—€
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() => setIsWindPlaying((current) => !current)}
+              >
+                {isWindPlaying ? "âšâš" : "â–¶"}
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-700"
+                onClick={() =>
+                  setActiveWindFrameIndex((current) => (current + 1) % windFrames.length)
+                }
+              >
+                â–¶
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2">
+            {windFrames.map((frame, index) => (
+              <button
+                key={frame.forecastHour}
+                type="button"
+                onClick={() => {
+                  setActiveWindFrameIndex(index);
+                  setIsWindPlaying(false);
+                }}
+                className={`rounded-2xl border px-3 py-2 text-left transition-colors ${
+                  index === activeWindFrameIndex
+                    ? "border-atlas-cobalt bg-atlas-cobalt/10"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <p className="text-xs font-semibold text-slate-900">
+                  +{frame.forecastHour}h
+                </p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {formatIstShortDateTime(frame.forecastTime)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedWeatherMetrics.size > 0 && !isLoading && !loadError && (
+        <div className="absolute right-4 top-20 z-20 w-[min(24rem,calc(100%-2rem))] max-h-[calc(100%-6rem)] overflow-y-auto rounded-3xl border border-white/70 bg-white/94 p-4 shadow-2xl backdrop-blur-sm">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                Weather Details
+              </p>
+              <h3 className="text-lg font-semibold text-slate-900">Click Map To Inspect</h3>
+            </div>
+            {weatherPanel.status !== "idle" && (
+              <div className="text-right text-xs text-slate-500">
+                <p>{formatCoordinate(weatherPanel.latitude)},</p>
+                <p>{formatCoordinate(weatherPanel.longitude)}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4 rounded-2xl bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            Weather mode is active. Boundary drill-down stays paused until all weather metrics are cleared.
+          </div>
+
+          {weatherPanel.status === "idle" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Click anywhere on the map to load live conditions and a 5-day forecast for that point.
+            </p>
+          )}
+
+          {weatherPanel.status === "loading" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600" role="status">
+              Loading live weather and forecast...
+            </p>
+          )}
+
+          {weatherPanel.status === "unavailable" && (
+            <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Weather details are temporarily unavailable for this location.
+            </p>
+          )}
+
+          {weatherPanel.status === "loaded" && (
+            <div className="space-y-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-slate-900">Current Conditions</h4>
+                  <span className="text-xs text-slate-500">Open-Meteo</span>
+                </div>
+
+                {weatherPanel.current?.weather.status === "AVAILABLE" && weatherPanel.current.weather.data ? (
+                  <div className="space-y-2">
+                    <WeatherCurrentHero
+                      temperatureC={weatherPanel.current.weather.data.temperatureC}
+                      feelsLikeC={weatherPanel.current.weather.data.feelsLikeC}
+                      code={weatherPanel.current.weather.data.weatherCode}
+                      isDay={weatherPanel.current.weather.data.isDay}
+                      windSpeedKmh={weatherPanel.current.weather.data.windSpeedKmh}
+                      updatedLabel={formatIstTime(weatherPanel.current.weather.data.observationTime)}
+                      size="md"
+                    />
+                    <div className="!mt-3 border-t border-slate-200 pt-2" />
+                    {selectedWeatherMetrics.has("temperature") && (
+                      <WeatherRow
+                        label="Temperature"
+                        value={formatMetric(weatherPanel.current.weather.data.temperatureC, "°C")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("humidity") && (
+                      <WeatherRow
+                        label="Humidity"
+                        value={formatMetric(
+                          weatherPanel.current.weather.data.relativeHumidityPercent,
+                          "%"
+                        )}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("pressure") && (
+                      <WeatherRow
+                        label="Pressure"
+                        value={formatMetric(weatherPanel.current.weather.data.surfacePressureHpa, "hPa")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("rain") && (
+                      <>
+                        <WeatherRow
+                          label="Rain"
+                          value={formatMetric(weatherPanel.current.weather.data.rainMm, "mm")}
+                        />
+                        <WeatherRow
+                          label="Precipitation"
+                          value={formatMetric(
+                            weatherPanel.current.weather.data.precipitationMm,
+                            "mm"
+                          )}
+                        />
+                      </>
+                    )}
+                    {selectedWeatherMetrics.has("wind") && (
+                      <WeatherRow
+                        label="Wind"
+                        value={`${formatMetric(
+                          weatherPanel.current.weather.data.windSpeedKmh,
+                          "km/h"
+                        )}${
+                          weatherPanel.current.weather.data.windDirectionCompass
+                            ? ` (${weatherPanel.current.weather.data.windDirectionCompass})`
+                            : ""
+                        }`}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-600">
+                    {weatherPanel.current?.weather.message ?? "Live weather is temporarily unavailable."}
+                  </p>
+                )}
+
+                {selectedWeatherMetrics.has("aqi") && (
+                  <div className="mt-3 border-t border-slate-200 pt-3">
+                    {weatherPanel.current?.modeledAirQuality.status === "AVAILABLE" &&
+                    weatherPanel.current.modeledAirQuality.data ? (
+                      <WeatherRow
+                        label="AQI (US)"
+                        value={formatMetric(
+                          weatherPanel.current.modeledAirQuality.data.usAqi,
+                          ""
+                        ).trim()}
+                      />
+                    ) : (
+                      <p className="text-sm text-slate-600">
+                        Modeled air quality is temporarily unavailable.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs text-slate-500">
+                  {weatherPanel.current?.weather.data?.observationTime
+                    ? `Observed: ${formatIstTime(
+                        weatherPanel.current.weather.data.observationTime
+                      )} · `
+                    : ""}
+                  AQI is modeled, not an official CPCB reading.
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-slate-900">5-Day Forecast</h4>
+                  <span className="text-xs text-slate-500">Bars show temperature range and rain chance</span>
+                </div>
+
+                {forecastDays.length > 0 ? (
+                  <div className="space-y-3">
+                    {forecastDays.map((day) => {
+                      const tempBar = temperatureBarStyle(
+                        day.temperatureMinC,
+                        day.temperatureMaxC,
+                        forecastRangeMin,
+                        forecastRangeMax
+                      );
+                      const rainChance = Math.max(
+                        0,
+                        Math.min(100, day.precipitationProbabilityMax ?? 0)
+                      );
+
+                      return (
+                        <div key={day.date} className="rounded-2xl bg-white p-3 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <WeatherConditionIcon code={day.weatherCode} isDay size={22} />
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {formatForecastDate(day.date)}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {weatherCodeLabel(day.weatherCode)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-slate-500">
+                              <p>Rain {formatMetric(day.precipitationSumMm, "mm")}</p>
+                              <p>Wind {formatMetric(day.windSpeedMaxKmh, "km/h")}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 space-y-2">
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                                <span>Temperature</span>
+                                <span>
+                                  {formatMetric(day.temperatureMinC, "°C")} to{" "}
+                                  {formatMetric(day.temperatureMaxC, "°C")}
+                                </span>
+                              </div>
+                              <div className="relative h-2 rounded-full bg-slate-200">
+                                <div
+                                  className="absolute top-0 h-2 rounded-full bg-gradient-to-r from-sky-400 via-amber-300 to-rose-400"
+                                  style={tempBar}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                                <span>Rain chance</span>
+                                <span>{formatMetric(day.precipitationProbabilityMax, "%")}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-slate-200">
+                                <div
+                                  className="h-2 rounded-full bg-atlas-cobalt"
+                                  style={{ width: `${rainChance}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-600">
+                    Daily forecast is temporarily unavailable for this location.
+                  </p>
+                )}
+
+                {weatherPanel.daily && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Forecast source: {weatherPanel.daily.source}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cursor-following weather glass card - only rendered once at least one
+          metric is selected; hidden the instant the checklist is cleared. */}
+      {weatherHoverCard && selectedWeatherMetrics.size > 0 && (
+        <div
+          className="pointer-events-none absolute z-30"
+          style={{ left: weatherHoverCard.left, top: weatherHoverCard.top, width: 240 }}
+        >
+          <div
+            className="rounded-xl px-4 py-3 text-white"
+            style={{
+              background: "rgba(20, 30, 38, 0.82)",
+              backdropFilter: "blur(14px)",
+              WebkitBackdropFilter: "blur(14px)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "0 8px 28px rgba(0,0,0,0.25)",
+            }}
+          >
+            <p className="mb-2 text-[11px] uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.68)" }}>
+              Weather
+            </p>
+
+            {weatherHoverCard.status === "loading" && (
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }} role="status">
+                Loadingâ€¦
+              </p>
+            )}
+            {weatherHoverCard.status === "unavailable" && (
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                Weather is temporarily unavailable for this location.
+              </p>
+            )}
+            {weatherHoverCard.status === "loaded" && weatherHoverCard.data && (
+              <div className="space-y-1.5">
+                {weatherHoverCard.data.weather.status === "AVAILABLE" && weatherHoverCard.data.weather.data && (
+                  <>
+                    {selectedWeatherMetrics.has("temperature") && (
+                      <WeatherRow
+                        label="Temperature"
+                        value={formatMetric(weatherHoverCard.data.weather.data.temperatureC, "°C")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("humidity") && (
+                      <WeatherRow
+                        label="Humidity"
+                        value={formatMetric(weatherHoverCard.data.weather.data.relativeHumidityPercent, "%")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("pressure") && (
+                      <WeatherRow
+                        label="Pressure"
+                        value={formatMetric(weatherHoverCard.data.weather.data.surfacePressureHpa, "hPa")}
+                      />
+                    )}
+                    {selectedWeatherMetrics.has("rain") && (
+                      <WeatherRow label="Rain" value={formatMetric(weatherHoverCard.data.weather.data.rainMm, "mm")} />
+                    )}
+                    {selectedWeatherMetrics.has("wind") && (
+                      <WeatherRow
+                        label="Wind"
+                        value={`${formatMetric(weatherHoverCard.data.weather.data.windSpeedKmh, "km/h")}${
+                          weatherHoverCard.data.weather.data.windDirectionCompass
+                            ? ` (${weatherHoverCard.data.weather.data.windDirectionCompass})`
+                            : ""
+                        }`}
+                      />
+                    )}
+                  </>
+                )}
+                {weatherHoverCard.data.weather.status !== "AVAILABLE" &&
+                  WEATHER_METRICS.some(({ key }) => key !== "aqi" && selectedWeatherMetrics.has(key)) && (
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                      {weatherHoverCard.data.weather.message ?? "Live weather is temporarily unavailable."}
+                    </p>
+                  )}
+
+                {selectedWeatherMetrics.has("aqi") &&
+                  (weatherHoverCard.data.modeledAirQuality.status === "AVAILABLE" &&
+                  weatherHoverCard.data.modeledAirQuality.data ? (
+                    <WeatherRow
+                      label="AQI (US)"
+                      value={formatMetric(weatherHoverCard.data.modeledAirQuality.data.usAqi, "")}
+                    />
+                  ) : (
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.68)" }}>
+                      Modeled air quality is temporarily unavailable.
+                    </p>
+                  ))}
+
+                <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.68)" }}>
+                  {weatherHoverCard.data.weather.data?.observationTime &&
+                    `Observed: ${formatIstTime(weatherHoverCard.data.weather.data.observationTime)} · `}
+                  Source: Open-Meteo
+                  {selectedWeatherMetrics.has("aqi") ? " · AQI is modeled, not an official CPCB reading" : ""}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

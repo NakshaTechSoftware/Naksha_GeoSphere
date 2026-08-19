@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Eye, EyeOff, Mail, Lock } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import {
   ApiRequestError,
@@ -13,7 +13,50 @@ import {
 import { buildGitHubAuthUrl, isGitHubSignInConfigured } from "@/lib/github-oauth";
 import { buildGoogleAuthUrl, isGoogleSignInConfigured } from "@/lib/google-oauth";
 import { signInUser } from "@/lib/session";
+import type { StoredUserLocation } from "@/lib/userSession";
 import { SignInBenefits } from "./SignInBenefits";
+
+function requestCurrentLocation(): Promise<StoredUserLocation> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined" || !("geolocation" in navigator)) {
+      reject(new Error("Geolocation is not supported in this browser."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters:
+            typeof position.coords.accuracy === "number" ? position.coords.accuracy : null,
+          capturedAt: new Date().toISOString(),
+          source: "browser_geolocation",
+        });
+      },
+      (error) => {
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            reject(new Error("Location permission was denied. You can still sign in and add it later."));
+            return;
+          case error.POSITION_UNAVAILABLE:
+            reject(new Error("Your exact location is currently unavailable."));
+            return;
+          case error.TIMEOUT:
+            reject(new Error("Location request timed out. Please try again later."));
+            return;
+          default:
+            reject(new Error("We could not read your location right now."));
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 300000,
+      }
+    );
+  });
+}
 
 // Development-stage demo account: signs in without touching the API so the
 // explore flow can be tested without a registered account.
@@ -61,6 +104,31 @@ export function SignInContent() {
     }
   };
 
+  // Best-effort browser geolocation capture, shared by every sign-in path
+  // (demo, real email/password, OAuth) so "My Environment" and the rest of
+  // the environment/AQI panels can personalize to the user's location right
+  // after sign-in. Never blocks sign-in on failure/denial - just surfaces a
+  // message and signs in without a location.
+  const signInWithLocation = async (user: { email: string; name: string }) => {
+    let preferredLocation: StoredUserLocation | null = null;
+    try {
+      setLocationMessage(
+        "Allow your browser location so we can personalize AQI, weather, and nearby environmental data."
+      );
+      preferredLocation = await requestCurrentLocation();
+      setLocationMessage(
+        `Location saved at ${preferredLocation.latitude.toFixed(4)}, ${preferredLocation.longitude.toFixed(4)}.`
+      );
+    } catch (locationError) {
+      setLocationMessage(
+        locationError instanceof Error
+          ? locationError.message
+          : "Location could not be captured. You can still continue."
+      );
+    }
+    signInUser({ ...user, preferredLocation });
+  };
+
   // Completes an OAuth round-trip (Google or GitHub): the backend exchanged
   // the code and redirected here with a one-time ticket — swap it for the
   // user and sign in.
@@ -76,7 +144,10 @@ export function SignInContent() {
         if (cancelled) {
           return;
         }
-        signInUser({ email: result.user.email, name: result.user.fullName });
+        await signInWithLocation({ email: result.user.email, name: result.user.fullName });
+        if (cancelled) {
+          return;
+        }
         router.replace("/explore");
       } catch {
         if (!cancelled) {
@@ -99,47 +170,31 @@ export function SignInContent() {
 
     // Demo credentials short-circuit the real authentication.
     if (email === DEMO_EMAIL && password === DEMO_PASSWORD) {
-      signInUser({ email: DEMO_EMAIL, name: DEMO_NAME });
+      await signInWithLocation({ email: DEMO_EMAIL, name: DEMO_NAME });
       router.push("/explore");
       return;
     }
 
-    // Test credentials
-    if (email === "demo@gmail.com" && password === "Demo@123") {
-      console.log("Credentials match! Redirecting...");
-
-      let preferredLocation: StoredUserLocation | null = null;
-      try {
-        setLocationMessage("Allow your browser location so we can personalize AQI, weather, and nearby environmental data.");
-        preferredLocation = await requestCurrentLocation();
-        setLocationMessage(
-          `Location saved at ${preferredLocation.latitude.toFixed(4)}, ${preferredLocation.longitude.toFixed(4)}.`
-        );
-      } catch (locationError) {
-        setLocationMessage(
-          locationError instanceof Error
-            ? locationError.message
-            : "Location could not be captured. You can still continue."
-        );
+    try {
+      const result = await login({ email, password });
+      await signInWithLocation({ email: result.user.email, name: result.user.fullName });
+      router.push("/explore");
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        if (err.errorCode === "EMAIL_NOT_VERIFIED") {
+          setError(
+            "Your email isn't verified yet. Check your inbox for the 6-digit code we sent you."
+          );
+        } else if (err.errorCode === "INVALID_CREDENTIALS") {
+          setError("Invalid email or password.");
+        } else {
+          setError(err.message);
+        }
+      } else if (err instanceof ApiUnavailableError) {
+        setError("We couldn't reach the server. Check your connection and try again.");
+      } else {
+        setError("Something went wrong. Please try again.");
       }
-
-      if (typeof window !== "undefined") {
-        saveStoredUserSession(
-          { email, name: "Arjun Singh", preferredLocation },
-          rememberMe
-        );
-      }
-
-      // Redirect after sign-in. The dashboard/environment panels now pick up
-      // the saved location automatically.
-      await new Promise(resolve => setTimeout(resolve, 300));
-      console.log("Attempting redirect to /explore");
-      
-      if (typeof window !== "undefined") {
-        window.location.href = "/explore";
-      }
-    } else {
-      console.log("Credentials do not match");
       setIsLoading(false);
     }
   };

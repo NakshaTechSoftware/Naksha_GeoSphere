@@ -24,6 +24,7 @@ interface UserProfileProps {
 export function UserProfile({
   userName,
   userEmail,
+  userLocationLabel,
   onMenuToggle,
   menuPositionClassName,
 }: UserProfileProps) {

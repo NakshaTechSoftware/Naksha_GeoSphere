@@ -22,7 +22,7 @@ import {
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
+import { ChevronDown, ChevronUp, MapPin, Search, Menu, Mic, X } from "lucide-react";
 import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
@@ -544,6 +544,22 @@ export function ExplorePage() {
   // Right-click attribute info for the side panel (boundary type + title + rows), reported
   // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+  // Whether the attribute panel is open. On mobile the panel starts collapsed until a
+  // feature is tapped; on desktop the panel opens immediately. Initialized from the current
+  // screen size (false on phones) so a first selection never flashes the panel open for a
+  // frame before the effect below closes it. The `typeof window` guard keeps SSR safe; the
+  // server value (false) is irrelevant because nothing renders until a feature is picked.
+  const [attributePanelOpen, setAttributePanelOpen] = useState<boolean>(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(min-width: 768px)").matches
+      : false
+  );
+  useEffect(() => {
+    if (!attributeInfo) return;
+    // Each new selection starts in the default state for the current screen size:
+    // open on desktop (md and up), closed (chip-only) on mobile.
+    setAttributePanelOpen(window.matchMedia("(min-width: 768px)").matches);
+  }, [attributeInfo]);
   const [storedUser, setStoredUser] = useState<StoredUserSession | null>(null);
   const [showLocationEnvironment, setShowLocationEnvironment] = useState(false);
 
@@ -1187,6 +1203,21 @@ export function ExplorePage() {
             if (visible) {
               // Sync toolbar mode from map viewer
               setWeatherToolbarMode(mapViewerRef.current?.getWeatherMode() as WeatherLayerKey | null);
+              // A left-click can't simultaneously drill into a boundary layer AND open the
+              // weather click-to-inspect popup - once any weather control is active, drop
+              // back to the plain administrative boundaries and close the Filters panel so
+              // the two features never fight over the same click. Also dismiss any
+              // attribute-info panel a click opened *before* weather was turned on - the
+              // map's own click handler only stops new ones from opening, it doesn't know
+              // to close one already showing.
+              setShowFilters(false);
+              setAttributeInfo(null);
+              mapViewerRef.current?.clearAttributeInfo();
+              if (selectedBoundaryLayer !== "administrative") {
+                setSelectedBoundaryLayer("administrative");
+                mapViewerRef.current?.setBoundaryLayerMode("administrative");
+                setSelectedRoadsScope("none");
+              }
             }
           }}
         />
@@ -1211,11 +1242,15 @@ export function ExplorePage() {
             <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
               <button
                 ref={filtersToggleRef}
-                onClick={() => setShowFilters((prev) => !prev)}
+                onClick={() => !showWeatherToolbar && setShowFilters((prev) => !prev)}
+                disabled={showWeatherToolbar}
+                title={showWeatherToolbar ? "Boundary layers are disabled while Weather is active" : undefined}
                 className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
-                  showFilters
-                    ? "bg-gray-100 text-obsidian-graphite"
-                    : "text-gray-500 hover:bg-gray-100"
+                  showWeatherToolbar
+                    ? "cursor-not-allowed text-gray-300"
+                    : showFilters
+                      ? "bg-gray-100 text-obsidian-graphite"
+                      : "text-gray-500 hover:bg-gray-100"
                 }`}
                 aria-label="Toggle filters"
                 aria-pressed={showFilters}
@@ -1383,14 +1418,16 @@ export function ExplorePage() {
             <button
               type="button"
               onClick={() => setShowLocationEnvironment((prev) => !prev)}
-              className={`flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium shadow-md transition-colors ${
+              aria-label="My Environment"
+              title="My Environment"
+              className={`flex flex-shrink-0 items-center gap-2 rounded-full border p-2.5 text-sm font-medium shadow-md transition-colors md:px-4 md:py-2.5 ${
                 showLocationEnvironment
                   ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                   : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               }`}
             >
-              <MapPin className="h-4 w-4" />
-              My Environment
+              <MapPin className="h-4 w-4 flex-shrink-0" />
+              <span className="max-md:hidden">My Environment</span>
             </button>
           )}
 
@@ -1587,7 +1624,10 @@ export function ExplorePage() {
 
         {/* FLOATING - Filters, toggled via the search bar's menu icon */}
         {showFilters && (
-          <aside className="scrollbar-hide absolute left-4 top-20 z-10 max-h-[calc(100vh-200px)] w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+          <aside
+            ref={filtersPanelRef}
+            className="scrollbar-hide absolute left-4 top-20 z-10 max-h-[calc(100vh-200px)] w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg"
+          >
             <div className="p-4">
               <h2 className="mb-4 text-lg font-semibold text-obsidian-graphite md:text-base">Filters</h2>
 
@@ -1684,6 +1724,7 @@ export function ExplorePage() {
               </div>
             </div>
         </aside>
+        )}
 
         {/* Floating chip: shows the completed AOI's area (with a clear button), or - while a
             drawing tool is armed - a hint for how to use it. */}

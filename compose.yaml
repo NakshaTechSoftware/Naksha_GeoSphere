@@ -90,8 +90,10 @@ services:
       context: ./services/api
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    # No ports here — compose.dev.yaml and compose.prod.yaml each publish their
+    # own host port via API_HOST_PORT. Compose concatenates (not replaces) list
+    # keys like `ports` across -f files, so a hardcoded mapping here would bind
+    # an extra, un-overridable host port alongside whichever overlay is active.
     env_file:
       - .env
     depends_on:
@@ -137,8 +139,14 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
         NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
     restart: unless-stopped
-    env_file:
-      - .env
+    # No env_file here (deliberately) — the ~20 Next.js dataset API routes
+    # under src/app/api/datasets/ default MINIO_ENDPOINT to a shared remote
+    # boundary-data server when the var is unset, but sign requests with
+    # credentials that only work against that remote server. Loading the
+    # full .env (whose MINIO_ENDPOINT points at the LOCAL dev minio:9000,
+    # meant for the `api` service) clobbers that default and breaks every
+    # dataset route with 403s. Everything web actually needs from .env is
+    # already passed explicitly below / via the dev and prod overlays.
     environment:
       - INDIA_DEM_PATH=/app/DEM_Terrain/India_SRTM_30M_EPSG3857.tif
       - INDIA_DEM_OVERVIEW_PATH=/app/DEM_Terrain/India_SRTM_30M_EPSG3857.tif

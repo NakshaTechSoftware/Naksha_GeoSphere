@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Layers } from "lucide-react";
 import { TerrainLegend } from "./TerrainLegend";
 
@@ -10,6 +10,15 @@ interface LayersControlProps {
   currentLayer: MapLayer;
   onLayerChange: (layer: MapLayer) => void;
   className?: string;
+  /** Google-Earth-style independent toggle for the base map's own place-name labels, shown
+   * as a checkbox alongside the layer picker cards when expanded (not tied to which base
+   * layer is selected - it persists across switching between them). */
+  placeLabelsVisible?: boolean;
+  onTogglePlaceLabels?: (visible: boolean) => void;
+  /** Auto-expands the picker once whenever this flips from false to true (e.g. entering
+   * "Find My Way" mode) - the user can still collapse it manually afterward, this doesn't
+   * force it to stay open. */
+  autoExpand?: boolean;
 }
 
 /**
@@ -20,8 +29,14 @@ export function LayersControl({
   currentLayer,
   onLayerChange,
   className = "",
+  placeLabelsVisible = true,
+  onTogglePlaceLabels,
+  autoExpand,
 }: LayersControlProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  useEffect(() => {
+    if (autoExpand) setIsExpanded(true);
+  }, [autoExpand]);
 
   const layers = [
     {
@@ -50,7 +65,11 @@ export function LayersControl({
     <div className={`absolute bottom-6 left-6 z-10 ${className}`}>
       <div className="flex items-end gap-3 max-sm:flex-col-reverse max-sm:items-start">
         {isExpanded ? (
-        // Expanded view - horizontal row of small square cards (Google Maps style)
+        // Expanded view - horizontal row of small square cards (Google Maps style), plus a
+        // Google-Earth-style checklist below for things independent of which base layer is
+        // active (currently just place-name labels - roads can't be toggled separately from
+        // labels on the satellite/terrain layers since Google's own tiles bake them together).
+        <div className="flex flex-col gap-2">
         <div className="flex flex-row gap-2">
           {layers.map((layer) => {
             const isSelected = currentLayer === layer.id;
@@ -120,6 +139,16 @@ export function LayersControl({
               </button>
             );
           })}
+        </div>
+          <label className="flex w-fit items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-md">
+            <input
+              type="checkbox"
+              className="accent-blue-500"
+              checked={placeLabelsVisible}
+              onChange={(e) => onTogglePlaceLabels?.(e.target.checked)}
+            />
+            Place names
+          </label>
         </div>
         ) : (
         // Collapsed view - Small square button showing current layer preview

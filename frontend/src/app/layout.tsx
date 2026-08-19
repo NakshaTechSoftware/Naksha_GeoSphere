@@ -44,7 +44,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} min-h-screen bg-polar-pearl font-sans text-obsidian-graphite antialiased`}>
+      {/* suppressHydrationWarning: browser extensions (Grammarly, etc.) inject
+          data-gr-ext-installed/data-new-gr-c-s-check-loaded onto <body> before React
+          hydrates, which React otherwise flags as a mismatch even though it's harmless -
+          this only silences warnings for this element's own attributes, not its children. */}
+      <body
+        className={`${inter.variable} min-h-screen bg-polar-pearl font-sans text-obsidian-graphite antialiased`}
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>

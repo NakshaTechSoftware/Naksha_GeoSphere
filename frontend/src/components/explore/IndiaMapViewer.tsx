@@ -12,7 +12,16 @@ import type {
   FilterSpecification,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { booleanIntersects } from "@turf/turf";
+import {
+  booleanIntersects,
+  booleanPointInPolygon,
+  circle as turfCircle,
+  point as turfPoint,
+  nearestPointOnLine,
+  along as turfAlong,
+  length as turfLength,
+  bearing as turfBearing,
+} from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
@@ -118,6 +127,15 @@ function boundsOfGeometry(geometry: GeoJSON.Geometry): [[number, number], [numbe
     geometry.coordinates.forEach(visitRing);
   } else if (geometry.type === "MultiPolygon") {
     geometry.coordinates.forEach((polygon) => polygon.forEach(visitRing));
+  } else if (geometry.type === "LineString") {
+    // Route lines (see fetchRoutes/getRoutePreview) are LineStrings, not Polygons - without
+    // this case min/max never move off their Infinity/-Infinity starting values, and the
+    // fitBounds() call after this silently crashes with "Invalid LngLat latitude value",
+    // which the caller's try/catch then mislabels as "no route found" even though the route
+    // itself was perfectly valid and already drawn on the map.
+    visitRing(geometry.coordinates);
+  } else if (geometry.type === "MultiLineString") {
+    geometry.coordinates.forEach(visitRing);
   }
 
   return [
@@ -724,6 +742,7 @@ interface DrillSnapshot {
 // loaded parliamentary constituency boundaries; "gram_panchayat" shows the states too (its
 // own panchayat boundaries aren't wired to map data yet, so no extra layers load).
 export type BoundaryLayerMode =
+  | "none"
   | "administrative"
   | "assembly"
   | "parliamentary"
@@ -740,6 +759,67 @@ export type PoliceType =
   | "city_armed_reserve" | "city_crime_branch" | "coastal_security"
   | "cyber_crime" | "ksisf" | "ksrp";
 
+/** One turn/maneuver in a route preview's step list (before navigation starts) - a plain
+ * human-readable instruction plus how far that leg of the route runs. */
+export interface RoutePreviewStep {
+  instruction: string;
+  distanceMeters: number;
+}
+
+/** One selectable route option in a route preview's alternatives list - Google always shows
+ * at least one ("Best") and often 2-3 more, each with its own distance/time. `summary` is a
+ * short "via X" label for the list row; may be null if no single road dominates the route. */
+export interface RouteAlternative {
+  summary: string | null;
+  distanceMeters: number;
+  durationSeconds: number;
+  steps: RoutePreviewStep[];
+}
+
+/** Summary returned by getRoutePreview() once route alternatives have been fetched and the
+ * first (fastest) one drawn - what the directions panel shows before the user commits to
+ * "Start Navigation". `selectedIndex` is which entry in `alternatives` is currently drawn on
+ * the map / would be used by Start Navigation - see selectRouteAlternative() to change it. */
+export interface RoutePreview {
+  alternatives: RouteAlternative[];
+  selectedIndex: number;
+}
+
+/** Where a route starts - the device's live GPS position, or an explicit searched point
+ * (Google's directions panel lets you type any starting point, not just "my location"). */
+export type DirectionsPoint =
+  | { type: "current" }
+  | { type: "place"; lat: number; lon: number; label: string };
+
+/** Why getRoutePreview() came back empty - distinct reasons so the caller can show a message
+ * that actually matches what went wrong, rather than one generic "couldn't find a route" for
+ * both "you denied location access" and "that destination has no roads to it". */
+export type RoutePreviewFailureReason =
+  | "geolocation-denied"
+  | "geolocation-unavailable"
+  | "no-route";
+
+export type RoutePreviewResult =
+  | { ok: true; preview: RoutePreview }
+  | { ok: false; reason: RoutePreviewFailureReason };
+
+/** Which travel mode a route/navigation session is for - each is a separately-built OSRM
+ * profile (see infrastructure/routing/), not a runtime flag on one shared engine. */
+export type TravelMode = "driving" | "walking" | "cycling";
+
+/** Live turn-by-turn state, reported continuously via onNavigationUpdate while navigation is
+ * active - what the on-map instruction banner shows. null once navigation stops (including
+ * on arrival). */
+export interface NavigationState {
+  destinationLabel: string;
+  distanceRemainingMeters: number;
+  durationRemainingSeconds: number;
+  currentInstruction: string;
+  nextInstruction: string | null;
+  distanceToNextTurnMeters: number;
+  arrived: boolean;
+}
+
 export interface IndiaMapViewerHandle {
   /** Sets the active Boundary Layers filter option (single-select). "administrative" shows
    * every loaded administrative boundary layer; "assembly" shows the default india_states
@@ -747,6 +827,14 @@ export interface IndiaMapViewerHandle {
    * shows the states plus loaded parliamentary constituency boundaries; "gram_panchayat"
    * shows the states too (panchayat boundaries not wired to data yet). */
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
+  /** Google-Earth-style independent layer toggle for the base map's own place-name labels
+   * (city/town/village names baked into whichever base layer - default/satellite/terrain -
+   * is currently active), separate from administrative boundary labels and from the
+   * automatic zoom-based hide/show that already exists. Persists across base-layer switches
+   * (switching to satellite after turning labels off keeps them off). Note: on satellite,
+   * Google's tiles bake roads in with the labels, so this hides both together there - there's
+   * no "labels only" tile variant to hide independently of the roads on that layer. */
+  setPlaceLabelsVisible: (visible: boolean) => void;
   setPoliceType: (type: PoliceType) => void;
   setPoliceDistrict: (district: string) => void;
   /** Sets what a district click does in Roads mode: "none" (default) is boundaries only -
@@ -760,6 +848,57 @@ export interface IndiaMapViewerHandle {
   setRoadsClickScope: (scope: "none" | "district" | "state") => void;
   /** Loads the Karnataka or Bengaluru boundary when the query matches (case-insensitive). */
   search: (query: string) => void;
+  /** Flies to an arbitrary lat/lon (a free-text place-search result, e.g. from Nominatim) and
+   * drops a single pin there, labeled with `label` in its popup - a fresh call replaces the
+   * previous pin rather than stacking pins. Unlike `search()`, this doesn't touch any
+   * boundary layers since the coordinate isn't tied to a known admin boundary. */
+  flyToPlace: (lat: number, lon: number, label: string) => void;
+  /** Starts (or, if already active, re-centers on) live "My Location" tracking: flies to the
+   * current GPS fix and drops a live-updating blue dot + accuracy ring that follows the
+   * device via the browser's watchPosition, same as Google Maps' blue dot. Calls
+   * onLiveLocationChange(true) once the first fix lands, or (false) on any geolocation
+   * error (permission denied, unsupported, timeout). */
+  startLiveLocation: () => void;
+  /** Stops live location tracking and removes the blue dot + accuracy ring. Safe to call
+   * even when tracking isn't active. */
+  stopLiveLocation: () => void;
+  /** Fetches a route (in the given travel mode) from `origin` to `destination` - either can
+   * be the device's live GPS position ("current") or an explicit searched point, same as
+   * Google's directions panel allowing either end to be "Your location" - draws it on the
+   * map and fits the view to it, the "preview" step before committing to turn-by-turn.
+   * Returns a failure reason if geolocation fails (only possible when an end is "current"),
+   * or no route exists (e.g. destination outside Karnataka - see
+   * infrastructure/routing/README.md). Calling this again (including with a different mode)
+   * replaces any previous preview/active route. */
+  getRoutePreview: (
+    origin: DirectionsPoint,
+    destination: DirectionsPoint,
+    mode: TravelMode
+  ) => Promise<RoutePreviewResult>;
+  /** Switches which of the last getRoutePreview() call's alternatives is drawn on the map and
+   * would be used by Start Navigation - e.g. the user tapping a different option in the
+   * alternatives list. No-op if `index` is out of range or there's no previewed route. */
+  selectRouteAlternative: (index: number) => void;
+  /** Removes the previewed/active route line from the map without stopping navigation
+   * tracking or touching the live-location dot - used when a new directions search starts or
+   * fails, so a stale route from a previous attempt never lingers next to an unrelated error
+   * message. Safe to call even when there's no route on the map. */
+  clearRoutePreview: () => void;
+  /** Starts live turn-by-turn navigation along the route from the last getRoutePreview() call
+   * - tracks the device's GPS, rotates the map to follow heading, re-routes automatically if
+   * the device drifts off the route, and reports progress via onNavigationUpdate. No-op if
+   * there's no previewed route. */
+  startNavigation: () => void;
+  /** Testing tool: starts navigation exactly like startNavigation, but fakes a GPS track
+   * moving along the previewed route at `speedKmh` (default: a reasonable per-mode speed)
+   * instead of using the device's real position - so voice guidance, the turn banner, map
+   * following, and mid-route rerouting/route-switching can all be verified without actually
+   * being at the route's location or physically moving. Exercises the exact same
+   * progress-tracking logic real navigation does. stopNavigation stops this too. */
+  startSimulatedNavigation: (speedKmh?: number) => void;
+  /** Stops turn-by-turn navigation (real or simulated), removes the route line, and resets
+   * the map's bearing/pitch. Safe to call even when navigation isn't active. */
+  stopNavigation: () => void;
   /** Lists every Bengaluru boundary file, grouped by region subfolder (Central, East, ...). */
   listBengaluruFiles: () => Promise<Record<string, string[]>>;
   /** Loads (visible=true) or removes (visible=false) a single Bengaluru boundary file by its
@@ -798,6 +937,35 @@ export interface IndiaMapViewerProps {
   /** Called whenever the map's current drill-down context changes (e.g. a taluk search
    * resolves), so callers can scope their own suggestions; null when the map is reset. */
   onDrillContextChange?: (context: { state: string; district: string; taluk: string } | null) => void;
+  /** Called whenever live-location tracking actually starts or stops - including when it
+   * stops itself on a geolocation error/permission-denial - so callers can keep their own
+   * "My Location" button state in sync rather than assuming their click always succeeds. */
+  onLiveLocationChange?: (active: boolean) => void;
+  /** Called continuously while turn-by-turn navigation is active with the current
+   * instruction/progress (for the caller's on-screen banner), and once with null when
+   * navigation stops for any reason (user stop, arrival, or an unrecoverable error). */
+  onNavigationUpdate?: (state: NavigationState | null) => void;
+  /** Called when the user taps "Directions" in a searched place's info popup (see
+   * flyToPlace) - the caller is expected to open its own directions UI for this
+   * destination, same as tapping "Directions" on a place card in Google Maps. */
+  onRequestDirections?: (lat: number, lon: number, label: string) => void;
+  /** Called when the user clicks a gray (unselected) route alternative directly on the map -
+   * same as clicking one in the caller's own alternatives list, so its selectedIndex state
+   * stays in sync either way, matching Google (either the map or the list can pick a route). */
+  onRouteAlternativeSelected?: (index: number) => void;
+  /** Whether "Find My Way" is the caller's currently *selected* Boundary Layers option -
+   * deliberately NOT the same thing as the Directions panel being visibly open (selecting it
+   * doesn't have to open the panel; this still needs to reflect the selection either way).
+   * Two things key off this: the LayersControl picker auto-expands once when it becomes
+   * true, and - since it's the one place Google-sourced place-name labels are permitted -
+   * the satellite/terrain label overlays are only shown while this is true. */
+  findMyWayActive?: boolean;
+  /** Called whenever the "Place names" preference changes (see setPlaceLabelsVisible),
+   * including when it's changed via the on-map LayersControl checkbox rather than the ref -
+   * lets the caller mirror the current value in its own UI (e.g. a checkbox nested under
+   * "Find My Way" in a Filters panel) and have it stay in sync regardless of which UI the
+   * user actually toggled it from. */
+  onPlaceLabelsVisibleChange?: (visible: boolean) => void;
 }
 
 // Source/layer ids for a selected state's district boundaries, loaded on demand from MinIO.
@@ -881,6 +1049,38 @@ const ROADS_DISTRICT_ROAD_LINE_LAYER_ID = "roads-district-road-line";
 // still 100-300MB+ raw, too large to hand to the browser as GeoJSON.
 const ROADS_LOCAL_ROADS_SOURCE_ID = "roads-local-roads-data";
 const ROADS_LOCAL_ROADS_LINE_LAYER_ID = "roads-local-roads-line";
+
+// Statewide "State" scope only: all 3 highway categories pre-merged across all 31 districts
+// into one PMTiles archive (3 named source-layers), so a single vector source feeds all 3
+// categories' fill/line layers above instead of 93 separate per-district GeoJSON fetches.
+const ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID = "roads-statewide-highways-data";
+
+// Live "My Location" accuracy ring (the translucent circle around the blue dot showing GPS
+// uncertainty, like Google Maps) - the dot itself is a plain maplibregl.Marker, not a layer.
+const LIVE_LOCATION_ACCURACY_SOURCE_ID = "live-location-accuracy-data";
+const LIVE_LOCATION_ACCURACY_FILL_LAYER_ID = "live-location-accuracy-fill";
+const LIVE_LOCATION_ACCURACY_LINE_LAYER_ID = "live-location-accuracy-line";
+
+// Turn-by-turn route line(s) (see getRoutePreview/startNavigation) - one FeatureCollection
+// holding every alternative OSRM offered. The selected one is drawn as a white casing under
+// a blue line (the same layered look Google Maps uses so it reads clearly against both the
+// satellite basemap and busy boundary layers underneath it); the rest are thin gray lines,
+// same as Google's directions view - both are real map features so either can be clicked to
+// switch which one is selected, not just the list in the panel.
+const NAVIGATION_ROUTE_SOURCE_ID = "navigation-route-data";
+const NAVIGATION_ROUTE_CASING_LAYER_ID = "navigation-route-casing";
+const NAVIGATION_ROUTE_LINE_LAYER_ID = "navigation-route-line";
+const NAVIGATION_ROUTE_ALT_LINE_LAYER_ID = "navigation-route-alt-line";
+// Duration "badges" floating at each alternative's midpoint, same as Google's on-map time
+// labels - a separate point source since a line layer can't place one text label per line.
+const NAVIGATION_ROUTE_LABELS_SOURCE_ID = "navigation-route-labels-data";
+const NAVIGATION_ROUTE_LABELS_LAYER_ID = "navigation-route-labels";
+// Meters a GPS fix can drift from the route line before it's treated as "off route" and
+// triggers a re-route - loose enough to absorb ordinary GPS noise (usually 5-15m) without
+// re-routing on every fix, tight enough to catch an actual missed turn promptly.
+const NAVIGATION_OFF_ROUTE_THRESHOLD_METERS = 40;
+// Meters from the destination at which navigation auto-completes ("arrived").
+const NAVIGATION_ARRIVAL_THRESHOLD_METERS = 25;
 
 // Hobli/Village boundaries within the Roads hierarchy - the road data itself doesn't split
 // any finer than taluk (see loadRoadsHighways), but the administrative boundaries do, so
@@ -1315,6 +1515,7 @@ const BOUNDARY_SOURCE_IDS = [
   ROADS_STATE_HIGHWAY_SOURCE_ID,
   ROADS_DISTRICT_ROAD_SOURCE_ID,
   ROADS_LOCAL_ROADS_SOURCE_ID,
+  ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID,
   ROADS_HOBLIES_SOURCE_ID,
   ROADS_HOBLIES_LABELS_SOURCE_ID,
   ROADS_VILLAGES_SOURCE_ID,
@@ -1356,6 +1557,13 @@ const STATE_SOURCE_ID = "india-states-default";
 // state's largest polygon) - see labelAnchorFeatures. Kept separate from STATE_SOURCE_ID
 // so MultiPolygon states render exactly one label instead of one per island/enclave.
 const STATE_LABELS_SOURCE_ID = "india-states-labels";
+
+// Outlines the boundary found for a "Find My Way" place click (see the map's general
+// click handler) - a standalone source/line-layer, independent of boundaryLayerModeRef, so
+// it works even while every other boundary layer is hidden (which is the norm in that
+// mode). Line only, no fill - a solid color flooding the whole area was too heavy.
+const PLACE_CLICK_HIGHLIGHT_SOURCE_ID = "place-click-highlight";
+const PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID = "place-click-highlight-line";
 
 // "india/karnataka/Bengaluru/Central/GBA_Zone_Boundary.kmz" -> { Central: [key, ...], ... }
 function groupBengaluruKeysBySubfolder(keys: string[]): Record<string, string[]> {
@@ -1409,6 +1617,10 @@ const OSM_NOLABELS_TILES = [
 // Google satellite imagery tiles, shared by the initial style (when the map starts in
 // satellite mode) and the LayersControl "satellite" switch.
 //
+// lyrs=y (hybrid), not lyrs=s (bare imagery) - Google's own "Satellite" view isn't actually
+// unlabeled; it's imagery with roads and place names baked in by default, which is what a
+// bare "s" layer was missing (no city/town names at all, unlike real Google Maps).
+//
 // How deep real imagery goes varies enormously by location - dense areas hold detail past
 // z20, farmland or forest can run dry as early as z16 - and Google's tile endpoint signals
 // "no imagery here" with a genuine HTTP 404, not a blank 200 image. So instead of guessing
@@ -1418,6 +1630,14 @@ const OSM_NOLABELS_TILES = [
 // back if the user had already scrolled past - so the blank tile is never left on screen.
 const SATELLITE_PROTOCOL = "gsat";
 const SATELLITE_TILES = [
+  `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}`,
+  `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}`,
+];
+// Bare imagery, no roads/labels - used when the Layers panel's "Place names" toggle is off
+// (see setPlaceLabelsVisible). Swapping to this instead of just hiding a layer is necessary
+// because Google's tile server bakes roads+labels into the hybrid image itself; there's no
+// separate "labels only" layer to hide independently of the imagery underneath it.
+const SATELLITE_NOLABELS_TILES = [
   `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}`,
   `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}`,
 ];
@@ -1425,6 +1645,17 @@ const SATELLITE_TILES = [
 // Starting ceiling for the satellite layer's zoom - generous since real per-location limits
 // are discovered live (see above) and only ever pulled down from here, never raised past it.
 const SATELLITE_MAX_ZOOM_CEILING = 21;
+
+// Terrain mode (see addIndiaTerrain) is pure elevation shading with no basemap underneath,
+// so unlike satellite/default it had no place names at all. lyrs=h is Google's "hybrid
+// overlay" - roads and labels only, transparent background - designed to sit on top of
+// another layer rather than replace it, so it adds names without covering the hillshade.
+const TERRAIN_LABELS_SOURCE_ID = "terrain-labels-base";
+const TERRAIN_LABELS_LAYER_ID = "terrain-labels-base-layer";
+const TERRAIN_LABELS_TILES = [
+  `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=h&hl=en&x={x}&y={y}&z={z}`,
+  `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=h&hl=en&x={x}&y={y}&z={z}`,
+];
 
 let satelliteProtocolRegistered = false;
 
@@ -1479,6 +1710,313 @@ async function registerPmtilesProtocol(maplibregl: typeof import("maplibre-gl"))
   maplibregl.addProtocol("pmtiles", protocol.tile);
 }
 
+// One step from an OSRM /route/v1/driving response's legs[0].steps array (only the fields
+// used here - the real response has more, e.g. per-step geometry, intersections).
+type OsrmStep = {
+  distance: number;
+  duration: number;
+  name: string;
+  maneuver: { type: string; modifier?: string; exit?: number };
+};
+
+type FetchedRoute = {
+  routeLine: GeoJSON.Feature<GeoJSON.LineString>;
+  steps: OsrmStep[];
+  // Cumulative distance (meters) from the route start to the END of each step, i.e.
+  // cumulative[i] is how far along the route you are once step i's maneuver is complete -
+  // used to figure out which step a live GPS fix currently falls within.
+  cumulative: number[];
+  totalDistance: number;
+  totalDuration: number;
+  // "via NH 544"-style label for the route-alternatives list, same idea as Google's list -
+  // OSRM doesn't hand back a ready-made summary, so this picks the longest named step's road
+  // name as a reasonable stand-in for "the road you'll spend most of this route on".
+  summary: string | null;
+};
+
+// Escapes text dropped into popup innerHTML (see flyToPlace) - the label comes from a
+// Nominatim search result, which is untrusted enough (arbitrary place names, sometimes
+// containing user-influenced text) to need this before it goes into HTML rather than a text
+// node.
+function escapeHtml(text: string): string {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Turns an OSRM maneuver into a plain-English instruction ("Turn left onto MG Road"),
+// covering the maneuver types OSRM actually emits for a car profile. Falls back to
+// "Continue" for anything unrecognized rather than showing a raw type string.
+function describeManeuver(step: OsrmStep): string {
+  const { maneuver, name } = step;
+  const modifier = maneuver.modifier;
+  const road = name ? ` onto ${name}` : "";
+  const continueRoad = name ? ` on ${name}` : "";
+  switch (maneuver.type) {
+    case "depart":
+      return name ? `Head toward ${name}` : "Start";
+    case "arrive":
+      return "You have arrived at your destination";
+    case "roundabout":
+    case "rotary":
+      return maneuver.exit
+        ? `Enter the roundabout and take exit ${maneuver.exit}`
+        : "Enter the roundabout";
+    case "exit roundabout":
+    case "exit rotary":
+      return `Exit the roundabout${road}`;
+    case "merge":
+      return `Merge${road}`;
+    case "on ramp":
+      return `Take the ramp${road}`;
+    case "off ramp":
+      return `Take the exit${road}`;
+    case "fork":
+      return `Keep ${modifier ?? "straight"}${road}`;
+    case "end of road":
+      return `Turn ${modifier ?? ""}${road}`.trim();
+    case "turn":
+      return `Turn ${modifier ?? ""}${road}`.trim();
+    case "continue":
+    case "new name":
+      return `Continue${continueRoad}`;
+    default:
+      return `Continue${continueRoad}`;
+  }
+}
+
+// Gets a one-off GPS fix via watchPosition rather than getCurrentPosition. Deliberately NOT
+// getCurrentPosition: it's demonstrably unreliable in at least one real environment this app
+// runs in (consistently times out/fails there while "My Location" - built on watchPosition -
+// gets fixes fine), a known class of quirk in some browsers/WebViews. watchPosition is used
+// here purely as a one-shot: take the first fix, clear the watch immediately, done - same
+// external behavior as getCurrentPosition, different (working) code path underneath.
+// Distinguishes PERMISSION_DENIED from every other failure so the caller can show an
+// accurate message - a denied permission needs a different fix (browser site settings) than
+// a temporarily-unavailable fix (just try again).
+async function getCurrentPositionWithFallback(): Promise<
+  { position: GeolocationPosition } | { permissionDenied: boolean }
+> {
+  return new Promise((resolve) => {
+    let settled = false;
+    // watchId is read inside the callbacks below, but per spec watchPosition can invoke them
+    // before this assignment finishes if a fix is already cached (this bit the earlier
+    // version of this function: `const watchId = ...` with the callback reading `watchId`
+    // synchronously threw a ReferenceError - which silently killed this promise and left
+    // callers hanging forever, since nothing after the throw ever ran, including resolve()).
+    // A pre-declared `let`, defaulted to null, and clearing only once it's actually set
+    // sidesteps that regardless of call timing.
+    let watchId: number | null = null;
+    const finish = (result: { position: GeolocationPosition } | { permissionDenied: boolean }) => {
+      if (settled) return;
+      settled = true;
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      resolve(result);
+    };
+    watchId = navigator.geolocation.watchPosition(
+      (position) => finish({ position }),
+      (error) => finish({ permissionDenied: error.code === error.PERMISSION_DENIED }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+    );
+    // Covers the case where a callback fired synchronously above (watchId was still null
+    // inside finish() then, so it couldn't clear anything) - clean up now that it's set.
+    if (settled) navigator.geolocation.clearWatch(watchId);
+  });
+}
+
+// Resolves a DirectionsPoint (see getRoutePreview) into an actual coordinate - a "place" is
+// already one, "current" needs a fresh GPS fix. Shared by both ends of a route, since either
+// origin or destination can be "current" (routing FROM a searched place TO your live
+// position is as valid a trip as the reverse - Google's directions panel allows both).
+async function resolveDirectionsPoint(
+  point: DirectionsPoint
+): Promise<{ coord: [number, number]; label: string } | { errorReason: RoutePreviewFailureReason }> {
+  if (point.type === "place") return { coord: [point.lon, point.lat], label: point.label };
+  if (!navigator.geolocation) return { errorReason: "geolocation-unavailable" };
+  const fix = await getCurrentPositionWithFallback();
+  if ("permissionDenied" in fix) {
+    return { errorReason: fix.permissionDenied ? "geolocation-denied" : "geolocation-unavailable" };
+  }
+  return {
+    coord: [fix.position.coords.longitude, fix.position.coords.latitude],
+    label: "Your location",
+  };
+}
+
+// Picks a "via X" label for a route (see FetchedRoute.summary) - the named step with the
+// longest distance, skipping depart/arrive (their "name" is often blank or the destination
+// itself, not a road you actually drive along).
+function summarizeRoute(steps: OsrmStep[]): string | null {
+  let longest: OsrmStep | null = null;
+  for (const step of steps) {
+    if (!step.name) continue;
+    if (step.maneuver.type === "depart" || step.maneuver.type === "arrive") continue;
+    if (!longest || step.distance > longest.distance) longest = step;
+  }
+  return longest ? `via ${longest.name}` : null;
+}
+
+function toFetchedRoute(route: {
+  geometry: GeoJSON.LineString;
+  distance: number;
+  duration: number;
+  legs: { steps: OsrmStep[] }[];
+}): FetchedRoute {
+  const steps: OsrmStep[] = route.legs[0]!.steps;
+  let acc = 0;
+  const cumulative = steps.map((s) => (acc += s.distance));
+  return {
+    routeLine: { type: "Feature", properties: {}, geometry: route.geometry },
+    steps,
+    cumulative,
+    totalDistance: route.distance,
+    totalDuration: route.duration,
+    summary: summarizeRoute(steps),
+  };
+}
+
+// Fetches every route alternative OSRM offers via the /api/routing proxy (see that route for
+// why it's proxied rather than called directly) and reshapes each into the form both
+// getRoutePreview and the live navigation loop need - a drawable line plus per-step
+// cumulative distances. Ordered fastest-first (OSRM's own ordering), matching Google's
+// "Best" route always listed first.
+async function fetchRoutes(
+  start: [number, number],
+  end: [number, number],
+  mode: TravelMode
+): Promise<FetchedRoute[] | null> {
+  try {
+    const params = new URLSearchParams({
+      start: `${start[0]},${start[1]}`,
+      end: `${end[0]},${end[1]}`,
+      mode,
+    });
+    const response = await fetch(`/api/routing?${params.toString()}`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    const routes = data.routes;
+    if (!Array.isArray(routes) || routes.length === 0) return null;
+    return routes.map(toFetchedRoute);
+  } catch (error) {
+    console.error("Failed to fetch routes:", error);
+    return null;
+  }
+}
+
+// Compact duration for the on-map badges (see drawNavigationRoutes) - "8 min", "1 hr 20
+// min" - distinct from ExplorePage's own formatDuration (which is fuller, "1 hr 20 min" vs
+// this needing to stay short enough to fit next to a route line).
+function formatDurationShort(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h} hr ${m} min` : `${h} hr`;
+}
+
+// Draws every route alternative on the map at once - the selected one as a white-cased blue
+// line, the rest as thin gray lines with a floating duration badge at their midpoint, same
+// as Google's directions view (the map itself shows the options, not just the side panel).
+// Cheap to call repeatedly (a setData if the sources already exist) - the layers and their
+// click-to-select handlers are only created once, on first draw.
+function drawNavigationRoutes(map: MapLibreMap, routes: FetchedRoute[], selectedIndex: number) {
+  const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = routes.map((route, i) => ({
+    type: "Feature",
+    properties: { index: i, selected: i === selectedIndex },
+    geometry: route.routeLine.geometry,
+  }));
+  const labelFeatures: GeoJSON.Feature<GeoJSON.Point>[] = routes.map((route, i) => {
+    const lengthKm = turfLength(route.routeLine, { units: "kilometers" });
+    const midpoint = turfAlong(route.routeLine, lengthKm / 2, { units: "kilometers" });
+    return {
+      type: "Feature",
+      properties: { index: i, selected: i === selectedIndex, label: formatDurationShort(route.totalDuration) },
+      geometry: midpoint.geometry,
+    };
+  });
+  const lineData: GeoJSON.FeatureCollection<GeoJSON.LineString> = {
+    type: "FeatureCollection",
+    features: lineFeatures,
+  };
+  const labelData: GeoJSON.FeatureCollection<GeoJSON.Point> = {
+    type: "FeatureCollection",
+    features: labelFeatures,
+  };
+
+  const lineSource = map.getSource(NAVIGATION_ROUTE_SOURCE_ID) as GeoJSONSource | undefined;
+  const labelSource = map.getSource(NAVIGATION_ROUTE_LABELS_SOURCE_ID) as GeoJSONSource | undefined;
+  if (lineSource && labelSource) {
+    lineSource.setData(lineData);
+    labelSource.setData(labelData);
+    return;
+  }
+
+  map.addSource(NAVIGATION_ROUTE_SOURCE_ID, { type: "geojson", data: lineData });
+  map.addSource(NAVIGATION_ROUTE_LABELS_SOURCE_ID, { type: "geojson", data: labelData });
+
+  // Unselected alternatives first, so the selected route (added after) draws on top of them
+  // wherever they overlap.
+  map.addLayer({
+    id: NAVIGATION_ROUTE_ALT_LINE_LAYER_ID,
+    type: "line",
+    source: NAVIGATION_ROUTE_SOURCE_ID,
+    filter: ["==", ["get", "selected"], false],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#9ca3af", "line-width": 4 },
+  });
+  map.addLayer({
+    id: NAVIGATION_ROUTE_CASING_LAYER_ID,
+    type: "line",
+    source: NAVIGATION_ROUTE_SOURCE_ID,
+    filter: ["==", ["get", "selected"], true],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#ffffff", "line-width": 9 },
+  });
+  map.addLayer({
+    id: NAVIGATION_ROUTE_LINE_LAYER_ID,
+    type: "line",
+    source: NAVIGATION_ROUTE_SOURCE_ID,
+    filter: ["==", ["get", "selected"], true],
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#4285f4", "line-width": 5 },
+  });
+  map.addLayer({
+    id: NAVIGATION_ROUTE_LABELS_LAYER_ID,
+    type: "symbol",
+    source: NAVIGATION_ROUTE_LABELS_SOURCE_ID,
+    layout: {
+      "text-field": ["get", "label"],
+      "text-size": 12,
+      "text-font": ["Noto Sans Regular"],
+      "text-allow-overlap": true,
+    },
+    paint: {
+      "text-color": ["case", ["get", "selected"], "#1a56db", "#4b5563"],
+      "text-halo-color": "#ffffff",
+      "text-halo-width": 2,
+    },
+  });
+
+  map.on("mouseenter", NAVIGATION_ROUTE_ALT_LINE_LAYER_ID, () => {
+    map.getCanvas().style.cursor = "pointer";
+  });
+  map.on("mouseleave", NAVIGATION_ROUTE_ALT_LINE_LAYER_ID, () => {
+    map.getCanvas().style.cursor = "";
+  });
+}
+
+// Removes every layer/source drawNavigationRoutes creates - shared by getRoutePreview
+// (before a new fetch), clearRoutePreview, and stopNavigation, so the three don't drift out
+// of sync with what actually needs cleaning up.
+function clearNavigationRouteLayers(map: MapLibreMap) {
+  if (map.getLayer(NAVIGATION_ROUTE_LABELS_LAYER_ID)) map.removeLayer(NAVIGATION_ROUTE_LABELS_LAYER_ID);
+  if (map.getLayer(NAVIGATION_ROUTE_LINE_LAYER_ID)) map.removeLayer(NAVIGATION_ROUTE_LINE_LAYER_ID);
+  if (map.getLayer(NAVIGATION_ROUTE_CASING_LAYER_ID)) map.removeLayer(NAVIGATION_ROUTE_CASING_LAYER_ID);
+  if (map.getLayer(NAVIGATION_ROUTE_ALT_LINE_LAYER_ID)) map.removeLayer(NAVIGATION_ROUTE_ALT_LINE_LAYER_ID);
+  if (map.getSource(NAVIGATION_ROUTE_SOURCE_ID)) map.removeSource(NAVIGATION_ROUTE_SOURCE_ID);
+  if (map.getSource(NAVIGATION_ROUTE_LABELS_SOURCE_ID)) map.removeSource(NAVIGATION_ROUTE_LABELS_SOURCE_ID);
+}
+
 // Which LayersControl base layer the explore map opens on. "satellite" keeps the default
 // map in satellite imagery mode (Google tiles); switch to "default" to restore the OSM-
 // style look.
@@ -1522,7 +2060,8 @@ function computeScaleKm(map: MapLibreMap): number {
 function addDefaultBaseLayers(
   map: MapLibreMap,
   beforeId?: string,
-  boundariesVisible = true
+  boundariesVisible = true,
+  placeLabelsVisible = true
 ) {
   if (!map.getSource(OSM_NOLABELS_SOURCE_ID)) {
     map.addSource(OSM_NOLABELS_SOURCE_ID, {
@@ -1546,7 +2085,7 @@ function addDefaultBaseLayers(
   if (!map.getLayer(OSM_LABELED_LAYER_ID)) {
     map.addLayer({ id: OSM_LABELED_LAYER_ID, type: "raster", source: OSM_LABELED_SOURCE_ID }, beforeId);
   }
-  updateBaseLabelVisibility(map, boundariesVisible);
+  updateBaseLabelVisibility(map, boundariesVisible, placeLabelsVisible);
 }
 
 // boundariesVisible is true only in "administrative" mode (the filters panel's Boundary
@@ -1554,12 +2093,18 @@ function addDefaultBaseLayers(
 // (only the base raster labels, which aren't boundary layers, keep following the scale bar).
 // Taluk and hobli labels are not handled here - their visibility follows their boundary
 // layers' mode visibility in applyBoundaryLayerVisibility.
-function updateBaseLabelVisibility(map: MapLibreMap, boundariesVisible = true) {
+function updateBaseLabelVisibility(
+  map: MapLibreMap,
+  boundariesVisible = true,
+  placeLabelsVisible = true
+) {
   const scaleKm = computeScaleKm(map);
 
   if (map.getLayer(OSM_LABELED_LAYER_ID) && map.getLayer(OSM_NOLABELS_LAYER_ID)) {
-    // "1km and less" keeps the default map's labels; anything beyond 1km hides them.
-    const hideRasterLabels = scaleKm > RASTER_LABELS_HIDE_THRESHOLD_KM;
+    // "1km and less" keeps the default map's labels; anything beyond 1km hides them. The
+    // Layers panel's "Place names" toggle (placeLabelsVisible) overrides that entirely - off
+    // means off regardless of zoom.
+    const hideRasterLabels = !placeLabelsVisible || scaleKm > RASTER_LABELS_HIDE_THRESHOLD_KM;
     map.setLayoutProperty(OSM_LABELED_LAYER_ID, "visibility", hideRasterLabels ? "none" : "visible");
     map.setLayoutProperty(OSM_NOLABELS_LAYER_ID, "visibility", hideRasterLabels ? "visible" : "none");
   }
@@ -1590,12 +2135,75 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       onDrawingToolChange,
       onAttributeInfo,
       onDrillContextChange,
+      onLiveLocationChange,
+      onNavigationUpdate,
+      onRequestDirections,
+      onRouteAlternativeSelected,
+      findMyWayActive,
+      onPlaceLabelsVisibleChange,
     },
     ref
   ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The single pin dropped by a free-text place search (see flyToPlace) - a fresh search
+  // replaces it rather than stacking pins, matching Google's single-result-pin behavior for
+  // a plain text search (as opposed to a saved-places list).
+  const searchMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  // The pin dropped by a "Find My Way" place click (see the map's general click handler
+  // below) - a fresh click replaces it, same single-pin behavior as a search result.
+  const placeClickMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  // Origin (blue dot) and destination (red pin) markers for a previewed/active route (see
+  // getRoutePreview) - Google always shows both ends of a route on the map, not just the
+  // line between them.
+  const routeOriginMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  const routeDestinationMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  // Live "My Location" tracking (see startLiveLocation/stopLiveLocation) - the blue dot
+  // marker, the browser's watchPosition id (null when not tracking), and whether the first
+  // fix has arrived yet this session (only that first fix flies/zooms the map; subsequent
+  // updates just move the dot, so panning away while tracking isn't fought every update).
+  const liveLocationMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  const liveLocationWatchIdRef = useRef<number | null>(null);
+  const liveLocationFirstFixRef = useRef(true);
+  const onLiveLocationChangeRef = useRef(onLiveLocationChange);
+  useEffect(() => {
+    onLiveLocationChangeRef.current = onLiveLocationChange;
+  }, [onLiveLocationChange]);
+  // Turn-by-turn navigation (see getRoutePreview/selectRouteAlternative/startNavigation/
+  // stopNavigation) - every route alternative OSRM offered (steps + cumulative distances per
+  // alternative, so a live GPS fix can be placed along whichever one is selected) plus which
+  // one is currently drawn/would be navigated. Its own watchPosition id is separate from
+  // plain "My Location" tracking so starting navigation can supersede a plain live-location
+  // watch without them fighting over the same watchPosition call.
+  const navigationRef = useRef<{
+    destination: [number, number];
+    destinationLabel: string;
+    mode: TravelMode;
+    routes: FetchedRoute[];
+    selectedIndex: number;
+  } | null>(null);
+  const navigationWatchIdRef = useRef<number | null>(null);
+  // Fake-movement testing loop (see startSimulatedNavigation) - a separate timer from
+  // navigationWatchIdRef so stopNavigation/starting the other kind can tell which (if either)
+  // is currently running and clear only that one.
+  const simulationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onNavigationUpdateRef = useRef(onNavigationUpdate);
+  useEffect(() => {
+    onNavigationUpdateRef.current = onNavigationUpdate;
+  }, [onNavigationUpdate]);
+  const onRequestDirectionsRef = useRef(onRequestDirections);
+  useEffect(() => {
+    onRequestDirectionsRef.current = onRequestDirections;
+  }, [onRequestDirections]);
+  const onRouteAlternativeSelectedRef = useRef(onRouteAlternativeSelected);
+  useEffect(() => {
+    onRouteAlternativeSelectedRef.current = onRouteAlternativeSelected;
+  }, [onRouteAlternativeSelected]);
+  const onPlaceLabelsVisibleChangeRef = useRef(onPlaceLabelsVisibleChange);
+  useEffect(() => {
+    onPlaceLabelsVisibleChangeRef.current = onPlaceLabelsVisibleChange;
+  }, [onPlaceLabelsVisibleChange]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const onWardSelectedRef = useRef(onWardSelected);
@@ -1616,16 +2224,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   }, [onExtraFileToggled]);
   // Keys of any manually-toggled extra Bengaluru files currently on the map (for Escape cleanup)
   const extraLayerKeysRef = useRef<Set<string>>(new Set());
-  // Which Boundary Layers filter option is active (filters panel). Defaults to
-  // "administrative" so the india states / districts / taluks / hoblies / villages layers
-  // show initially. Layers added later follow the active mode.
-  const boundaryLayerModeRef = useRef<BoundaryLayerMode>("administrative");
+  // Which Boundary Layers filter option is active (filters panel). Defaults to "none" - the
+  // caller's own default is "Find My Way" (Directions), not any boundary layer, so nothing
+  // should render until the user explicitly picks one from that list. Layers added later
+  // follow the active mode.
+  const boundaryLayerModeRef = useRef<BoundaryLayerMode>("none");
   const policeTypeRef = useRef<PoliceType>("all");
   const policeDistrictRef = useRef("all");
   // Mirrors the active base layer ("satellite" | "terrain" | "default") for refs that run
   // outside React (async cadastral loads), so the parcel grid recolors correctly even when
   // the basemap switched while a village's cadastrals were still loading.
   const currentLayerRef = useRef<MapLayer>(DEFAULT_MAP_LAYER);
+  // Independent on/off preference for the base map's own place-name labels (see
+  // setPlaceLabelsVisible) - a Google-Earth-style layer toggle, separate from the
+  // administrative-boundary labels and separate from the automatic zoom-based hide/show
+  // updateBaseLabelVisibility already does. Persists across base-layer switches.
+  const placeLabelsVisibleRef = useRef(true);
+  // React-visible mirror of the ref above, purely so the LayersControl checkbox (rendered by
+  // this component) re-renders when the preference changes - the ref alone doesn't trigger
+  // that, and imperative-handle callers as well as the checkbox itself both need to update it.
+  const [placeLabelsVisible, setPlaceLabelsVisibleState] = useState(true);
 
   // Shows/hides every existing boundary layer to match the active mode, including any
   // manually-toggled Bengaluru extra files. In the constituency modes the neon-blue
@@ -1772,7 +2390,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
     });
 
-    updateBaseLabelVisibility(map, showAll);
+    updateBaseLabelVisibility(map, showAll, placeLabelsVisibleRef.current);
   };
 
   // --- AOI drawing (Free Hand / Polygon / Rectangle) ---
@@ -1809,6 +2427,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   useEffect(() => {
     onAttributeInfoRef.current = onAttributeInfo;
   }, [onAttributeInfo]);
+  // Mirrors the findMyWayActive prop for the map's one-time "load" click handler below,
+  // which is registered once and would otherwise close over the prop's initial value forever.
+  const findMyWayActiveRef = useRef(findMyWayActive);
+  useEffect(() => {
+    findMyWayActiveRef.current = findMyWayActive;
+  }, [findMyWayActive]);
 
   // Adds the AOI sources/layers the first time a tool is armed (idempotent - safe to re-run).
   const ensureAOILayers = (map: MapLibreMap) => {
@@ -2808,6 +3432,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     });
     if (map.getLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID)) map.removeLayer(ROADS_LOCAL_ROADS_LINE_LAYER_ID);
     if (map.getSource(ROADS_LOCAL_ROADS_SOURCE_ID)) map.removeSource(ROADS_LOCAL_ROADS_SOURCE_ID);
+    // "State" scope reuses the district/taluk fill/line layer IDs above but points them at this
+    // one shared vector source (3 source-layers) instead of a per-category geojson source.
+    if (map.getSource(ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID)) map.removeSource(ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID);
     loadedRoadsHighwaysRef.current = null;
     roadsUnfilteredDataRef.current = {};
   };
@@ -3010,61 +3637,46 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     await loadRoadsHighways(map, "taluk", district, taluk);
   };
 
-  // Fetches every district's National/State/District Road highways (merged into one
-  // statewide view) and adds the statewide local road network as a PMTiles vector tile layer
-  // - triggered by the "State" button next to the Roads filter option (not a map click -
-  // districts tile the whole state with no separate area to click as "the state" itself).
-  // The local road network is a separate, offline-built vector tile archive (see
-  // /api/datasets/roads-statewide-local and registerPmtilesProtocol) rather than a flat
-  // GeoJSON merge of the 240 per-taluk files (~788MB raw) - MapLibre only fetches whatever
-  // tiles the current viewport/zoom needs, so it's thinned out zoomed out and fully detailed
-  // zoomed in, not one huge fetch with a single fixed level of detail everywhere.
+  // Adds the statewide National/State/District Road highways and the statewide local road
+  // network as PMTiles vector tile layers - triggered by the "State" button next to the Roads
+  // filter option (not a map click - districts tile the whole state with no separate area to
+  // click as "the state" itself). Both are separate, offline-built vector tile archives (see
+  // /api/datasets/roads-statewide-highways, /api/datasets/roads-statewide-local, and
+  // registerPmtilesProtocol) rather than a flat GeoJSON merge fetched per-district client-side
+  // (that used to be 93 separate requests - 31 districts x 3 categories - and was the actual
+  // slow part of "State" loading) - MapLibre only fetches whatever tiles the current
+  // viewport/zoom needs, so it's thinned out zoomed out and fully detailed zoomed in, not one
+  // huge fetch with a single fixed level of detail everywhere.
   const loadRoadsStatewide = async (map: MapLibreMap) => {
     if (roadsLoadingRef.current.highways) return;
-    const districtNames = (roadsDistrictsDataRef.current?.features ?? [])
-      .map((f) => (f.properties?.dtname as string | undefined)?.trim())
-      .filter((name): name is string => Boolean(name));
-    if (districtNames.length === 0) return;
 
     roadsLoadingRef.current.highways = true;
     clearRoadsHighways(map);
     try {
-      const results = await Promise.all(
-        ROADS_HIGHWAY_CATEGORIES.map(async ({ category }) => {
-          const perDistrict = await Promise.all(
-            districtNames.map(async (district) => {
-              const params = new URLSearchParams({ district, category });
-              const response = await fetch(`/api/datasets/roads?${params.toString()}`);
-              if (!response.ok) return [] as GeoJSON.Feature[];
-              const data = (await response.json()) as GeoJSON.FeatureCollection;
-              return data.features;
-            })
-          );
-          return { type: "FeatureCollection", features: perDistrict.flat() } as GeoJSON.FeatureCollection;
-        })
-      );
-
-      ROADS_HIGHWAY_CATEGORIES.forEach(({ sourceId, fillLayerId, lineLayerId, color }, i) => {
-        const data = results[i]!;
-        roadsUnfilteredDataRef.current[sourceId] = data;
-        map.addSource(sourceId, { type: "geojson", data });
+      map.addSource(ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID, {
+        type: "vector",
+        url: "pmtiles:///api/datasets/roads-statewide-highways",
+      });
+      ROADS_HIGHWAY_CATEGORIES.forEach(({ category, fillLayerId, lineLayerId, color }) => {
         map.addLayer({
           id: fillLayerId,
           type: "fill",
-          source: sourceId,
+          source: ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID,
+          "source-layer": category,
           paint: { "fill-color": color, "fill-opacity": 0 },
         });
         map.addLayer({
           id: lineLayerId,
           type: "line",
-          source: sourceId,
+          source: ROADS_STATEWIDE_HIGHWAYS_SOURCE_ID,
+          "source-layer": category,
           // Thinner than the district/taluk-level line-width (2) - at statewide zoom, every
           // district's highways drawn at full width turns into visual clutter.
           paint: { "line-color": color, "line-width": 1 },
         });
       });
 
-      // Not added to roadsUnfilteredDataRef - it's a vector tile source (no .setData()), and
+      // Not added to roadsUnfilteredDataRef - these are vector tile sources (no .setData()), and
       // applyRoadsBoundaryFilter is never reached while level is "state" anyway (taluk/hobli/
       // village aren't selectable without a district first, which "state" scope bypasses).
       map.addSource(ROADS_LOCAL_ROADS_SOURCE_ID, {
@@ -5773,6 +6385,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // The map opens on DEFAULT_MAP_LAYER (satellite) instead of the plain OSM base.
   const [currentLayer, setCurrentLayer] = useState<MapLayer>(DEFAULT_MAP_LAYER);
 
+  // Satellite/terrain's place-name overlay is Google-sourced and only permitted while "Find
+  // My Way" is the selected option (see applyPlaceLabelsVisible) - re-applies the current
+  // preference the moment that selection changes, so labels appear/disappear immediately
+  // rather than only on the next explicit toggle or layer switch.
+  useEffect(() => {
+    applyPlaceLabelsVisible(placeLabelsVisibleRef.current);
+    // applyPlaceLabelsVisible is redefined every render (not memoized) but always closes
+    // over the latest findMyWayActive/placeLabelsVisibleRef - only findMyWayActive itself
+    // should retrigger this effect, not every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findMyWayActive]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -5799,7 +6423,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               sources: {
                 "satellite-base": {
                   type: "raster",
-                  tiles: SATELLITE_TILES,
+                  // Same Find-My-Way gating as handleLayerChange's satellite case and
+                  // applyPlaceLabelsVisible - this path was missed before because it's the
+                  // ONE-TIME initial map style (built once on mount, not through either of
+                  // those two), so the map opened with Google's labeled tiles regardless of
+                  // findMyWayActive until the layer was explicitly switched away and back.
+                  tiles:
+                    placeLabelsVisibleRef.current && findMyWayActive
+                      ? SATELLITE_TILES
+                      : SATELLITE_NOLABELS_TILES,
                   tileSize: 256,
                   attribution: "© Google",
                   minzoom: 0,
@@ -6168,14 +6800,261 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           "bottom-right"
         );
 
+        // Clicking a gray (unselected) route alternative, or its floating duration label,
+        // switches to it - same as clicking the corresponding row in the directions panel's
+        // list (see selectAlternativeInternal). Registered once here rather than each time
+        // drawNavigationRoutes runs: these layers don't exist until a route is previewed,
+        // but MapLibre's delegated on(type, layerId, ...) only checks for matching rendered
+        // features at click time, so binding early and having it silently no-op until the
+        // layer exists is fine - no need to re-bind on every redraw.
+        map.on("click", NAVIGATION_ROUTE_ALT_LINE_LAYER_ID, (e) => {
+          const index = e.features?.[0]?.properties?.index;
+          if (typeof index === "number") selectAlternativeInternal(index);
+        });
+        map.on("click", NAVIGATION_ROUTE_LABELS_LAYER_ID, (e) => {
+          const index = e.features?.[0]?.properties?.index;
+          if (typeof index === "number") selectAlternativeInternal(index);
+        });
+
+        // "Find My Way" place click: tapping anywhere resolves the place's name (via free
+        // Nominatim reverse geocoding, no Google API involved) and shows it as a blue label
+        // right at the click point - matching how Google Maps turns a tapped place name
+        // blue - and, if it lands inside a district/taluk/village, outlines that boundary
+        // too (line only, no fill - the fill was too visually heavy). Scoped to
+        // findMyWayActiveRef only, per the current requirement, and it's also the one mode
+        // where this *has* to use point-in-polygon against the raw loaded data rather than
+        // the per-layer click handlers above (states-fill-default etc.) - those only fire
+        // for layers that are actually rendered, and every boundary layer is hidden while
+        // "Find My Way" is active.
+        map.on("click", (e) => {
+          if (!findMyWayActiveRef.current) return;
+          if (drawingToolRef.current) return;
+
+          // Don't double-handle a click already owned by the route-alternative handlers above.
+          const routeAltLayers = [
+            NAVIGATION_ROUTE_ALT_LINE_LAYER_ID,
+            NAVIGATION_ROUTE_LABELS_LAYER_ID,
+          ].filter((id) => map.getLayer(id));
+          if (
+            routeAltLayers.length > 0 &&
+            queryRenderedFeaturesSafe(map, e.point, { layers: routeAltLayers }).length > 0
+          ) {
+            return;
+          }
+
+          const { lng, lat } = e.lngLat;
+          const clickPoint = turfPoint([lng, lat]);
+
+          void (async () => {
+            const maplibregl = await import("maplibre-gl");
+
+            // A small blue dot with the place name in a bold blue label above it - built as
+            // one marker element so they move/fly together. Text starts blank ("Looking
+            // up...") and is filled in once the reverse-geocode call below resolves.
+            placeClickMarkerRef.current?.remove();
+            const el = document.createElement("div");
+            el.style.cssText =
+              "display:flex;flex-direction:column;align-items:center;transform:translateY(-6px);cursor:default;";
+            const labelEl = document.createElement("div");
+            labelEl.style.cssText =
+              "background:#fff;color:#1a73e8;font:700 13px/1.3 system-ui,sans-serif;" +
+              "padding:4px 10px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.35);" +
+              "white-space:nowrap;margin-bottom:3px;max-width:240px;overflow:hidden;text-overflow:ellipsis;";
+            labelEl.textContent = "Looking up…";
+            const dotEl = document.createElement("div");
+            dotEl.style.cssText =
+              "width:14px;height:14px;border-radius:50%;background:#1a73e8;" +
+              "border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.45);";
+            el.appendChild(labelEl);
+            el.appendChild(dotEl);
+
+            placeClickMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "bottom" })
+              .setLngLat([lng, lat])
+              .addTo(map);
+
+            const highlightSource = map.getSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID) as
+              | GeoJSONSource
+              | undefined;
+            const setHighlight = (feature: GeoJSON.Feature | undefined) => {
+              highlightSource?.setData({
+                type: "FeatureCollection",
+                features: feature ? [feature] : [],
+              });
+            };
+
+            const report = (name: string | null, address: string | null) => {
+              attributeInfoOpenRef.current = true;
+              labelEl.textContent = name ?? "Unknown location";
+              onAttributeInfoRef.current?.({
+                typeLabel: "Location",
+                title: name ?? "Selected location",
+                rows: [{ label: "Address", value: address ?? "Looking up…" }],
+              });
+            };
+            report(null, null);
+
+            // The states dataset otherwise only loads once the (hidden, in this mode)
+            // India boundary layer is clicked - "Find My Way" needs it up front instead,
+            // since it's the very first thing the drill-down below narrows down from.
+            if (!loadedStatesDataRef.current && loadIndiaStatesRef.current) {
+              await loadIndiaStatesRef.current();
+            }
+            const stateFeature = loadedStatesDataRef.current?.features.find((feature) => {
+              if (!feature.geometry) return false;
+              if (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon") {
+                return false;
+              }
+              try {
+                return booleanPointInPolygon(
+                  clickPoint,
+                  feature as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>
+                );
+              } catch {
+                return false;
+              }
+            });
+            const stateName = (stateFeature?.properties?.st_nm as string | undefined)?.trim();
+
+            // Quietly drills down through the same district/taluk/village datasets the
+            // "Administrative Boundaries" mode uses, one level at a time, to find the
+            // smallest area that actually contains the click - without touching that
+            // mode's own layers/selection refs, since "Find My Way" must stand on its own.
+            // A state's own outline is too big to be useful zoomed in, so it's never shown
+            // on its own - only district and deeper are. Note there's no separate "hobli
+            // boundary" polygon in this data - /api/datasets/taluk-hoblies actually returns
+            // the taluk's individual VILLAGE polygons (each tagged with its hobli), so that
+            // fetch goes straight from taluk to village.
+            const findContaining = (
+              data: GeoJSON.FeatureCollection | undefined,
+              nameKeys: string[]
+            ): { feature: GeoJSON.Feature; name: string } | undefined => {
+              const matches = (data?.features ?? []).filter((f) => {
+                if (!f.geometry) return false;
+                if (f.geometry.type !== "Polygon" && f.geometry.type !== "MultiPolygon") {
+                  return false;
+                }
+                try {
+                  return booleanPointInPolygon(
+                    clickPoint,
+                    f as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>
+                  );
+                } catch {
+                  return false;
+                }
+              });
+              // Some of these datasets mix the parent boundary itself into the child
+              // collection (e.g. district-taluks includes the whole district polygon as
+              // one of its "features") - that always matches too since it's a superset,
+              // but it won't carry the child's own name property, so skip over it rather
+              // than taking whichever polygon matched first.
+              for (const feature of matches) {
+                const name = nameKeys
+                  .map((k) => feature.properties?.[k])
+                  .find((v) => typeof v === "string" && v.trim());
+                if (typeof name === "string") return { feature, name: name.trim() };
+              }
+              return undefined;
+            };
+            const fetchBoundary = async (url: string) => {
+              try {
+                const res = await fetch(url);
+                return res.ok ? ((await res.json()) as GeoJSON.FeatureCollection) : undefined;
+              } catch {
+                return undefined;
+              }
+            };
+
+            let districtName: string | null = null;
+            let talukName: string | null = null;
+            let boundaryFeature: GeoJSON.Feature | undefined;
+
+            if (stateName) {
+              const found = findContaining(
+                await fetchBoundary(
+                  `/api/datasets/state-districts?state=${encodeURIComponent(stateName)}`
+                ),
+                ["dtname"]
+              );
+              if (found) {
+                districtName = found.name;
+                boundaryFeature = found.feature;
+                setHighlight(found.feature);
+              }
+            }
+            if (districtName && stateName) {
+              const found = findContaining(
+                await fetchBoundary(
+                  `/api/datasets/district-taluks?district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}`
+                ),
+                ["KGISTalukName", "subdist_nm"]
+              );
+              if (found) {
+                talukName = found.name;
+                boundaryFeature = found.feature;
+                setHighlight(found.feature);
+              }
+            }
+            if (talukName && districtName && stateName) {
+              const found = findContaining(
+                await fetchBoundary(
+                  `/api/datasets/taluk-hoblies?taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}`
+                ),
+                ["KGISVillageName", "village_name", "vill_nm"]
+              );
+              if (found) {
+                boundaryFeature = found.feature;
+                setHighlight(found.feature);
+              }
+            }
+
+            // Fly the camera to fit the deepest boundary actually found (village, or
+            // whichever level the drill-down stopped at) - same "select the place and fly
+            // to its extent" behavior Google shows. Falls back to just centering on the
+            // click if no boundary was found at all (e.g. outside India / no data).
+            if (boundaryFeature?.geometry) {
+              try {
+                map.fitBounds(boundsOfGeometry(boundaryFeature.geometry), {
+                  padding: 60,
+                  duration: 600,
+                });
+              } catch {
+                map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15), duration: 600 });
+              }
+            } else {
+              map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15), duration: 600 });
+            }
+
+            try {
+              const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
+              const data = res.ok ? await res.json() : null;
+              const address: string | null =
+                typeof data?.label === "string" ? data.label : null;
+              const shortName: string | null =
+                typeof data?.shortName === "string" ? data.shortName : null;
+              report(shortName ?? address ?? "Unknown location", address ?? "Address not found");
+            } catch (error) {
+              console.error("Reverse geocode lookup failed:", error);
+              report("Unknown location", "Address lookup failed");
+            }
+          })();
+        });
+
         // Keep the base map's place labels (city/town/village names baked into the raster
         // tiles) in sync with the scale bar: shown at 1km and below, hidden beyond 1km so
         // only our own vector labels show, restored once the user zooms in past that.
         map.on("zoom", () =>
-          updateBaseLabelVisibility(map, boundaryLayerModeRef.current === "administrative")
+          updateBaseLabelVisibility(
+            map,
+            boundaryLayerModeRef.current === "administrative",
+            placeLabelsVisibleRef.current
+          )
         );
         map.on("moveend", () =>
-          updateBaseLabelVisibility(map, boundaryLayerModeRef.current === "administrative")
+          updateBaseLabelVisibility(
+            map,
+            boundaryLayerModeRef.current === "administrative",
+            placeLabelsVisibleRef.current
+          )
         );
 
         map.on("load", async () => {
@@ -6276,6 +7155,32 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             map.addLayer(indiaLabelLayer);
             map.addLayer(hoverLabelLayerSpec(indiaLabelLayer));
             attachLabelHoverGrow(map, "india-boundary-label", "india-boundary-label-hover");
+
+            // These layers are added with no explicit visibility, so they'd otherwise
+            // default to visible regardless of boundaryLayerModeRef's actual value (that ref
+            // only gets *applied* when something later calls applyBoundaryLayerVisibility -
+            // e.g. clicking a Filters checkbox - not automatically just because it's set).
+            // Since the default mode is "none" (see boundaryLayerModeRef's declaration -
+            // "Find My Way" is the app's real default, not any boundary layer), apply it
+            // immediately so the India outline/label don't flash into view on every fresh
+            // load before the user has picked a boundary layer at all.
+            applyBoundaryLayerVisibility(map);
+
+            // Empty at first - filled with the single found boundary feature by the
+            // "Find My Way" place-click handler further below.
+            map.addSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID, {
+              type: "geojson",
+              data: { type: "FeatureCollection", features: [] },
+            });
+            map.addLayer({
+              id: PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID,
+              type: "line",
+              source: PLACE_CLICK_HIGHLIGHT_SOURCE_ID,
+              paint: {
+                "line-color": "#1a73e8",
+                "line-width": 3,
+              },
+            });
 
             // Hover highlight + cursor over the country.
             let hoveredBoundaryId: string | number | null = null;
@@ -8445,6 +9350,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     return () => {
       cancelled = true;
+      if (liveLocationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(liveLocationWatchIdRef.current);
+        liveLocationWatchIdRef.current = null;
+      }
+      if (navigationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+        navigationWatchIdRef.current = null;
+      }
+      if (simulationIntervalRef.current !== null) {
+        clearInterval(simulationIntervalRef.current);
+        simulationIntervalRef.current = null;
+      }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -8455,7 +9372,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Handle layer changes
   const handleLayerChange = async (layer: MapLayer) => {
     if (!mapRef.current) return;
-    
+
     const map = mapRef.current;
 
     // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
@@ -8471,6 +9388,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // out of date (missing the entire GBA, Roads, Gram Panchayat and Civic Amenities
     // hierarchies, plus the new Karnataka state layer), so switching the base map (satellite/
     // default/terrain) was silently deleting whichever of those was currently loaded.
+    // Turn-by-turn route (see drawNavigationRoutes) and live-location accuracy ring (see
+    // startLiveLocation) layers/sources - not part of the boundary-layer system above, so
+    // they need their own explicit entries here or a base-map switch silently deletes them
+    // mid-route/mid-navigation (the actual bug this list is fixing: everything below worked
+    // fine on the default satellite layer only because it's what the map starts on and this
+    // function had never actually run yet - switching to *any* other layer wiped them out).
+    const NAVIGATION_LAYER_IDS = [
+      NAVIGATION_ROUTE_LINE_LAYER_ID,
+      NAVIGATION_ROUTE_CASING_LAYER_ID,
+      NAVIGATION_ROUTE_ALT_LINE_LAYER_ID,
+      NAVIGATION_ROUTE_LABELS_LAYER_ID,
+      LIVE_LOCATION_ACCURACY_FILL_LAYER_ID,
+      LIVE_LOCATION_ACCURACY_LINE_LAYER_ID,
+    ];
+    const NAVIGATION_SOURCE_IDS = [
+      NAVIGATION_ROUTE_SOURCE_ID,
+      NAVIGATION_ROUTE_LABELS_SOURCE_ID,
+      LIVE_LOCATION_ACCURACY_SOURCE_ID,
+    ];
+
     const customLayerIds = currentLayers
       .filter(
         (l) =>
@@ -8484,7 +9421,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           l.id.startsWith("kml-") ||
           l.id.startsWith("bengaluru-") ||
           l.id.startsWith("extra-") ||
-          AOI_LAYER_IDS.includes(l.id)
+          AOI_LAYER_IDS.includes(l.id) ||
+          NAVIGATION_LAYER_IDS.includes(l.id)
       )
       .map((l) => l.id);
 
@@ -8499,7 +9437,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         sourceId.startsWith("bengaluru-") ||
         sourceId.startsWith("extra-") ||
         sourceId === AOI_SOURCE_ID ||
-        sourceId === AOI_VERTICES_SOURCE_ID
+        sourceId === AOI_VERTICES_SOURCE_ID ||
+        NAVIGATION_SOURCE_IDS.includes(sourceId)
     );
     
     // Get custom sources data
@@ -8527,9 +9466,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     
     switch (layer) {
       case "satellite":
+        // Bare imagery (SATELLITE_NOLABELS_TILES) is Google's raw tile endpoint too, but the
+        // hybrid variant specifically bakes in place names/roads - that's the part reserved
+        // for "Find My Way" only (see applyPlaceLabelsVisible), not the imagery itself, which
+        // stays available regardless of mode.
         map.addSource("satellite-base", {
           type: "raster",
-          tiles: SATELLITE_TILES,
+          tiles:
+            placeLabelsVisibleRef.current && findMyWayActive
+              ? SATELLITE_TILES
+              : SATELLITE_NOLABELS_TILES,
           tileSize: 256,
           attribution: "© Google",
           minzoom: 0,
@@ -8553,12 +9499,37 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       case "terrain":
         addIndiaTerrain(map, firstCustomLayerId);
+        map.addSource(TERRAIN_LABELS_SOURCE_ID, {
+          type: "raster",
+          tiles: TERRAIN_LABELS_TILES,
+          tileSize: 256,
+          attribution: "© Google",
+        });
+        // Same rule as satellite above - this overlay is Google-sourced place names, so it's
+        // only ever visible while "Find My Way" is active, regardless of the general "Place
+        // names" preference.
+        map.addLayer(
+          {
+            id: TERRAIN_LABELS_LAYER_ID,
+            type: "raster",
+            source: TERRAIN_LABELS_SOURCE_ID,
+            layout: {
+              visibility: placeLabelsVisibleRef.current && findMyWayActive ? "visible" : "none",
+            },
+          },
+          firstCustomLayerId
+        );
         map.setMaxZoom(22);
         break;
 
       case "default":
         // Add default OSM-style tiles (labeled + label-free variants, toggled by zoom)
-        addDefaultBaseLayers(map, firstCustomLayerId, boundaryLayerModeRef.current === "administrative");
+        addDefaultBaseLayers(
+          map,
+          firstCustomLayerId,
+          boundaryLayerModeRef.current === "administrative",
+          placeLabelsVisibleRef.current
+        );
         map.setMaxZoom(22);
         break;
     }
@@ -8763,6 +9734,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         event.preventDefault();
         attributeInfoOpenRef.current = false;
         onAttributeInfoRef.current?.(null);
+        placeClickMarkerRef.current?.remove();
+        placeClickMarkerRef.current = null;
+        const highlightSource = map.getSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID) as
+          | GeoJSONSource
+          | undefined;
+        highlightSource?.setData({ type: "FeatureCollection", features: [] });
         return;
       }
 
@@ -8887,6 +9864,177 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     );
   };
 
+  // Shared by the setPlaceLabelsVisible imperative handle method and the LayersControl
+  // checkbox rendered by this component directly (see the <LayersControl> usage below) -
+  // either path ends up here so both the ref API and the on-map checkbox stay in sync.
+  const applyPlaceLabelsVisible = (visible: boolean) => {
+    placeLabelsVisibleRef.current = visible;
+    setPlaceLabelsVisibleState(visible);
+    onPlaceLabelsVisibleChangeRef.current?.(visible);
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (currentLayerRef.current === "default") {
+      updateBaseLabelVisibility(map, boundaryLayerModeRef.current === "administrative", visible);
+      return;
+    }
+
+    // Satellite/terrain's place-name overlays are Google-sourced (see the comments in
+    // handleLayerChange's satellite/terrain cases) - only ever actually shown while "Find My
+    // Way" is active, regardless of what this preference is set to. The preference itself
+    // still gets tracked above so it's remembered for the next time Directions opens.
+    const googleLabelsVisible = visible && findMyWayActive;
+
+    if (currentLayerRef.current === "terrain") {
+      if (map.getLayer(TERRAIN_LABELS_LAYER_ID)) {
+        map.setLayoutProperty(
+          TERRAIN_LABELS_LAYER_ID,
+          "visibility",
+          googleLabelsVisible ? "visible" : "none"
+        );
+      }
+      return;
+    }
+
+    if (currentLayerRef.current === "satellite" && map.getSource("satellite-base")) {
+      // MapLibre can't update a raster source's tile URLs in place - swap it out for one
+      // with the other lyrs= variant instead. Reuses whichever style layer was directly
+      // above satellite-base-layer as the re-insertion point, so this doesn't silently
+      // reorder it below/above boundary layers that were added after it.
+      const layers = map.getStyle().layers ?? [];
+      const index = layers.findIndex((l) => l.id === "satellite-base-layer");
+      const beforeId = index >= 0 ? layers[index + 1]?.id : undefined;
+
+      if (map.getLayer("satellite-base-layer")) map.removeLayer("satellite-base-layer");
+      map.removeSource("satellite-base");
+      map.addSource("satellite-base", {
+        type: "raster",
+        tiles: googleLabelsVisible ? SATELLITE_TILES : SATELLITE_NOLABELS_TILES,
+        tileSize: 256,
+        attribution: "© Google",
+        minzoom: 0,
+        maxzoom: SATELLITE_MAX_ZOOM_CEILING,
+      });
+      map.addLayer(
+        {
+          id: "satellite-base-layer",
+          type: "raster",
+          source: "satellite-base",
+          minzoom: 0,
+          maxzoom: SATELLITE_MAX_ZOOM_CEILING,
+        },
+        beforeId
+      );
+    }
+  };
+
+  // Shared by selectRouteAlternative (called from the caller's own alternatives list) and
+  // the map's own click handlers on the gray alt-route lines/labels (see the click listeners
+  // registered in the map-init effect) - either path ends up here so both stay in sync and
+  // both notify the caller via onRouteAlternativeSelected.
+  const selectAlternativeInternal = (index: number) => {
+    const map = mapRef.current;
+    const nav = navigationRef.current;
+    if (!map || !nav || index < 0 || index >= nav.routes.length || index === nav.selectedIndex) return;
+    nav.selectedIndex = index;
+    drawNavigationRoutes(map, nav.routes, index);
+    onRouteAlternativeSelectedRef.current?.(index);
+  };
+
+  // Turns one GPS-style fix (real, from watchPosition in startNavigation, or fake, from
+  // startSimulatedNavigation's setInterval loop) into an updated blue dot, camera move, and
+  // onNavigationUpdate report - shared by both so simulated test-drives exercise the exact
+  // same progress/off-route/arrival logic real navigation does, not a separate reimplementation
+  // that could silently drift out of sync with it. Returns whether this fix counts as arrival.
+  const processNavigationFix = async (
+    latitude: number,
+    longitude: number,
+    heading: number | null
+  ): Promise<boolean> => {
+    const map = mapRef.current;
+    const nav = navigationRef.current;
+    if (!map || !nav) return false;
+    const route = nav.routes[nav.selectedIndex]!;
+
+    if (!liveLocationMarkerRef.current) {
+      const maplibregl = await import("maplibre-gl");
+      const el = document.createElement("div");
+      el.className = "naksha-live-location-dot";
+      liveLocationMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([longitude, latitude])
+        .addTo(map);
+    } else {
+      liveLocationMarkerRef.current.setLngLat([longitude, latitude]);
+    }
+
+    const here = turfPoint([longitude, latitude]);
+    const nearest = nearestPointOnLine(route.routeLine, here, { units: "meters" });
+    const distFromRoute = nearest.properties.pointDistance ?? 0;
+
+    // Drifted off the route - re-route from here to the same destination rather than
+    // reporting stale progress against a route the device isn't following. Only need a
+    // single route here (no alternatives) - navigation just needs to get back on track, not
+    // offer the user a fresh set of options mid-drive.
+    if (distFromRoute > NAVIGATION_OFF_ROUTE_THRESHOLD_METERS) {
+      const rerouted = await fetchRoutes([longitude, latitude], nav.destination, nav.mode);
+      if (rerouted) {
+        navigationRef.current = {
+          destination: nav.destination,
+          destinationLabel: nav.destinationLabel,
+          mode: nav.mode,
+          routes: [rerouted[0]!],
+          selectedIndex: 0,
+        };
+        drawNavigationRoutes(map, [rerouted[0]!], 0);
+      }
+      return false; // progress is computed against the fresh route on the next fix
+    }
+
+    const distAlong = nearest.properties.totalDistance ?? 0;
+    let stepIndex = 0;
+    while (stepIndex < route.cumulative.length - 1 && distAlong > route.cumulative[stepIndex]!) {
+      stepIndex++;
+    }
+    const distanceToNextTurn = Math.max(0, route.cumulative[stepIndex]! - distAlong);
+    const distanceRemaining = Math.max(0, route.totalDistance - distAlong);
+    const currentStep = route.steps[stepIndex];
+    const remainingStepsDuration = route.steps
+      .slice(stepIndex + 1)
+      .reduce((sum, s) => sum + s.duration, 0);
+    const partialDuration = currentStep
+      ? currentStep.duration * (distanceToNextTurn / Math.max(currentStep.distance, 1))
+      : 0;
+    const durationRemaining = remainingStepsDuration + partialDuration;
+
+    map.easeTo({
+      center: [longitude, latitude],
+      bearing: heading ?? map.getBearing(),
+      zoom: 17,
+      pitch: 45,
+      duration: 500,
+    });
+
+    const arrived = distanceRemaining < NAVIGATION_ARRIVAL_THRESHOLD_METERS;
+    const nextManeuverStep = route.steps[stepIndex + 1];
+    const afterNextStep = route.steps[stepIndex + 2];
+
+    onNavigationUpdateRef.current?.({
+      destinationLabel: nav.destinationLabel,
+      distanceRemainingMeters: arrived ? 0 : distanceRemaining,
+      durationRemainingSeconds: arrived ? 0 : durationRemaining,
+      currentInstruction: arrived
+        ? "You have arrived at your destination"
+        : nextManeuverStep
+          ? describeManeuver(nextManeuverStep)
+          : "Continue straight",
+      nextInstruction: arrived || !afterNextStep ? null : describeManeuver(afterNextStep),
+      distanceToNextTurnMeters: arrived ? 0 : distanceToNextTurn,
+      arrived,
+    });
+
+    return arrived;
+  };
+
   useImperativeHandle(ref, () => ({
     search: (query: string) => {
       const map = mapRef.current;
@@ -8897,6 +10045,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       // boundary layer the search loaded, and frames the whole of India again.
       if (!query.trim()) {
         clearAllMapState(map);
+        searchMarkerRef.current?.remove();
+        searchMarkerRef.current = null;
         const indiaGeometry = indiaBoundaryDataRef.current?.features?.find(
           (f) => f.geometry
         )?.geometry;
@@ -9041,6 +10191,346 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       void selectTalukByName(map, parts[0] ?? "", parts[1] ?? "", parts[2] ?? "");
     },
+    flyToPlace: (lat: number, lon: number, label: string) => {
+      const map = mapRef.current;
+      if (!map) return;
+      void (async () => {
+        const maplibregl = await import("maplibre-gl");
+        searchMarkerRef.current?.remove();
+
+        // Google always shows a place's info card the moment you search it, not only once
+        // you click the pin - and that card has a one-tap "Directions" shortcut. setHTML +
+        // togglePopup() (rather than setText + waiting for a click) matches both.
+        const popup = new maplibregl.Popup({ offset: 24, closeButton: true }).setHTML(
+          `<div style="font: 13px/1.4 system-ui, sans-serif; max-width: 220px;">
+             <div style="font-weight: 600; margin-bottom: 6px; color: #1f2937;">${escapeHtml(label)}</div>
+             <button type="button" data-naksha-directions
+               style="font: inherit; font-weight: 500; color: #fff; background: #1a56db; border: none; border-radius: 999px; padding: 5px 12px; cursor: pointer;">
+               Directions
+             </button>
+           </div>`
+        );
+        popup.on("open", () => {
+          popup
+            .getElement()
+            ?.querySelector("[data-naksha-directions]")
+            ?.addEventListener("click", () => onRequestDirectionsRef.current?.(lat, lon, label));
+        });
+
+        searchMarkerRef.current = new maplibregl.Marker({ color: "#dc2626" })
+          .setLngLat([lon, lat])
+          .setPopup(popup)
+          .addTo(map);
+        searchMarkerRef.current.togglePopup();
+        map.flyTo({ center: [lon, lat], zoom: 15, duration: 1200 });
+      })();
+    },
+    startLiveLocation: () => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (!navigator.geolocation) {
+        console.error("Geolocation is not supported by this browser.");
+        onLiveLocationChangeRef.current?.(false);
+        return;
+      }
+      // A second click while already tracking just re-centers on the last known fix
+      // rather than starting a duplicate watch.
+      if (liveLocationWatchIdRef.current !== null) {
+        const marker = liveLocationMarkerRef.current;
+        if (marker) map.flyTo({ center: marker.getLngLat(), zoom: 16, duration: 800 });
+        return;
+      }
+
+      liveLocationFirstFixRef.current = true;
+      liveLocationWatchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          void (async () => {
+            const map = mapRef.current;
+            if (!map) return;
+            const { latitude, longitude, accuracy } = position.coords;
+
+            if (!map.getSource(LIVE_LOCATION_ACCURACY_SOURCE_ID)) {
+              map.addSource(LIVE_LOCATION_ACCURACY_SOURCE_ID, {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] },
+              });
+              map.addLayer({
+                id: LIVE_LOCATION_ACCURACY_FILL_LAYER_ID,
+                type: "fill",
+                source: LIVE_LOCATION_ACCURACY_SOURCE_ID,
+                paint: { "fill-color": "#4285f4", "fill-opacity": 0.15 },
+              });
+              map.addLayer({
+                id: LIVE_LOCATION_ACCURACY_LINE_LAYER_ID,
+                type: "line",
+                source: LIVE_LOCATION_ACCURACY_SOURCE_ID,
+                paint: { "line-color": "#4285f4", "line-opacity": 0.35, "line-width": 1 },
+              });
+            }
+            const accuracySource = map.getSource(
+              LIVE_LOCATION_ACCURACY_SOURCE_ID
+            ) as GeoJSONSource | undefined;
+            accuracySource?.setData(
+              turfCircle([longitude, latitude], accuracy / 1000, {
+                units: "kilometers",
+                steps: 64,
+              }) as GeoJSON.Feature
+            );
+
+            if (!liveLocationMarkerRef.current) {
+              const maplibregl = await import("maplibre-gl");
+              const el = document.createElement("div");
+              el.className = "naksha-live-location-dot";
+              liveLocationMarkerRef.current = new maplibregl.Marker({ element: el })
+                .setLngLat([longitude, latitude])
+                .addTo(map);
+            } else {
+              liveLocationMarkerRef.current.setLngLat([longitude, latitude]);
+            }
+
+            if (liveLocationFirstFixRef.current) {
+              liveLocationFirstFixRef.current = false;
+              map.flyTo({ center: [longitude, latitude], zoom: 16, duration: 1200 });
+              onLiveLocationChangeRef.current?.(true);
+            }
+          })();
+        },
+        (error) => {
+          console.error("Live location error:", error);
+          liveLocationWatchIdRef.current = null;
+          onLiveLocationChangeRef.current?.(false);
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      );
+    },
+    stopLiveLocation: () => {
+      if (liveLocationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(liveLocationWatchIdRef.current);
+        liveLocationWatchIdRef.current = null;
+      }
+      liveLocationMarkerRef.current?.remove();
+      liveLocationMarkerRef.current = null;
+      const map = mapRef.current;
+      if (map) {
+        if (map.getLayer(LIVE_LOCATION_ACCURACY_FILL_LAYER_ID))
+          map.removeLayer(LIVE_LOCATION_ACCURACY_FILL_LAYER_ID);
+        if (map.getLayer(LIVE_LOCATION_ACCURACY_LINE_LAYER_ID))
+          map.removeLayer(LIVE_LOCATION_ACCURACY_LINE_LAYER_ID);
+        if (map.getSource(LIVE_LOCATION_ACCURACY_SOURCE_ID))
+          map.removeSource(LIVE_LOCATION_ACCURACY_SOURCE_ID);
+      }
+      onLiveLocationChangeRef.current?.(false);
+    },
+    getRoutePreview: async (origin: DirectionsPoint, destination: DirectionsPoint, mode: TravelMode) => {
+      const map = mapRef.current;
+      // Clear whatever was previously drawn right away, before even fetching - otherwise a
+      // failed attempt (or one still in flight) leaves a stale, already-successful-looking
+      // route line next to an unrelated error message, which is exactly what happened before
+      // this call: switching modes or destinations without clearing first.
+      if (map) {
+        navigationRef.current = null;
+        clearNavigationRouteLayers(map);
+        routeOriginMarkerRef.current?.remove();
+        routeOriginMarkerRef.current = null;
+        routeDestinationMarkerRef.current?.remove();
+        routeDestinationMarkerRef.current = null;
+      }
+      if (!map) return { ok: false, reason: "geolocation-unavailable" };
+
+      try {
+        const originResolved = await resolveDirectionsPoint(origin);
+        if ("errorReason" in originResolved) return { ok: false, reason: originResolved.errorReason };
+        const destResolved = await resolveDirectionsPoint(destination);
+        if ("errorReason" in destResolved) return { ok: false, reason: destResolved.errorReason };
+
+        const routes = await fetchRoutes(originResolved.coord, destResolved.coord, mode);
+        if (!routes) return { ok: false, reason: "no-route" };
+
+        // Build the preview payload before touching the map, so a bug in here (e.g. an
+        // unexpected maneuver shape) surfaces as a normal failed result rather than an
+        // exception thrown after the route is already drawn, which - since nothing after a
+        // thrown error runs - would leave the route visible while the caller's loading state
+        // never resolves (exactly what happened before this function had a try/catch at all).
+        const alternatives: RouteAlternative[] = routes.map((route) => ({
+          summary: route.summary,
+          distanceMeters: route.totalDistance,
+          durationSeconds: route.totalDuration,
+          steps: route.steps.map((s) => ({
+            instruction: describeManeuver(s),
+            distanceMeters: s.distance,
+          })),
+        }));
+
+        navigationRef.current = {
+          destination: destResolved.coord,
+          destinationLabel: destResolved.label,
+          mode,
+          routes,
+          selectedIndex: 0,
+        };
+        drawNavigationRoutes(map, routes, 0);
+
+        const maplibregl = await import("maplibre-gl");
+        const originEl = document.createElement("div");
+        originEl.className = "naksha-route-origin-dot";
+        routeOriginMarkerRef.current = new maplibregl.Marker({ element: originEl })
+          .setLngLat(originResolved.coord)
+          .addTo(map);
+        routeDestinationMarkerRef.current = new maplibregl.Marker({ color: "#dc2626" })
+          .setLngLat(destResolved.coord)
+          .addTo(map);
+
+        // Fit to every alternative, not just the selected one - Google frames the whole set
+        // of options it's showing, not only the highlighted route.
+        const bounds = new maplibregl.LngLatBounds();
+        for (const route of routes) {
+          for (const coord of route.routeLine.geometry.coordinates) {
+            bounds.extend(coord as [number, number]);
+          }
+        }
+        map.fitBounds(bounds, { padding: 80, duration: 800 });
+
+        return { ok: true, preview: { alternatives, selectedIndex: 0 } };
+      } catch (error) {
+        console.error("getRoutePreview failed:", error);
+        return { ok: false, reason: "no-route" };
+      }
+    },
+    selectRouteAlternative: (index: number) => {
+      const map = mapRef.current;
+      const nav = navigationRef.current;
+      if (!map || !nav || index < 0 || index >= nav.routes.length) return;
+      nav.selectedIndex = index;
+      drawNavigationRoutes(map, nav.routes, index);
+      // Not routed through selectAlternativeInternal (which also fires
+      // onRouteAlternativeSelected) - the caller invoking this method directly already knows
+      // the new index, no need to echo it back.
+    },
+    clearRoutePreview: () => {
+      navigationRef.current = null;
+      const map = mapRef.current;
+      if (map) clearNavigationRouteLayers(map);
+      routeOriginMarkerRef.current?.remove();
+      routeOriginMarkerRef.current = null;
+      routeDestinationMarkerRef.current?.remove();
+      routeDestinationMarkerRef.current = null;
+    },
+    startNavigation: () => {
+      const map = mapRef.current;
+      if (!map || !navigationRef.current || !navigator.geolocation) return;
+      if (navigationWatchIdRef.current !== null) return; // already navigating
+
+      // Navigation supersedes plain "My Location" tracking - both would otherwise run their
+      // own watchPosition against the same blue-dot marker.
+      if (liveLocationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(liveLocationWatchIdRef.current);
+        liveLocationWatchIdRef.current = null;
+      }
+
+      // The static origin dot from the preview is redundant once live tracking starts - the
+      // live-tracking dot (added on the first position fix below) takes over as "where you
+      // are", so leaving the static one in place would just duplicate it right on top at the
+      // start of the trip.
+      routeOriginMarkerRef.current?.remove();
+      routeOriginMarkerRef.current = null;
+
+      navigationWatchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          void (async () => {
+            const arrived = await processNavigationFix(
+              position.coords.latitude,
+              position.coords.longitude,
+              position.coords.heading
+            );
+            if (arrived && navigationWatchIdRef.current !== null) {
+              navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+              navigationWatchIdRef.current = null;
+            }
+          })();
+        },
+        (error) => {
+          console.error("Navigation location error:", error);
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+      );
+    },
+    startSimulatedNavigation: (speedKmh?: number) => {
+      const map = mapRef.current;
+      const nav = navigationRef.current;
+      if (!map || !nav) return;
+      if (navigationWatchIdRef.current !== null || simulationIntervalRef.current !== null) return;
+
+      if (liveLocationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(liveLocationWatchIdRef.current);
+        liveLocationWatchIdRef.current = null;
+      }
+      routeOriginMarkerRef.current?.remove();
+      routeOriginMarkerRef.current = null;
+
+      // Reasonable default per mode if the caller doesn't specify one - fast enough that a
+      // multi-km test route finishes in a sensible amount of time, slow enough to actually
+      // watch turns and voice announcements happen one at a time rather than all at once.
+      const speed = speedKmh ?? (nav.mode === "walking" ? 5 : nav.mode === "cycling" ? 15 : 40);
+      const metersPerSecond = (speed * 1000) / 3600;
+      const tickSeconds = 1;
+      let traveledKm = 0;
+
+      simulationIntervalRef.current = setInterval(() => {
+        void (async () => {
+          const nav = navigationRef.current;
+          if (!nav) {
+            if (simulationIntervalRef.current !== null) {
+              clearInterval(simulationIntervalRef.current);
+              simulationIntervalRef.current = null;
+            }
+            return;
+          }
+          // Re-read the selected route every tick (not just once at the top of this
+          // function) - if the user clicks a different alternative mid-simulation (exactly
+          // the "does switching routes mid-way still reach the destination" scenario this
+          // exists to test), the simulated position continues from the same distance-
+          // traveled offset but against the newly selected route's geometry from here on.
+          const route = nav.routes[nav.selectedIndex]!;
+          const totalKm = route.totalDistance / 1000;
+          traveledKm = Math.min(totalKm, traveledKm + (metersPerSecond * tickSeconds) / 1000);
+
+          const point = turfAlong(route.routeLine, traveledKm, { units: "kilometers" });
+          const [lon, lat] = point.geometry.coordinates as [number, number];
+          const lookAheadKm = Math.min(totalKm, traveledKm + 0.02);
+          const lookAheadPoint = turfAlong(route.routeLine, lookAheadKm, { units: "kilometers" });
+          const heading = turfBearing(point, lookAheadPoint);
+
+          const arrived = await processNavigationFix(lat, lon, heading);
+          if (arrived && simulationIntervalRef.current !== null) {
+            clearInterval(simulationIntervalRef.current);
+            simulationIntervalRef.current = null;
+          }
+        })();
+      }, tickSeconds * 1000);
+    },
+    stopNavigation: () => {
+      if (navigationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+        navigationWatchIdRef.current = null;
+      }
+      if (simulationIntervalRef.current !== null) {
+        clearInterval(simulationIntervalRef.current);
+        simulationIntervalRef.current = null;
+      }
+      navigationRef.current = null;
+      liveLocationMarkerRef.current?.remove();
+      liveLocationMarkerRef.current = null;
+      routeOriginMarkerRef.current?.remove();
+      routeOriginMarkerRef.current = null;
+      routeDestinationMarkerRef.current?.remove();
+      routeDestinationMarkerRef.current = null;
+      const map = mapRef.current;
+      if (map) {
+        clearNavigationRouteLayers(map);
+        map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+      }
+      onNavigationUpdateRef.current?.(null);
+    },
     listBengaluruFiles: async () => {
       const listResponse = await fetch('/api/datasets/bengaluru-boundary-list');
       if (!listResponse.ok) return {};
@@ -9127,6 +10617,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       applyBoundaryLayerVisibility(map);
     },
+    setPlaceLabelsVisible: (visible: boolean) => {
+      applyPlaceLabelsVisible(visible);
+    },
     setPoliceType: (type: PoliceType) => {
       policeTypeRef.current = type;
       const map = mapRef.current;
@@ -9168,6 +10661,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     },
     clearAttributeInfo: () => {
       attributeInfoOpenRef.current = false;
+      placeClickMarkerRef.current?.remove();
+      placeClickMarkerRef.current = null;
+      const map = mapRef.current;
+      const highlightSource = map?.getSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID) as
+        | GeoJSONSource
+        | undefined;
+      highlightSource?.setData({ type: "FeatureCollection", features: [] });
     },
   }));
 
@@ -9812,6 +11312,35 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         .explore-map-root .maplibregl-ctrl-scale {
           width: 90px !important;
         }
+        .naksha-live-location-dot {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: #4285f4;
+          border: 2px solid #ffffff;
+          box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2), 0 0 6px rgba(66, 133, 244, 0.5);
+          position: relative;
+        }
+        .naksha-live-location-dot::after {
+          content: "";
+          position: absolute;
+          inset: -10px;
+          border-radius: 50%;
+          background: rgba(66, 133, 244, 0.35);
+          animation: naksha-live-location-pulse 2s ease-out infinite;
+        }
+        @keyframes naksha-live-location-pulse {
+          0% { transform: scale(0.4); opacity: 0.8; }
+          100% { transform: scale(1.4); opacity: 0; }
+        }
+        .naksha-route-origin-dot {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #4285f4;
+          border: 3px solid #ffffff;
+          box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+        }
       `}</style>
       {/* Map Viewer - Full Size */}
       <div className="absolute inset-0">
@@ -9857,6 +11386,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         <LayersControl
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
+          placeLabelsVisible={placeLabelsVisible}
+          onTogglePlaceLabels={applyPlaceLabelsVisible}
+          autoExpand={findMyWayActive}
         />
       )}
     </div>

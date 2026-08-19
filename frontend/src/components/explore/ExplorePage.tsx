@@ -11,12 +11,59 @@ import {
   type AOITool,
   type AOIResult,
   type AttributeInfo,
+  type NavigationState,
+  type RoutePreview,
+  type TravelMode,
+  type DirectionsPoint,
 } from "./IndiaMapViewer";
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import { ChevronDown, ChevronUp, MapPin, Search, Menu, X } from "lucide-react";
+import {
+  ArrowUpDown,
+  Bike,
+  Car,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Footprints,
+  LocateFixed,
+  MapPin,
+  Motorbike,
+  Navigation,
+  Search,
+  Menu,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+
+// UI-level mode identity for the icon row - distinct from the backend TravelMode, since
+// "motorcycle" has no dedicated OSRM profile (no motorbike-specific routing data exists) and
+// just reuses the driving routes/times under a different icon, same roads a car would take.
+// Real transit (bus/rail) isn't offered at all - it would need GTFS schedule data and a
+// separate transit-routing engine (OSRM doesn't do transit), neither of which exist here.
+type UiTravelModeId = "driving" | "motorcycle" | "cycling" | "walking";
+const TRAVEL_MODES: { id: UiTravelModeId; mode: TravelMode; label: string; Icon: typeof Car }[] = [
+  { id: "driving", mode: "driving", label: "Driving", Icon: Car },
+  { id: "motorcycle", mode: "driving", label: "Motorcycle", Icon: Motorbike },
+  { id: "cycling", mode: "cycling", label: "Cycling", Icon: Bike },
+  { id: "walking", mode: "walking", label: "Walking", Icon: Footprints },
+];
+
+function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function formatDuration(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h} hr ${m} min`;
+}
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -30,7 +77,12 @@ const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
 // india_states geojson plus their loaded constituency boundaries; "gram panchayat" shows
 // the neon-blue states too (panchayat boundaries aren't wired to data yet).
 
-const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
+// "find_my_way" isn't a real BoundaryLayerMode (it opens the Directions panel, not a map
+// boundary layer) - it's listed here anyway because the user wants it selectable in the same
+// list, above Administrative Boundaries, and selected by default on load instead of it.
+type FilterSelection = "find_my_way" | BoundaryLayerMode;
+const BOUNDARY_LAYER_OPTIONS: { id: FilterSelection; label: string }[] = [
+  { id: "find_my_way", label: "Find My Way" },
   { id: "administrative", label: "Administrative Boundaries" },
   { id: "assembly", label: "Assembly Constituency Boundaries" },
   { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
@@ -249,10 +301,11 @@ export function ExplorePage() {
   const [expandedFilters, setExpandedFilters] = useState({
     type: true,
   });
-  // The single active Boundary Layers option ("administrative" by default, so the
-  // india states / districts / taluks / hoblies / villages layers show initially).
+  // The single active Boundary Layers option - "find_my_way" by default, so the app opens
+  // straight into Directions rather than any boundary layer being pre-applied; boundary
+  // layers only turn on once the user explicitly picks one from this list.
   const [selectedBoundaryLayer, setSelectedBoundaryLayer] =
-    useState<BoundaryLayerMode>("administrative");
+    useState<FilterSelection>("find_my_way");
   const [selectedPoliceType, setSelectedPoliceType] = useState<PoliceType>("all");
   const [selectedPoliceDistrict, setSelectedPoliceDistrict] = useState("all");
   // What a district click does in Roads mode - "none" (default, neither button pressed) is
@@ -261,12 +314,355 @@ export function ExplorePage() {
   // "state" loads every district's roads combined on the next click, since districts tile
   // the whole state with no separate clickable "state" area.
   const [selectedRoadsScope, setSelectedRoadsScope] = useState<"none" | "district" | "state">("none");
-  const [searchSuggestions, setSearchSuggestions] = useState<
+  // Matches against our own admin-boundary data (states/districts/taluks/hoblies/villages +
+  // the static Bengaluru lists) - computed synchronously from data already loaded client-side.
+  const [localSuggestions, setLocalSuggestions] = useState<
     { category: string; items: string[] }[]
   >([]);
+  // Free-text place/address matches from Nominatim (see /api/geocode), for anything not in
+  // our own boundary data - the "type any address and jump to it" behavior. Fetched with a
+  // debounce so we don't hammer Nominatim's public API on every keystroke.
+  const [placeSuggestions, setPlaceSuggestions] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  const searchSuggestions = useMemo(() => {
+    const places =
+      placeSuggestions.length > 0
+        ? [{ category: "Places", items: placeSuggestions.map((p) => p.label) }]
+        : [];
+    return [...localSuggestions, ...places];
+  }, [localSuggestions, placeSuggestions]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
+  // True while the debounced /api/geocode fetch for the current query is in flight - drives
+  // the "Searching..." row so the dropdown never just sits empty while results are loading.
+  const [geocoding, setGeocoding] = useState(false);
+  // Set right before selectSuggestion() programmatically rewrites searchQuery to the picked
+  // label - both suggestion effects below check this and skip re-opening the dropdown for
+  // that one resulting query change, so picking a result doesn't get its own dropdown
+  // flashing back open ~400ms later once the geocode debounce fires for the now-selected
+  // text. Cleared on the next real keystroke (onChange), not by the effects themselves, so
+  // both effects can check it independently without racing to clear it first.
+  const suppressSuggestionsRef = useRef(false);
+
+  // "My Location" button - "locating" while waiting on the first GPS fix, "active" once the
+  // live blue dot is tracking. IndiaMapViewer reports the real state back via
+  // onLiveLocationChange (e.g. it flips back to "off" on a permission denial), rather than
+  // this just assuming every click succeeds.
+  const [liveLocationState, setLiveLocationState] = useState<"off" | "locating" | "active">("off");
+  const handleToggleLiveLocation = () => {
+    if (liveLocationState === "off") {
+      setLiveLocationState("locating");
+      mapViewerRef.current?.startLiveLocation();
+    } else if (liveLocationState === "active") {
+      setLiveLocationState("off");
+      mapViewerRef.current?.stopLiveLocation();
+    } else {
+      // Already waiting on a fix - re-clicking re-centers once it's active, nothing to do yet.
+      mapViewerRef.current?.startLiveLocation();
+    }
+  };
+
+  // Turn-by-turn directions/navigation (see getRoutePreview/startNavigation on
+  // IndiaMapViewer) - a dedicated origin/destination form, separate from the main search
+  // bar above (matching Google's actual directions panel: two fields + a swap button, not
+  // the single search box repurposed).
+  // Closed by default - "Find My Way" is still the default-selected Boundary Layers option
+  // (see selectedBoundaryLayer above, and the "none" boundary mode that goes with it), but
+  // the app shouldn't force the Directions panel open over the map before the user has
+  // actually asked for it. They open it themselves via the Directions button or the Filters
+  // checkbox, same as any other option in that list.
+  const [showDirections, setShowDirections] = useState(false);
+  // Mirrors IndiaMapViewer's own "Place names" preference (see onPlaceLabelsVisibleChange) so
+  // it can be shown/toggled here too, nested under "Find My Way" in the Filters list, and
+  // stay in sync no matter which of the two UIs (this one, or the on-map LayersControl
+  // checkbox) the user actually used to change it.
+  const [placeLabelsVisible, setPlaceLabelsVisible] = useState(true);
+  const [routePreview, setRoutePreview] = useState<RoutePreview | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [navigationState, setNavigationState] = useState<NavigationState | null>(null);
+
+  // Voice guidance - speaks the current instruction aloud via the browser's built-in
+  // text-to-speech (Web Speech API), same idea as Google's spoken turn-by-turn. No new
+  // backend/cost: this is entirely client-side. Muted state persists across sessions (a
+  // driving app that suddenly starts talking after you'd turned it off would be startling).
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("naksha_voice_guidance_enabled");
+      if (stored !== null) setVoiceEnabled(stored === "true");
+    } catch (error) {
+      console.error("Failed to load voice guidance preference:", error);
+    }
+  }, []);
+  const toggleVoiceEnabled = () => {
+    setVoiceEnabled((prev) => {
+      const next = !prev;
+      if (!next && typeof window !== "undefined") window.speechSynthesis?.cancel();
+      try {
+        localStorage.setItem("naksha_voice_guidance_enabled", String(next));
+      } catch (error) {
+        console.error("Failed to save voice guidance preference:", error);
+      }
+      return next;
+    });
+  };
+  // Speaks one instruction, working around two real Web Speech API quirks rather than just
+  // calling speak() directly: (1) Chrome loads voices asynchronously - getVoices() can be
+  // empty on the very first call even though voices exist, and speak() called before they're
+  // ready has been known to silently produce no audio; (2) the speech queue can silently
+  // stall after periods of inactivity (paused internally without reporting it), which
+  // resume() before speaking is the standard workaround for.
+  const speakInstruction = (text: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      console.warn("Voice guidance: speechSynthesis unavailable in this browser.");
+      return;
+    }
+    const synth = window.speechSynthesis;
+
+    const doSpeak = () => {
+      synth.resume();
+      synth.cancel();
+      const voices = synth.getVoices();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const englishVoice = voices.find((v) => v.lang?.toLowerCase().startsWith("en"));
+      if (englishVoice) utterance.voice = englishVoice;
+      utterance.onerror = (e) => {
+        // "interrupted"/"canceled" aren't real failures - they fire on the PREVIOUS
+        // utterance precisely because this function just called cancel() to replace it with
+        // a newer instruction (e.g. two maneuvers close together during simulation/driving).
+        // Logging those as errors made completely normal behavior look like a crash.
+        if (e.error === "interrupted" || e.error === "canceled") return;
+        console.error("Voice guidance failed to speak:", e.error);
+      };
+      utterance.onstart = () => console.debug("Voice guidance speaking:", text);
+      synth.speak(utterance);
+      console.debug("Voice guidance: queued utterance, voices available:", voices.length);
+    };
+
+    if (synth.getVoices().length > 0) {
+      doSpeak();
+      return;
+    }
+    console.debug("Voice guidance: no voices loaded yet, waiting for voiceschanged...");
+    const handleVoicesChanged = () => {
+      synth.removeEventListener("voiceschanged", handleVoicesChanged);
+      doSpeak();
+    };
+    synth.addEventListener("voiceschanged", handleVoicesChanged);
+    // Fallback in case voiceschanged never fires - some embedded/preview webviews never
+    // populate a voice list at all (no TTS engine wired up), which would otherwise leave
+    // this waiting forever. Try anyway after a short delay so it's not silently stuck, and
+    // warn clearly if voices genuinely never showed up.
+    setTimeout(() => {
+      synth.removeEventListener("voiceschanged", handleVoicesChanged);
+      if (synth.getVoices().length === 0) {
+        console.warn(
+          "Voice guidance: no voices available after waiting - this browser/environment likely has no TTS engine (common in embedded/preview webviews, not full Chrome/Edge/Firefox). Try a normal browser window."
+        );
+      }
+      doSpeak();
+    }, 500);
+  };
+
+  // Tracks the last instruction actually spoken, so it announces once per maneuver (when
+  // currentInstruction changes) rather than repeating itself on every GPS update while still
+  // approaching the same turn.
+  const lastAnnouncedInstructionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!navigationState) {
+      lastAnnouncedInstructionRef.current = null;
+      return;
+    }
+    if (!voiceEnabled) return;
+    if (navigationState.currentInstruction === lastAnnouncedInstructionRef.current) return;
+    lastAnnouncedInstructionRef.current = navigationState.currentInstruction;
+    speakInstruction(navigationState.currentInstruction);
+  }, [navigationState, voiceEnabled]);
+  // Stop any in-progress speech if navigation ends or the page unmounts mid-sentence.
+  useEffect(() => {
+    if (!navigationState && typeof window !== "undefined") window.speechSynthesis?.cancel();
+  }, [navigationState]);
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const [uiTravelMode, setUiTravelMode] = useState<UiTravelModeId>("driving");
+  const travelMode: TravelMode = TRAVEL_MODES.find((m) => m.id === uiTravelMode)?.mode ?? "driving";
+
+  const [originPoint, setOriginPoint] = useState<DirectionsPoint>({ type: "current" });
+  const [originText, setOriginText] = useState("");
+  const [destinationPoint, setDestinationPoint] = useState<DirectionsPoint | null>(null);
+  const [destinationText, setDestinationText] = useState("");
+  const [activeDirectionsField, setActiveDirectionsField] = useState<
+    "origin" | "destination" | null
+  >(null);
+  const [directionsFieldSuggestions, setDirectionsFieldSuggestions] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  const [directionsFieldGeocoding, setDirectionsFieldGeocoding] = useState(false);
+  const directionsFormRef = useRef<HTMLDivElement>(null);
+
+  // Recently picked destinations (label+lat+lon only - no hours/photos, since that needs a
+  // business-listings source we don't have), persisted to localStorage so they survive a
+  // reload - shown under a field when it's focused and empty, like Google's "Recents" list.
+  const DIRECTIONS_RECENTS_KEY = "naksha_recent_directions";
+  const [recentDestinations, setRecentDestinations] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DIRECTIONS_RECENTS_KEY);
+      if (raw) setRecentDestinations(JSON.parse(raw));
+    } catch (error) {
+      console.error("Failed to load recent directions:", error);
+    }
+  }, []);
+  const addRecentDestination = (dest: { label: string; lat: number; lon: number }) => {
+    setRecentDestinations((prev) => {
+      const next = [dest, ...prev.filter((r) => r.label !== dest.label)].slice(0, 5);
+      try {
+        localStorage.setItem(DIRECTIONS_RECENTS_KEY, JSON.stringify(next));
+      } catch (error) {
+        console.error("Failed to save recent directions:", error);
+      }
+      return next;
+    });
+  };
+
+  const openDirections = () => {
+    setShowDirections(true);
+    setOriginPoint({ type: "current" });
+    setOriginText("");
+    setDestinationPoint(null);
+    setDestinationText("");
+    setActiveDirectionsField("destination");
+    setDirectionsFieldSuggestions([]);
+    setRoutePreview(null);
+    setRouteError(null);
+  };
+
+  const closeDirections = () => {
+    setShowDirections(false);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+    setRoutePreview(null);
+    setRouteError(null);
+    setNavigationState(null);
+    mapViewerRef.current?.stopNavigation();
+  };
+
+  const selectOriginPoint = (point: DirectionsPoint, label: string) => {
+    setOriginPoint(point);
+    setOriginText(label);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+  };
+
+  const selectDestinationPoint = (dest: { label: string; lat: number; lon: number }) => {
+    setDestinationPoint({ type: "place", ...dest });
+    setDestinationText(dest.label);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+    addRecentDestination(dest);
+  };
+
+  const handleSwapDirections = () => {
+    const prevOrigin = originPoint;
+    const prevOriginText = originText;
+    setOriginPoint(destinationPoint ?? { type: "current" });
+    setOriginText(destinationPoint ? destinationText : "");
+    setDestinationPoint(prevOrigin.type === "place" ? prevOrigin : null);
+    setDestinationText(prevOrigin.type === "place" ? prevOriginText : "");
+  };
+
+  // Free-text search for whichever directions field is currently focused (see
+  // activeDirectionsField) - same debounced /api/geocode lookup the main search bar uses,
+  // just keyed to origin or destination instead of the top search box.
+  useEffect(() => {
+    if (!activeDirectionsField) return;
+    const text = (activeDirectionsField === "origin" ? originText : destinationText).trim();
+    if (text.length < 3) {
+      setDirectionsFieldSuggestions([]);
+      setDirectionsFieldGeocoding(false);
+      return;
+    }
+    setDirectionsFieldGeocoding(true);
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(text)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        setDirectionsFieldSuggestions(await res.json());
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error("Failed to load directions field suggestions:", error);
+      } finally {
+        if (!controller.signal.aborted) setDirectionsFieldGeocoding(false);
+      }
+    }, 400);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [activeDirectionsField, originText, destinationText]);
+
+  // Close the directions field dropdown when clicking anywhere outside the form.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (directionsFormRef.current && !directionsFormRef.current.contains(e.target as Node)) {
+        setActiveDirectionsField(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Auto-fetches a route the moment both ends are resolved - origin defaults to "current",
+  // so this fires as soon as a destination is picked, same as Google (no separate "Go"
+  // button needed once both fields have something).
+  useEffect(() => {
+    if (!showDirections || !destinationPoint) return;
+    let cancelled = false;
+    (async () => {
+      setRoutePreview(null);
+      setRouteError(null);
+      setRouteLoading(true);
+      // Belt-and-suspenders alongside getRoutePreview's own try/catch: a rejection here
+      // should never leave the panel stuck on "Getting directions..." forever (that's
+      // exactly the bug that motivated adding this - an unhandled rejection skipped
+      // setRouteLoading(false) entirely since it's the line right after the await).
+      let result: Awaited<ReturnType<NonNullable<IndiaMapViewerHandle["getRoutePreview"]>>> | undefined;
+      try {
+        result = await mapViewerRef.current?.getRoutePreview(originPoint, destinationPoint, travelMode);
+      } catch (error) {
+        console.error("Directions request failed:", error);
+      }
+      if (cancelled) return;
+      setRouteLoading(false);
+      if (!result || !result.ok) {
+        const reason = result?.reason;
+        setRouteError(
+          reason === "geolocation-denied"
+            ? "Location access is blocked. Allow it in your browser's site settings, then try again."
+            : reason === "geolocation-unavailable"
+              ? "Couldn't determine your current location - check your device's location settings and try again."
+              : "Couldn't find a route between these points - one may be outside Karnataka, which is the only area with directions support right now."
+        );
+        return;
+      }
+      setRoutePreview(result.preview);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showDirections, originPoint, destinationPoint, travelMode]);
 
   // "Draw AOI" tool dropdown
   const [showAOIMenu, setShowAOIMenu] = useState(false);
@@ -548,10 +944,11 @@ export function ExplorePage() {
   // Generate search suggestions based on current query
   useEffect(() => {
     if (!searchQuery) {
-      setSearchSuggestions([]);
+      setLocalSuggestions([]);
       setShowSuggestions(false);
       return;
     }
+    if (suppressSuggestionsRef.current) return;
 
     const suggestions: { category: string; items: string[] }[] = [];
 
@@ -675,8 +1072,11 @@ export function ExplorePage() {
       else merged.push(cat);
     }
 
-    setSearchSuggestions(merged);
-    setShowSuggestions(merged.length > 0);
+    setLocalSuggestions(merged);
+    // The dropdown panel itself shows for any non-empty query, not just once results exist -
+    // that's what lets it show a "Searching..." or "No results found" state instead of just
+    // not appearing (which looks like the search box is broken, not that it found nothing).
+    setShowSuggestions(true);
     setSelectedSuggestionIndex(-1);
   }, [
     searchQuery,
@@ -687,12 +1087,67 @@ export function ExplorePage() {
     villageEntries,
     hobliesByTaluk,
     drillContext,
+    placeSuggestions.length,
   ]);
+
+  // Free-text place/address search (Nominatim via /api/geocode), merged into the "Places"
+  // category above. Debounced (400ms) and requires 3+ chars so we don't fire on every
+  // keystroke - Nominatim's public API is rate-limited to ~1 request/sec.
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 3) {
+      setPlaceSuggestions([]);
+      setGeocoding(false);
+      return;
+    }
+    if (suppressSuggestionsRef.current) return;
+
+    setGeocoding(true);
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const results = (await res.json()) as { label: string; lat: number; lon: number }[];
+        setPlaceSuggestions(results);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error("Failed to load place search suggestions:", error);
+      } finally {
+        if (!controller.signal.aborted) setGeocoding(false);
+      }
+    }, 400);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   // Handle keyboard navigation for suggestions
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!showSuggestions) return;
+    // Enter works whether or not the dropdown is currently open (e.g. it was dismissed with
+    // Escape, or hasn't finished loading yet) - same as Google, pressing Enter always tries
+    // to go somewhere rather than silently doing nothing.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (showSuggestions && selectedSuggestionIndex >= 0) {
+        const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
+        if (suggestion) selectSuggestion(suggestion);
+      } else if (showSuggestions && getTotalSuggestions() > 0) {
+        // Nothing explicitly highlighted yet - accept the top suggestion, same as Google
+        // (Enter picks the first result, not a separate "raw text" search).
+        const suggestion = getSuggestionByIndex(0);
+        if (suggestion) selectSuggestion(suggestion);
+      } else {
+        setShowSuggestions(false);
+        mapViewerRef.current?.search(searchQuery);
+      }
+      return;
+    }
 
+    if (!showSuggestions) return;
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
@@ -701,17 +1156,6 @@ export function ExplorePage() {
       case "ArrowUp":
         e.preventDefault();
         setSelectedSuggestionIndex((prev) => Math.max(prev - 1, -1));
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectedSuggestionIndex >= 0) {
-          const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
-          if (suggestion) {
-            setSearchQuery(suggestion);
-            setShowSuggestions(false);
-            mapViewerRef.current?.search(suggestion);
-          }
-        }
         break;
       case "Escape":
         setShowSuggestions(false);
@@ -734,15 +1178,28 @@ export function ExplorePage() {
     return null;
   };
 
-  const handleSuggestionClick = (suggestion: string) => {
+  // Selecting a suggestion: our own admin-boundary matches go through the existing search()
+  // DSL (state/district/taluk/hobli/village chains), but a "Places" entry is an arbitrary
+  // geocoded address with no boundary behind it, so it flies straight to its lat/lon and
+  // drops a pin instead (see flyToPlace).
+  const selectSuggestion = (suggestion: string) => {
+    suppressSuggestionsRef.current = true;
     setSearchQuery(suggestion);
     setShowSuggestions(false);
-    mapViewerRef.current?.search(suggestion);
+    const place = placeSuggestions.find((p) => p.label === suggestion);
+    if (place) {
+      mapViewerRef.current?.flyToPlace(place.lat, place.lon, place.label);
+    } else {
+      mapViewerRef.current?.search(suggestion);
+    }
   };
+
+  const handleSuggestionClick = (suggestion: string) => selectSuggestion(suggestion);
 
   const clearSearch = () => {
     setSearchQuery("");
     setShowSuggestions(false);
+    setPlaceSuggestions([]);
     mapViewerRef.current?.search("");
   };
 
@@ -807,130 +1264,505 @@ export function ExplorePage() {
           onDrawingToolChange={setActiveAOITool}
           onAttributeInfo={setAttributeInfo}
           onDrillContextChange={setDrillContext}
+          onLiveLocationChange={(active) => setLiveLocationState(active ? "active" : "off")}
+          onNavigationUpdate={setNavigationState}
+          onRequestDirections={(lat, lon, label) => {
+            // Same as tapping "Directions" on a place card in Google Maps - switches
+            // straight into directions mode with this place already set as the destination
+            // (origin defaults to "Your location", same as openDirections) - no need to
+            // re-search it.
+            setShowDirections(true);
+            setOriginPoint({ type: "current" });
+            setOriginText("");
+            setDestinationPoint({ type: "place", label, lat, lon });
+            setDestinationText(label);
+            setActiveDirectionsField(null);
+            addRecentDestination({ label, lat, lon });
+          }}
+          onRouteAlternativeSelected={(index) =>
+            setRoutePreview((prev) => (prev ? { ...prev, selectedIndex: index } : prev))
+          }
+          findMyWayActive={selectedBoundaryLayer === "find_my_way"}
+          onPlaceLabelsVisibleChange={setPlaceLabelsVisible}
         />
 
-        {/* Floating search bar */}
-        <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
-          {/* Search Bar */}
-          <div ref={searchWrapperRef} className="relative max-w-md flex-1">
-            <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 shadow-md">
-              <button
-                onClick={() => setShowFilters((prev) => !prev)}
-                className={`flex-shrink-0 rounded-full p-2 transition-colors ${
-                  showFilters
-                    ? "bg-gray-100 text-obsidian-graphite"
-                    : "text-gray-500 hover:bg-gray-100"
-                }`}
-                aria-label="Toggle filters"
-                aria-pressed={showFilters}
-              >
-                <Menu className="h-4 w-4" />
-              </button>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    if (selectedSuggestionIndex >= 0) {
-                      const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
-                      if (suggestion) {
-                        setSearchQuery(suggestion);
-                        setShowSuggestions(false);
-                        mapViewerRef.current?.search(suggestion);
-                      }
-                    } else {
-                      setShowSuggestions(false);
-                      mapViewerRef.current?.search(searchQuery);
-                    }
-                  } else {
-                    handleKeyDown(e);
-                  }
-                }}
-                onFocus={() =>
-                  searchQuery && searchSuggestions.length > 0 && setShowSuggestions(true)
-                }
-                placeholder="Search location, village, taluk, district..."
-                role="combobox"
-                aria-expanded={showSuggestions}
-                aria-autocomplete="list"
-                aria-controls="search-suggestions-listbox"
-                className="min-w-0 flex-1 bg-transparent py-1 text-sm focus:outline-none"
-              />
-              {searchQuery && (
+        {/* Floating search bar (or, while showDirections, the directions form in its place -
+            only one of the two is ever visible, same as Google switching its single search
+            box into a directions panel rather than showing both at once). */}
+        {/* pointer-events-none on this row: because it has both left-4 and right-4 set, its
+            box stretches the full map width, and its height grows to match its tallest child
+            (e.g. the directions panel once a long route/turn-list is showing) - without this,
+            that invisible empty space swallows drag/pan input over the map. Each direct child
+            opts back in with pointer-events-auto so the actual controls stay clickable. */}
+        <div className="pointer-events-none absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
+          {showDirections ? (
+            <div
+              ref={directionsFormRef}
+              className="pointer-events-auto relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-md"
+            >
+              {navigationState ? (
+                // Live turn-by-turn banner - the big current instruction plus a compact
+                // remaining-distance/ETA line, same layout Google Maps uses while driving.
+                // Replaces the whole form (mode row/fields) while navigation is active.
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-3">
+                      <Navigation className="mt-0.5 h-6 w-6 flex-shrink-0 text-atlas-cobalt" />
+                      <div>
+                        <p className="text-base font-semibold leading-snug text-slate-900">
+                          {navigationState.currentInstruction}
+                        </p>
+                        {!navigationState.arrived && (
+                          <p className="mt-0.5 text-xs text-gray-500">
+                            in {formatDistance(navigationState.distanceToNextTurnMeters)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={toggleVoiceEnabled}
+                        aria-label={voiceEnabled ? "Mute voice guidance" : "Unmute voice guidance"}
+                        aria-pressed={voiceEnabled}
+                        className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        {voiceEnabled ? (
+                          <Volume2 className="h-4 w-4" />
+                        ) : (
+                          <VolumeX className="h-4 w-4" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeDirections}
+                        aria-label="Stop navigation"
+                        className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {navigationState.nextInstruction && (
+                    <p className="mt-2 truncate border-t border-gray-100 pt-2 text-xs text-gray-400">
+                      Then {navigationState.nextInstruction}
+                    </p>
+                  )}
+                  {!navigationState.arrived && (
+                    <p className="mt-2 text-sm text-gray-600">
+                      {formatDistance(navigationState.distanceRemainingMeters)} ·{" "}
+                      {formatDuration(navigationState.durationRemainingSeconds)} to{" "}
+                      <span className="font-medium">{navigationState.destinationLabel}</span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <>
+              {/* Travel mode row - icon-only pills, same layout as Google's directions panel. */}
+              <div className="flex items-center gap-1 px-2 py-2">
+                {TRAVEL_MODES.map(({ id, mode, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setUiTravelMode(id)}
+                    aria-label={label}
+                    aria-pressed={uiTravelMode === id}
+                    title={id === "motorcycle" ? `${label} (uses ${mode} routing - no dedicated motorcycle data)` : label}
+                    className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
+                      uiTravelMode === id
+                        ? "bg-atlas-cobalt text-white"
+                        : "text-gray-500 hover:bg-gray-100"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                ))}
+                <div className="flex-1" />
                 <button
-                  onClick={clearSearch}
-                  className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
-                  aria-label="Clear search"
+                  type="button"
+                  onClick={closeDirections}
+                  aria-label="Close directions"
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                 >
                   <X className="h-4 w-4" />
                 </button>
-              )}
-              <button
-                onClick={() => {
-                  setShowSuggestions(false);
-                  mapViewerRef.current?.search(searchQuery);
-                }}
-                className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
-                aria-label="Search"
-              >
-                <Search className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Suggestions dropdown */}
-            {showSuggestions && searchSuggestions.length > 0 && (
-              <div
-                id="search-suggestions-listbox"
-                role="listbox"
-                className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-lg"
-              >
-                {searchSuggestions.map((cat, catIdx) => {
-                  const offset = searchSuggestions
-                    .slice(0, catIdx)
-                    .reduce((sum, c) => sum + c.items.length, 0);
-                  return (
-                    <div key={cat.category}>
-                      <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-                        {cat.category}
-                      </div>
-                      {cat.items.map((item, i) => {
-                        const idx = offset + i;
-                        const isActive = idx === selectedSuggestionIndex;
-                        return (
-                          <button
-                            type="button"
-                            key={`${cat.category}-${item}-${i}`}
-                            role="option"
-                            aria-selected={isActive}
-                            // Prevents the input's blur (and its click-outside-triggered
-                            // dropdown close) from firing before the click is registered.
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => handleSuggestionClick(item)}
-                            onMouseEnter={() => setSelectedSuggestionIndex(idx)}
-                            className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
-                              isActive
-                                ? "bg-gray-100 text-obsidian-graphite"
-                                : "text-gray-700 hover:bg-gray-50"
-                            }`}
-                          >
-                            <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
-                            <span className="truncate">{highlightMatch(item, searchQuery)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
               </div>
-            )}
-          </div>
+              {/* Loading bar - a thin indeterminate strip while a route is being fetched,
+                  same spot Google's directions panel uses for its loading state; otherwise
+                  just the plain divider under the mode icons. */}
+              <div className="relative h-0.5 overflow-hidden bg-gray-100">
+                {routeLoading && (
+                  <div className="directions-loading-bar absolute inset-y-0 w-1/3 bg-atlas-cobalt" />
+                )}
+              </div>
+
+              {/* Origin/destination fields - bordered pills (teal when focused) with a
+                  vertical dot connector on the left linking them, same visual Google uses
+                  (purely decorative here - no multi-stop support), and a swap button on the
+                  right. */}
+              <div className="relative px-3 py-3">
+                <div className="pointer-events-none absolute left-[26px] top-[34px] bottom-[34px] flex flex-col items-center justify-between">
+                  {[0, 1, 2].map((i) => (
+                    <span key={i} className="h-1 w-1 rounded-full bg-gray-300" />
+                  ))}
+                </div>
+
+                <div
+                  className={`flex items-center gap-2 rounded-full border bg-white px-3 py-2 transition-colors ${
+                    activeDirectionsField === "origin"
+                      ? "border-teal-500 ring-1 ring-teal-500"
+                      : "border-gray-200"
+                  }`}
+                >
+                  <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full border-2 border-gray-400" />
+                  <input
+                    type="text"
+                    value={originText}
+                    onChange={(e) => setOriginText(e.target.value)}
+                    onFocus={() => setActiveDirectionsField("origin")}
+                    placeholder="Choose starting point, or click on the map"
+                    className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+                  />
+                  <Search className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                </div>
+
+                <div className="h-2" />
+
+                <div
+                  className={`flex items-center gap-2 rounded-full border bg-white px-3 py-2 transition-colors ${
+                    activeDirectionsField === "destination"
+                      ? "border-teal-500 ring-1 ring-teal-500"
+                      : "border-gray-200"
+                  }`}
+                >
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-red-500" />
+                  <input
+                    type="text"
+                    value={destinationText}
+                    onChange={(e) => setDestinationText(e.target.value)}
+                    onFocus={() => setActiveDirectionsField("destination")}
+                    placeholder="Choose destination"
+                    className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSwapDirections}
+                  aria-label="Swap starting point and destination"
+                  className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm hover:bg-gray-50"
+                >
+                  <ArrowUpDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              {/* Field dropdown - "Your location" (origin only) + recents + live geocode
+                  results, for whichever field is currently focused. Only one shows at a
+                  time, same as Google's directions fields. */}
+              {activeDirectionsField && (
+                <div className="max-h-64 overflow-y-auto border-t border-gray-100">
+                  {activeDirectionsField === "origin" && !originText.trim() && (
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectOriginPoint({ type: "current" }, "Your location")}
+                      className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <LocateFixed className="h-3.5 w-3.5 flex-shrink-0 text-atlas-cobalt" />
+                      Your location
+                    </button>
+                  )}
+                  {(activeDirectionsField === "origin" ? originText : destinationText).trim().length < 3 &&
+                    recentDestinations.map((r, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() =>
+                          activeDirectionsField === "origin"
+                            ? selectOriginPoint({ type: "place", ...r }, r.label)
+                            : selectDestinationPoint(r)
+                        }
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <Clock className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                        <span className="truncate">{r.label}</span>
+                      </button>
+                    ))}
+                  {(activeDirectionsField === "origin" ? originText : destinationText).trim().length >= 3 &&
+                    (directionsFieldGeocoding ? (
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400">
+                        <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-gray-500" />
+                        Searching...
+                      </div>
+                    ) : directionsFieldSuggestions.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-gray-400">No results found</div>
+                    ) : (
+                      directionsFieldSuggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() =>
+                            activeDirectionsField === "origin"
+                              ? selectOriginPoint({ type: "place", ...s }, s.label)
+                              : selectDestinationPoint(s)
+                          }
+                          className="flex w-full items-start gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                          <span className="truncate">{s.label}</span>
+                        </button>
+                      ))
+                    ))}
+                </div>
+              )}
+
+              {/* Route results - loading/error, or the alternatives list + step-by-step
+                  breakdown + Start Navigation, once a destination is resolved. Fetches
+                  automatically (see the auto-fetch effect above) as soon as both ends are
+                  set, no separate "Go" button. */}
+              {destinationPoint && (
+                <div className="border-t border-gray-100 p-3">
+                  {routeLoading && (
+                    <p className="text-sm text-gray-500">Getting directions...</p>
+                  )}
+                  {routeError && <p className="text-sm text-red-600">{routeError}</p>}
+
+                  {routePreview && (
+                    <div>
+                      {/* Route alternatives - Google always shows the fastest first ("Best")
+                          plus any other genuinely distinct options, each with its own
+                          distance/time; tapping one redraws it on the map. Often there's
+                          only one entry (OSRM found no real alternative for this trip), which
+                          renders fine as a single, non-interactive-feeling row. */}
+                      <div className="space-y-1.5">
+                        {routePreview.alternatives.map((alt, i) => {
+                          const selected = i === routePreview.selectedIndex;
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => {
+                                mapViewerRef.current?.selectRouteAlternative(i);
+                                setRoutePreview((prev) => (prev ? { ...prev, selectedIndex: i } : prev));
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                                selected
+                                  ? "border-atlas-cobalt bg-atlas-cobalt/5"
+                                  : "border-gray-100 hover:bg-gray-50"
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-slate-900">
+                                  {formatDuration(alt.durationSeconds)}
+                                  {i === 0 && (
+                                    <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                                      Best
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="truncate text-xs text-gray-500">
+                                  {formatDistance(alt.distanceMeters)}
+                                  {alt.summary ? ` · ${alt.summary}` : ""}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="mt-2 max-h-48 overflow-y-auto rounded-xl border border-gray-100">
+                        {routePreview.alternatives[routePreview.selectedIndex]?.steps.map((step, i) => (
+                          <div
+                            key={i}
+                            className="border-b border-gray-50 px-3 py-2 text-xs text-gray-600 last:border-b-0"
+                          >
+                            {step.instruction}
+                            <span className="ml-1 text-gray-400">
+                              ({formatDistance(step.distanceMeters)})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => mapViewerRef.current?.startNavigation()}
+                        className="mt-3 w-full rounded-full bg-atlas-cobalt py-2 text-sm font-medium text-white hover:bg-atlas-cobalt/90"
+                      >
+                        Start Navigation
+                      </button>
+                      {/* Testing tool - fakes GPS movement along the route so voice
+                          guidance, the turn banner, and mid-route rerouting/route-switching
+                          can all be checked without actually being there or moving. */}
+                      <button
+                        type="button"
+                        onClick={() => mapViewerRef.current?.startSimulatedNavigation()}
+                        className="mt-1.5 w-full rounded-full border border-gray-200 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+                      >
+                        Test drive this route (simulate)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+                </>
+              )}
+            </div>
+          ) : (
+            <div ref={searchWrapperRef} className="pointer-events-auto relative max-w-md flex-1">
+              <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 shadow-md">
+                <button
+                  onClick={() => setShowFilters((prev) => !prev)}
+                  className={`flex-shrink-0 rounded-full p-2 transition-colors ${
+                    showFilters
+                      ? "bg-gray-100 text-obsidian-graphite"
+                      : "text-gray-500 hover:bg-gray-100"
+                  }`}
+                  aria-label="Toggle filters"
+                  aria-pressed={showFilters}
+                >
+                  <Menu className="h-4 w-4" />
+                </button>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    suppressSuggestionsRef.current = false;
+                    setSearchQuery(e.target.value);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  onFocus={() => searchQuery && setShowSuggestions(true)}
+                  placeholder="Search location, village, taluk, district..."
+                  role="combobox"
+                  aria-expanded={showSuggestions}
+                  aria-autocomplete="list"
+                  aria-controls="search-suggestions-listbox"
+                  className="min-w-0 flex-1 bg-transparent py-1 text-sm focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={clearSearch}
+                    className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowSuggestions(false);
+                    mapViewerRef.current?.search(searchQuery);
+                  }}
+                  className="flex-shrink-0 rounded-full p-2 text-gray-500 hover:bg-gray-100"
+                  aria-label="Search"
+                >
+                  <Search className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Suggestions dropdown - shown for any non-empty query, not just once results
+                  exist, so a still-loading or genuinely empty search shows that state instead
+                  of just doing nothing (which reads as broken, not "found nothing"). */}
+              {showSuggestions && searchQuery.trim() && (
+                <div
+                  id="search-suggestions-listbox"
+                  role="listbox"
+                  className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-lg"
+                >
+                  {searchSuggestions.length === 0 ? (
+                    geocoding ? (
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400">
+                        <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-gray-500" />
+                        Searching...
+                      </div>
+                    ) : (
+                      <div className="px-4 py-3 text-sm text-gray-400">No results found</div>
+                    )
+                  ) : (
+                    searchSuggestions.map((cat, catIdx) => {
+                      const offset = searchSuggestions
+                        .slice(0, catIdx)
+                        .reduce((sum, c) => sum + c.items.length, 0);
+                      return (
+                        <div key={cat.category}>
+                          <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                            {cat.category}
+                          </div>
+                          {cat.items.map((item, i) => {
+                            const idx = offset + i;
+                            const isActive = idx === selectedSuggestionIndex;
+                            return (
+                              <button
+                                type="button"
+                                key={`${cat.category}-${item}-${i}`}
+                                role="option"
+                                aria-selected={isActive}
+                                // Prevents the input's blur (and its click-outside-triggered
+                                // dropdown close) from firing before the click is registered.
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => handleSuggestionClick(item)}
+                                onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                                className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
+                                  isActive
+                                    ? "bg-gray-100 text-obsidian-graphite"
+                                    : "text-gray-700 hover:bg-gray-50"
+                                }`}
+                              >
+                                <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                                <span className="truncate">{highlightMatch(item, searchQuery)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Directions Button - sits right beside the search bar, same as Google's layout
+              (not grouped with My Location on the far right). Opens the dedicated
+              origin/destination form above in place of the normal search bar. */}
+          <button
+            type="button"
+            onClick={() => (showDirections ? closeDirections() : openDirections())}
+            aria-label="Directions"
+            aria-pressed={showDirections}
+            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+              showDirections
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Navigation className="h-4 w-4" />
+          </button>
 
           {/* Spacer to push items to the right */}
           <div className="flex-1" />
 
+          {/* My Location Button - flies to the device's live GPS position and drops a
+              tracking blue dot, same as Google Maps' locate-me control. */}
+          <button
+            type="button"
+            onClick={handleToggleLiveLocation}
+            aria-label={liveLocationState === "active" ? "Stop tracking my location" : "Show my location"}
+            aria-pressed={liveLocationState !== "off"}
+            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+              liveLocationState === "active"
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <LocateFixed
+              className={`h-4 w-4 ${liveLocationState === "locating" ? "animate-pulse" : ""}`}
+            />
+          </button>
+
           {/* Draw AOI Button */}
-          <div ref={aoiMenuRef} className="relative">
+          <div ref={aoiMenuRef} className="pointer-events-auto relative">
             {/* Pill container: a "open menu" button plus, while a tool is active, a separate
                 close button to deselect it - kept as siblings so no button nests inside a
                 button (valid HTML, and clicking the X never toggles the menu). */}
@@ -1020,7 +1852,9 @@ export function ExplorePage() {
           </div>
 
           {/* User Profile Icon */}
-          <UserProfile userName="John Doe" userEmail="john.doe@example.com" />
+          <div className="pointer-events-auto">
+            <UserProfile userName="John Doe" userEmail="john.doe@example.com" />
+          </div>
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
@@ -1185,12 +2019,41 @@ export function ExplorePage() {
                           checked={selectedBoundaryLayer === id}
                           onChange={() => {
                             setSelectedBoundaryLayer(id);
+                            if (id === "find_my_way") {
+                              // "none" clears whatever boundary layer was previously active
+                              // (e.g. switching back to Find My Way after picking
+                              // Administrative Boundaries) - it isn't a real boundary layer
+                              // itself, it's the absence of one. Selecting it here only marks
+                              // it as the active choice - it does NOT open the Directions
+                              // panel itself, same as picking any other option here just
+                              // changes the map, not other UI. The panel only opens via the
+                              // dedicated Directions button.
+                              mapViewerRef.current?.setBoundaryLayerMode("none");
+                              return;
+                            }
+                            if (showDirections) closeDirections();
                             mapViewerRef.current?.setBoundaryLayerMode(id);
                             if (id !== "roads") setSelectedRoadsScope("none");
                           }}
                         />
                         {label}
                       </label>
+                      {id === "find_my_way" && selectedBoundaryLayer === "find_my_way" && (
+                        <div className="ml-6 mt-2">
+                          {/* Google-Earth-style independent layer toggle - stays in sync
+                              with the same checkbox in the on-map Layers picker (bottom-left)
+                              since both drive the same underlying preference. */}
+                          <label className="flex items-center text-sm text-gray-600">
+                            <input
+                              type="checkbox"
+                              className="mr-2 accent-atlas-cobalt"
+                              checked={placeLabelsVisible}
+                              onChange={(e) => mapViewerRef.current?.setPlaceLabelsVisible(e.target.checked)}
+                            />
+                            Place names
+                          </label>
+                        </div>
+                      )}
                       {id === "police_station" && selectedBoundaryLayer === "police_station" && (
                         <div>
                         <select

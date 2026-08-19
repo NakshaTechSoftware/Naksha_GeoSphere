@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
 
 interface DataFormat {
@@ -178,11 +178,81 @@ function AccordionRow({ formats }: { formats: DataFormat[] }) {
   );
 }
 
+const VISIBLE_CARDS = 3;
+const CARD_HEIGHT = 160;
+const CARD_GAP = 16;
+
+/** Mobile-only looping vertical carousel: exactly three format cards are
+ *  visible, and they cycle upward (2nd covers the 1st, 3rd takes the 2nd
+ *  slot, 4th enters at the 3rd, ...) in a seamless loop. Desktop (>= 1024px)
+ *  keeps the horizontal accordion rows, untouched. */
+function MobileFormatCarousel({ formats }: { formats: DataFormat[] }) {
+  // Duplicate the first VISIBLE_CARDS entries at the end so the track can
+  // loop seamlessly: when the translate reaches the tail, it snaps back to
+  // the head with no visible jump.
+  const items = [...formats, ...formats.slice(0, VISIBLE_CARDS)];
+  const step = CARD_HEIGHT + CARD_GAP;
+  const [index, setIndex] = useState(0);
+  const [animating, setAnimating] = useState(true);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAnimating(true);
+      setIndex((prev) => prev + 1);
+    }, 2800);
+    return () => clearInterval(id);
+  }, []);
+
+  const handleTransitionEnd = () => {
+    // Reached the duplicate tail - snap back to the head without animating.
+    if (index >= formats.length) {
+      setAnimating(false);
+      setIndex(0);
+    }
+  };
+
+  return (
+    <div
+      className="overflow-hidden lg:hidden"
+      style={{ height: VISIBLE_CARDS * CARD_HEIGHT + (VISIBLE_CARDS - 1) * CARD_GAP }}
+    >
+      <div
+        className="flex flex-col"
+        style={{
+          gap: CARD_GAP,
+          transform: `translateY(-${index * step}px)`,
+          transition: animating ? "transform 0.65s cubic-bezier(0.22, 1, 0.36, 1)" : "none",
+        }}
+        onTransitionEnd={handleTransitionEnd}
+      >
+        {items.map((format, i) => (
+          <div
+            key={`${format.id}-${i}`}
+            className="group relative flex flex-col overflow-hidden rounded-xl border border-[var(--color-border-subtle)] transition-all hover:border-atlas-cobalt/30 hover:shadow-card-hover"
+            style={{ height: CARD_HEIGHT }}
+          >
+            <img
+              src={format.image}
+              alt={`${format.name} preview`}
+              className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+            <div className="relative z-10 mt-auto flex flex-col items-center p-5 text-center">
+              <h3 className="mb-1 text-base font-semibold text-white">{format.name}</h3>
+              <p className="text-sm text-white/85">{format.subtitle}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function DataFormatsSection() {
   return (
-    <section id="data-formats" className="mt-20 py-20 lg:mt-32">
+    <section id="data-formats" className="pt-16 pb-10 lg:mt-32 lg:py-20">
       <div className="mx-auto max-w-content px-6 lg:px-16">
-        <div className="rounded-[var(--radius-large)] border border-[var(--color-border-subtle)] bg-white p-8 shadow-card lg:p-12">
+        <div className="rounded-[var(--radius-large)] border border-[var(--color-border-subtle)] bg-white p-8 pb-16 shadow-card lg:p-12">
           <h2 className="mb-10 text-center text-3xl font-bold text-obsidian-graphite">
             Data Formats & Products
           </h2>
@@ -193,28 +263,8 @@ export function DataFormatsSection() {
             <AccordionRow formats={dataFormats.slice(3, 6)} />
           </div>
 
-          {/* Tablet / mobile: existing grid, unchanged */}
-          <div className="grid gap-6 sm:grid-cols-2 lg:hidden">
-            {dataFormats.map((format) => (
-              <div
-                key={format.id}
-                className="group relative flex h-48 flex-col overflow-hidden rounded-xl border border-[var(--color-border-subtle)] transition-all hover:border-atlas-cobalt/30 hover:shadow-card-hover"
-              >
-                <img
-                  src={format.image}
-                  alt={`${format.name} preview`}
-                  className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
-                <div className="relative z-10 mt-auto flex flex-col items-center p-5 text-center">
-                  <h3 className="mb-1 text-base font-semibold text-white">
-                    {format.name}
-                  </h3>
-                  <p className="text-sm text-white/85">{format.subtitle}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+          {/* Tablet / mobile: looping carousel, three cards visible */}
+          <MobileFormatCarousel formats={dataFormats} />
         </div>
       </div>
     </section>

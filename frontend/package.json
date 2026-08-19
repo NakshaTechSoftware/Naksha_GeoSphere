@@ -6,7 +6,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3200",
     "postinstall": "node scripts/sync-maplibre-worker.mjs",
     "build": "next build",
     "start": "next start",

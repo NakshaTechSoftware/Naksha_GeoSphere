@@ -24,6 +24,7 @@ import type {
   GeoJsonFeatureCollection,
   HourlyForecastPoint,
   HourlyForecastResponse,
+  ImdWarningsResponse,
   LocationSummaryResponse,
   ModeledAirQuality,
   ModeledAqiSection,
@@ -926,6 +927,14 @@ export async function fetchNationalAqiStationsGeoJson(
   signal?: AbortSignal,
 ): Promise<GeoJsonFeatureCollection> {
   return environmentGet<GeoJsonFeatureCollection>("/api/v1/environment/aqi/national/geojson", signal);
+}
+
+/** Current IMD district nowcast warnings (all of India), as a GeoJSON
+ * FeatureCollection whose properties are already normalized server-side
+ * (see services/api/app/modules/environment/imd_warnings.py) - no raw/camelCase
+ * mapping needed here, unlike most other endpoints in this file. */
+export async function fetchImdWarnings(signal?: AbortSignal): Promise<ImdWarningsResponse> {
+  return environmentGet<ImdWarningsResponse>("/api/v1/environment/imd/warnings/", signal);
 }
 
 interface RawAqiGridPoint {

@@ -71,6 +71,18 @@ const CLOUD_COLORMAP: ColorStop[] = [
   { value: 100, rgb: [120, 126, 142], alpha: 215 },
 ];
 
+// Observed-cloud backdrop for regions outside the geostationary satellite
+// disks. Unlike the default cloud ramp, this never goes fully transparent at
+// 0% cover, so the user sees a continuous global cloud canvas instead of raw
+// basemap wedges where Himawari/GOES have no footprint.
+const CLOUD_BACKDROP_COLORMAP: ColorStop[] = [
+  { value: 0, rgb: [198, 206, 216], alpha: 118 },
+  { value: 15, rgb: [208, 215, 223], alpha: 128 },
+  { value: 40, rgb: [218, 224, 231], alpha: 145 },
+  { value: 70, rgb: [232, 236, 241], alpha: 168 },
+  { value: 100, rgb: [245, 247, 250], alpha: 190 },
+];
+
 // Wind-speed surface (m/s), rendered underneath the animated particle canvas.
 // calm → deep blue/violet, light → blue, moderate → cyan/green, strong →
 // yellow, very strong → orange, severe → red, extreme → purple.
@@ -132,6 +144,14 @@ function colormapForVariable(
   if (variable === "wind") return WIND_SPEED_COLORMAP;
   if (variable === "pressure") return PRESSURE_COLORMAP;
   return CLOUD_COLORMAP;
+}
+
+function colormapForRender(
+  variable: "temperature" | "precipitation" | "clouds" | "wind" | "pressure",
+  variant: "default" | "cloudBackdrop"
+): ColorStop[] {
+  if (variable === "clouds" && variant === "cloudBackdrop") return CLOUD_BACKDROP_COLORMAP;
+  return colormapForVariable(variable);
 }
 
 export interface FieldLegendStop {
@@ -274,10 +294,13 @@ export function renderFieldToImageSource(
     bounds: { west: number; south: number; east: number; north: number };
     values: number[];
     variable: "temperature" | "precipitation" | "clouds" | "wind" | "pressure";
+  },
+  options?: {
+    variant?: "default" | "cloudBackdrop";
   }
 ): { url: string; coordinates: [[number, number], [number, number], [number, number], [number, number]] } | null {
   const { width, height, values, bounds, variable } = frame;
-  const stops = colormapForVariable(variable);
+  const stops = colormapForRender(variable, options?.variant ?? "default");
 
   const canvas = document.createElement("canvas");
   canvas.width = width;

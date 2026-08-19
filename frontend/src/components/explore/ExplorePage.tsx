@@ -15,7 +15,6 @@ import {
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { LocationEnvironmentPanel } from "@/components/environment/LocationEnvironmentPanel";
 import {
-  formatStoredLocationLabel,
   getStoredUserSession,
   type StoredUserSession,
 } from "@/lib/userSession";
@@ -556,7 +555,6 @@ export function ExplorePage() {
 
   const parcel = attributeInfo?.parcel;
   const storedLocation = storedUser?.preferredLocation ?? null;
-  const storedLocationLabel = formatStoredLocationLabel(storedLocation);
 
   useEffect(() => {
     setStoredUser(getStoredUserSession());
@@ -1203,6 +1201,16 @@ export function ExplorePage() {
               }
             }
           }}
+          highlightedLocation={
+            showLocationEnvironment && storedLocation
+              ? {
+                  latitude: storedLocation.latitude,
+                  longitude: storedLocation.longitude,
+                  label: "My Environment",
+                  focusOnShow: true,
+                }
+              : null
+          }
         />
 
         {/* Floating search bar */}
@@ -1600,7 +1608,12 @@ export function ExplorePage() {
             <LocationEnvironmentPanel
               latitude={storedLocation.latitude}
               longitude={storedLocation.longitude}
-              locationLabel={`Saved location${storedLocationLabel ? ` · ${storedLocationLabel}` : ""}`}
+              locationLabel="My Environment"
+              locationMeta={{
+                accuracyMeters: storedLocation.accuracyMeters,
+                capturedAt: storedLocation.capturedAt,
+                sourceLabel: "Browser geolocation",
+              }}
               onClose={() => setShowLocationEnvironment(false)}
             />
           </aside>

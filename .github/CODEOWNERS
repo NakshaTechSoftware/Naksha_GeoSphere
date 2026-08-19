@@ -1,29 +1,28 @@
 # Naksha GeoSphere — code ownership.
 #
-# Placeholder — replace the owners below with real GitHub usernames/teams
-# once the repository has collaborators assigned. Until then, this file
-# documents intended ownership boundaries without granting/requiring
-# specific reviewers, since no team has been designated yet.
+# Chirag KJ is the default Code Owner for this repository.
+# Pull requests affecting any file will require his Code Owner review
+# when "Require review from Code Owners" is enabled for the main branch.
 
-# Default owner for anything not matched below.
-# * @REPLACE_WITH_DEFAULT_OWNER
+# Default owner for everything in the repository.
+* @Chiragkj
 
 # Frontend
-# /apps/web/           @REPLACE_WITH_FRONTEND_OWNER
-# /packages/ui/          @REPLACE_WITH_FRONTEND_OWNER
+# Currently covered by the default owner above.
+# /apps/web/           @Chiragkj
+# /packages/ui/        @Chiragkj
 
 # Backend API
-# /services/api/        @REPLACE_WITH_BACKEND_OWNER
+# /services/api/       @Chiragkj
 
 # Worker / geospatial processing
-# /services/worker/      @REPLACE_WITH_GEOSPATIAL_OWNER
+# /services/worker/    @Chiragkj
 
 # Infrastructure / CI
-# /infrastructure/      @REPLACE_WITH_DEVOPS_OWNER
-# /.github/workflows/    @REPLACE_WITH_DEVOPS_OWNER
-# /compose*.yaml          @REPLACE_WITH_DEVOPS_OWNER
+# /infrastructure/     @Chiragkj
+# /.github/workflows/  @Chiragkj
+# /compose*.yaml       @Chiragkj
 
-# Security-sensitive files always require a second reviewer once owners
-# are assigned.
-# /docs/SECURITY.md      @REPLACE_WITH_SECURITY_OWNER
-# /SECURITY.md            @REPLACE_WITH_SECURITY_OWNER
+# Security-sensitive files
+# /docs/SECURITY.md    @Chiragkj
+# /SECURITY.md         @Chiragkj

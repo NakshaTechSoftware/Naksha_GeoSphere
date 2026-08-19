@@ -47,8 +47,10 @@ export function LayersControl({
   const currentLayerData = layers.find((l) => l.id === currentLayer) ?? layers[0];
 
   return (
-    <div className={`absolute bottom-6 left-6 z-10 ${className}`}>
-      <div className="flex items-end gap-3 max-md:flex-col-reverse max-md:items-start">
+    <div
+      className={`absolute bottom-6 left-6 z-10 max-md:left-auto max-md:right-2.5 max-md:bottom-[42px] ${className}`}
+    >
+      <div className="flex items-end gap-3 max-md:flex-col-reverse max-md:items-end">
         {/* Layer option cards. Desktop: shown in place of the anchor button while
             expanded (Google Maps style, unchanged). Mobile (common phone resolutions):
             always in the layout as a vertical column of icon-sized buttons that
@@ -139,7 +141,7 @@ export function LayersControl({
             mobile backdrop below closes the picker without picking a layer. */}
         <button
           onClick={() => setIsExpanded((v) => !v)}
-          className={`relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-all hover:scale-105 ring-2 ring-white max-md:w-11 max-md:h-11 max-md:rounded-lg ${
+          className={`relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-all hover:scale-105 ring-2 ring-white max-md:w-11 max-md:h-11 max-md:rounded-lg max-md:order-first ${
             isExpanded ? "hidden" : ""
           }`}
           aria-label="Open map layers"

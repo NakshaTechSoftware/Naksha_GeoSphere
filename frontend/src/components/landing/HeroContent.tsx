@@ -5,13 +5,13 @@ export function HeroContent() {
   return (
     <div className="flex flex-col justify-center">
       {/* Description */}
-      <p className="mb-8 max-w-[560px] text-base leading-relaxed text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_2px_6px_rgba(0,0,0,0.7),0_0_14px_rgba(0,0,0,0.5)]">
+      <p className="mb-4 max-w-[560px] text-base leading-relaxed text-white md:mx-auto md:text-center [text-shadow:0_1px_2px_rgba(0,0,0,0.9),0_2px_6px_rgba(0,0,0,0.7),0_0_14px_rgba(0,0,0,0.5)]">
         Access premium geospatial data for imagery, elevation, terrain, LiDAR, vector layers, and
         more. Global coverage. Trusted quality. Delivered securely.
       </p>
 
       {/* CTAs */}
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-4 md:justify-center">
         <a href="/welcome-page#data-formats">
           <Button
             variant="headerCta"

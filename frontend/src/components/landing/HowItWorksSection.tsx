@@ -48,7 +48,40 @@ const AUTOPLAY_MS = 3200;
 export function HowItWorksSection() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [stepOneInView, setStepOneInView] = useState(false);
+  const [mobileWidth, setMobileWidth] = useState(0);
+  const mobileRef = useRef<HTMLDivElement | null>(null);
+  const mobileWrapRef = useRef<HTMLDivElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Measure the mobile stepper width so the curved connectors between the
+  // alternating icon sides (step 1 icon left, step 2 icon right) can be drawn
+  // with exact coordinates.
+  useEffect(() => {
+    const el = mobileWrapRef.current;
+    if (!el) return;
+    const update = () => setMobileWidth(el.getBoundingClientRect().width);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Mobile-only sequential reveal for step 1: when the stepper scrolls into
+  // view, the icon fades in first, then (once fully visible) the text fades in
+  // on the same row. Resets when it scrolls out of view so it replays.
+  useEffect(() => {
+    const el = mobileRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => setStepOneInView(e.isIntersecting));
+      },
+      { threshold: 0.15 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     if (isPaused) return;
@@ -175,48 +208,75 @@ export function HowItWorksSection() {
 
           </div>
 
-          {/* Mobile/Tablet: Vertical 3D stepper */}
-          <div className="lg:hidden">
-            <div className="relative">
-              {/* Connector segments - run only in the vertical gaps BETWEEN step
-                  rows, never through them. Each row's icon column is 104px tall
-                  (badge 32px + mb-2 8px + sphere 64px) and rows are 24px apart,
-                  so the gap after row i spans from 128i+104px to 128i+168px, at
-                  the column's horizontal center (64px column -> 31px line). */}
-              {steps.slice(0, -1).map((_, i) => {
-                const fill = Math.max(0, Math.min(1, activeIndex - i)) * 100;
-                return (
-                  <div
-                    key={`connector-${i}`}
-                    aria-hidden="true"
-                    className="absolute left-[31px] w-0.5 overflow-hidden rounded-full bg-[var(--color-cobalt-medium)]"
-                    style={{ top: `${104 + 128 * i}px`, height: "64px" }}
-                  >
-                    <div
-                      className="w-full rounded-full bg-atlas-cobalt transition-[height] duration-700 ease-out"
-                      style={{
-                        height: `${fill}%`,
-                        boxShadow: "0 0 10px 1px rgba(53, 99, 233, 0.6)",
-                      }}
-                    />
-                  </div>
-                );
-              })}
+          {/* Mobile/Tablet: Vertical stepper, alternating icon sides */}
+          <div ref={mobileRef} className="lg:hidden">
+            <div ref={mobileWrapRef} className="relative">
+              {/* Curved connectors. Icons alternate sides: step 1 left, step 2
+                  right, step 3 left, step 4 right. Each connector runs down the
+                  icon gutter (x = 32 on the left, W-32 on the right, hidden
+                  behind the spheres), crosses horizontally through the EMPTY
+                  gap between rows (gap centers y = 120, 268, 416), and never
+                  passes over any step's text. Sphere centers: row i's icon
+                  column is 104px tall (badge 32 + mb-2 8 + sphere 64) with rows
+                  32px apart, so row i's sphere center is (32 or W-32, 136i+72). */}
+              {mobileWidth > 0 && (
+                <svg
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 top-0 z-0"
+                  width="100%"
+                  height="540"
+                  viewBox={`0 0 ${mobileWidth} 540`}
+                  preserveAspectRatio="none"
+                  fill="none"
+                >
+                  {/* Step 1 (left) -> step 2 (right) */}
+                  <path
+                    d={`M 32 72 L 32 112 Q 32 120 60 120 L ${mobileWidth - 60} 120 Q ${mobileWidth - 32} 120 ${mobileWidth - 32} 112 L ${mobileWidth - 32} 208`}
+                    stroke="var(--color-cobalt-medium)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                  {/* Step 2 (right) -> step 3 (left) */}
+                  <path
+                    d={`M ${mobileWidth - 32} 208 L ${mobileWidth - 32} 260 Q ${mobileWidth - 32} 268 ${mobileWidth - 60} 268 L 60 268 Q 32 268 32 260 L 32 356`}
+                    stroke="var(--color-cobalt-medium)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                  {/* Step 3 (left) -> step 4 (right) */}
+                  <path
+                    d={`M 32 356 L 32 408 Q 32 416 60 416 L ${mobileWidth - 60} 416 Q ${mobileWidth - 32} 416 ${mobileWidth - 32} 408 L ${mobileWidth - 32} 504`}
+                    stroke="var(--color-cobalt-medium)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              )}
 
-              <div className="space-y-6">
+              <div className="space-y-8">
                 {steps.map((step, index) => {
                   const Icon = step.icon;
                   const isActive = index === activeIndex;
+                  const isFirst = index === 0;
+                  const mirrored = index === 1 || index === 3;
 
                   return (
                     <button
                       key={step.id}
                       type="button"
                       onClick={() => selectStep(index)}
-                      className="relative flex w-full gap-6 rounded-xl text-left transition-transform duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-atlas-cobalt"
+                      className={`relative flex w-full items-stretch gap-6 rounded-xl text-left transition-transform duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-atlas-cobalt ${
+                        mirrored ? "flex-row-reverse" : ""
+                      }`}
                     >
-                      {/* Number and icon column */}
-                      <div className="z-10 flex flex-col items-center">
+                      {/* Number and icon column: step 1 fades in first */}
+                      <div
+                        className={`z-10 flex flex-col items-center transition-all duration-700 ease-out motion-reduce:transition-none ${
+                          isFirst && !stepOneInView
+                            ? "scale-90 opacity-0"
+                            : "scale-100 opacity-100"
+                        }`}
+                      >
                         <div
                           className={`mb-2 flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold text-white transition-all duration-300 ${
                             isActive ? "bg-atlas-cobalt shadow-[0_4px_12px_rgba(53,99,233,0.5)]" : "bg-atlas-cobalt/70"
@@ -239,8 +299,12 @@ export function HowItWorksSection() {
                         </div>
                       </div>
 
-                      {/* Content column */}
-                      <div className="flex-1 pt-1">
+                      {/* Content column: vertically centered against the icon
+                          sphere; step 2's text sits on the left, right-aligned
+                          toward its icon */}
+                      <div
+                        className={`flex-1 pt-12 transition-all duration-500 ease-out motion-reduce:transition-none ${mirrored ? "text-right" : ""}`}
+                      >
                         <h3 className="mb-1 text-base font-semibold text-obsidian-graphite">
                           {step.title}
                         </h3>

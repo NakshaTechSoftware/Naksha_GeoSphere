@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Download, Loader2, X } from "lucide-react";
 import type { AdminLevel, AttributeHierarchy } from "./IndiaMapViewer";
+import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { saveExportFile } from "@/lib/nativeDownload";
 
 export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
@@ -13,6 +14,12 @@ export interface ExportFeatureModalProps {
   geometry?: GeoJSON.Geometry;
   properties?: Record<string, unknown>;
   hierarchy?: AttributeHierarchy;
+  // Bhoomi owner rows already fetched for the attribute panel. When available they're
+  // merged into the exported feature's properties so the file carries the owner details.
+  owners?:
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] };
   onClose: () => void;
 }
 
@@ -62,6 +69,7 @@ export function ExportFeatureModal({
   geometry,
   properties,
   hierarchy,
+  owners,
   onClose,
 }: ExportFeatureModalProps) {
   const [format, setFormat] = useState<ExportFormat>("geojson");
@@ -69,6 +77,13 @@ export function ExportFeatureModal({
   const [selectedLevels, setSelectedLevels] = useState<Set<BulkLevel>>(() => new Set(levels));
   const [state, setState] = useState<ModalState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
+
+  // Keep the latest owners state readable from the export handler (which is a closure
+  // over the render-time value otherwise).
+  const ownersRef = useRef(owners);
+  useEffect(() => {
+    ownersRef.current = owners;
+  }, [owners]);
 
   const toggleLevel = (level: BulkLevel) => {
     setSelectedLevels((prev) => {
@@ -99,10 +114,35 @@ export function ExportFeatureModal({
     }
     setState({ status: "loading" });
     try {
+      // The KGIS cadastral data carries no owner names - they come from the live Bhoomi
+      // lookup shown in the attribute panel. If that lookup is still running, wait for it
+      // (capped) so the export includes the owner details; on error/empty it just exports
+      // the parcel's own attributes as before.
+      const deadline = Date.now() + 20_000;
+      while (ownersRef.current?.status === "loading" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const finalOwners = ownersRef.current;
+
+      // Merge the owners into the exported properties so the file has the same
+      // Owner/Owners rows the panel displays.
+      const mergedProperties: Record<string, unknown> = { ...(properties ?? {}) };
+      const ownerRows = finalOwners?.status === "ok" ? finalOwners.rows : [];
+      if (ownerRows.length > 0) {
+        mergedProperties.Owners = ownerRows
+          .map((owner) => {
+            const parts = [owner.name];
+            if (owner.hissa) parts.push(`[Hissa ${owner.hissa}]`);
+            if (owner.extent) parts.push(`(${owner.extent}${owner.category ? `, ${owner.category}` : ""})`);
+            return parts.join(" ");
+          })
+          .join("; ");
+        mergedProperties.OwnerCount = ownerRows.length;
+      }
       const response = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exportFormat: format, geometry, properties: properties ?? {}, nameHint: title }),
+        body: JSON.stringify({ exportFormat: format, geometry, properties: mergedProperties, nameHint: title }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);

@@ -59,7 +59,7 @@ export function DashboardHeader({
           </div>
           <div className="flex flex-col">
             <span className="text-base font-semibold leading-tight tracking-tight text-white">
-              Naksha GeoSphere
+              N-MAPS
             </span>
             <span className="hidden text-xs leading-tight text-white/60 sm:block">
               The Geospatial Data Marketplace

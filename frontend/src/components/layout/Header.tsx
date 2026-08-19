@@ -12,7 +12,7 @@ export function Header() {
             NG
           </span>
           <div className="leading-tight">
-            <p className="text-base font-semibold tracking-tight">Naksha GeoSphere</p>
+            <p className="text-base font-semibold tracking-tight">N-MAPS</p>
             <p className="text-cloud-mist/70 text-xs">The Geospatial Data Marketplace</p>
           </div>
         </div>

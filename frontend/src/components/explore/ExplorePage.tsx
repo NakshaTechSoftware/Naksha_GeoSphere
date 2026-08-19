@@ -17,7 +17,7 @@ import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import { ChevronDown, ChevronUp, MapPin, Search, Menu, Mic, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, MapPin, Search, Menu, Mic, X } from "lucide-react";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -533,6 +533,14 @@ export function ExplorePage() {
   // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
   // the panel closes rather than tracking its own copy of the feature.
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  // Controls the export modal for a drawn AOI (separate from the attribute-panel export).
+  const [aoiExportOpen, setAoiExportOpen] = useState(false);
+  const [aoiOwners, setAoiOwners] = useState<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] }
+  >({ status: "idle" });
 
   // Owner names for the selected cadastral parcel. They aren't in the cadastral GeoJSON, so
   // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
@@ -576,6 +584,37 @@ export function ExplorePage() {
     parcel?.surnoc,
     parcel?.hissa,
   ]);
+
+  // Fetch Bhoomi owner details for a drawn AOI's cadastral parcel when the export
+  // modal opens. The parcel key is extracted from the intersecting cadastral layer
+  // in IndiaMapViewer.completeAOI.
+  useEffect(() => {
+    if (!aoiExportOpen || !aoiInfo?.aoiParcel) {
+      setAoiOwners({ status: "idle" });
+      return;
+    }
+    const parcel = aoiInfo.aoiParcel;
+    const controller = new AbortController();
+    setAoiOwners({ status: "loading" });
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
+          { signal: controller.signal },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        setAoiOwners({ status: "ok", rows: data.owners ?? [] });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setAoiOwners({
+          status: "error",
+          message: error instanceof Error ? error.message : "Lookup failed",
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [aoiExportOpen, aoiInfo?.aoiParcel?.district, aoiInfo?.aoiParcel?.taluk, aoiInfo?.aoiParcel?.hobli, aoiInfo?.aoiParcel?.village, aoiInfo?.aoiParcel?.survey, aoiInfo?.aoiParcel?.surnoc, aoiInfo?.aoiParcel?.hissa]);
 
   // Real state/district/taluk names, fetched once on mount, that back the dynamic
   // suggestion categories below (as opposed to the hardcoded Bengaluru ward/zone lists).
@@ -1166,7 +1205,8 @@ export function ExplorePage() {
         />
 
         {/* Floating search bar */}
-        <div className="absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
+        <div ref={aoiMenuRef} className="absolute left-4 right-4 top-4 z-20">
+        <div className="flex items-center gap-3">
           {/* Search Bar - takes the full width on mobile (common phone resolutions) where
               the Draw AOI and User Profile controls are hidden. */}
           {/* min-w-0 is critical: without it the wrapper's min-width defaults to auto,
@@ -1341,7 +1381,7 @@ export function ExplorePage() {
           <div className="hidden flex-1 md:block" />
 
           {/* Draw AOI Button - hidden on mobile (common phone resolutions) */}
-          <div ref={aoiMenuRef} className="relative hidden md:block">
+          <div className="relative hidden md:block">
             {/* Pill container: a "open menu" button plus, while a tool is active, a separate
                 close button to deselect it - kept as siblings so no button nests inside a
                 button (valid HTML, and clicking the X never toggles the menu). */}
@@ -1352,7 +1392,10 @@ export function ExplorePage() {
             >
               <button
                 type="button"
-                onClick={() => setShowAOIMenu((prev) => !prev)}
+                onClick={() => {
+                  setShowAOIMenu((prev) => !prev);
+                  setAttributeInfo(null);
+                }}
                 aria-haspopup="menu"
                 aria-expanded={showAOIMenu}
                 className={`flex items-center gap-2 whitespace-nowrap py-2.5 text-sm font-medium transition-colors ${
@@ -1404,7 +1447,7 @@ export function ExplorePage() {
                 role="menu"
                 // Stretched left-0/right-0 (instead of w-full) so the dropdown, borders
                 // included, is exactly as wide as the button it hangs from
-                className="aoi-menu-in absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
+                className="aoi-menu-in absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
               >
                 {AOI_TOOLS.map(({ id, label, Icon }) => (
                   <button
@@ -1414,6 +1457,7 @@ export function ExplorePage() {
                     onClick={() => {
                       setActiveAOITool(id);
                       setShowAOIMenu(false);
+                      setAttributeInfo(null);
                       mapViewerRef.current?.setDrawingTool(id);
                     }}
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
@@ -1435,6 +1479,62 @@ export function ExplorePage() {
           <div className="hidden md:block">
             <UserProfile />
           </div>
+        </div>
+
+        {/* Mobile Draw AOI button - round icon below the search bar, aligned right.
+            Visible only on common phone resolutions. On tap it shows a small dropdown
+            with the same AOI tool options as the desktop pill. */}
+        <div className="absolute right-2 top-[4.5rem] z-20 md:hidden">
+          <button
+            type="button"
+            onClick={() => setShowAOIMenu((prev) => !prev)}
+            aria-haspopup="menu"
+            aria-expanded={showAOIMenu}
+            className={`flex h-11 w-11 items-center justify-center rounded-full border shadow-md transition-colors ${
+              activeAOITool
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+            aria-label="Draw area of interest"
+          >
+            {activeAOITool ? (
+              (() => {
+                const ActiveIcon = AOI_TOOLS.find((t) => t.id === activeAOITool)!.Icon;
+                return <ActiveIcon className="h-5 w-5" />;
+              })()
+            ) : (
+              <DrawAOIIcon className="h-5 w-5" />
+            )}
+          </button>
+
+          {showAOIMenu && (
+            <div
+              role="menu"
+              className="aoi-menu-in absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
+            >
+              {AOI_TOOLS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setActiveAOITool(id);
+                    setShowAOIMenu(false);
+                    mapViewerRef.current?.setDrawingTool(id);
+                  }}
+                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
+                    activeAOITool === id
+                      ? "bg-gray-100 text-obsidian-graphite"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         </div>
 
         {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
@@ -1518,6 +1618,59 @@ export function ExplorePage() {
             hierarchy={attributeInfo.hierarchy}
             owners={owners}
             onClose={() => setExportModalOpen(false)}
+          />
+        )}
+
+        {/* Export modal for a drawn AOI — opens from the AOI area chip's export icon. */}
+        {aoiExportOpen && aoiInfo && (
+          <ExportFeatureModal
+            title="Area of Interest"
+            geometry={aoiInfo.geometry}
+            properties={(() => {
+              if (!aoiInfo.aoiParcel) return aoiInfo.parentProperties;
+              // Survey-plot case: strip the layer prefix so exported attributes have
+              // clean names (e.g. "Surveynumber_Old" instead of
+              // "village-cadastrals_Surveynumber_Old").
+              const p = aoiInfo.parentProperties ?? {};
+              const clean: Record<string, unknown> = {};
+              for (const [k, v] of Object.entries(p)) {
+                const stripped = k.replace(/^village-cadastrals_/, "");
+                if (stripped !== k) clean[stripped] = v;
+              }
+              return Object.keys(clean).length > 0 ? clean : p;
+            })()}
+            aoiGeometry={aoiInfo.geometry}
+            aoiDistrict={typeof aoiInfo.parentProperties?.["state-districts_dtname"] === "string"
+              ? aoiInfo.parentProperties["state-districts_dtname"] as string
+              : undefined}
+            aoiTaluk={(() => {
+              const p = aoiInfo.parentProperties ?? {};
+              for (const key of ["district-taluks_KGISTalukName", "district-taluks_subdist_nm", "district-taluks_name", "district-taluks_taluk_name", "district-taluks_TalukName"]) {
+                if (typeof p[key] === "string" && p[key]) return p[key] as string;
+              }
+              return undefined;
+            })()}
+            aoiHobli={(() => {
+              const p = aoiInfo.parentProperties ?? {};
+              for (const key of ["taluk-hoblies_KGISHobliName", "taluk-hoblies_hobli_name", "taluk-hoblies_name"]) {
+                if (typeof p[key] === "string" && p[key]) return p[key] as string;
+              }
+              return undefined;
+            })()}
+            aoiVillage={(() => {
+              const p = aoiInfo.parentProperties ?? {};
+              for (const key of ["hobli-villages_KGISVillageName", "hobli-villages_village_name", "hobli-villages_Village_Name", "hobli-villages_village", "hobli-villages_name"]) {
+                if (typeof p[key] === "string" && p[key]) return p[key] as string;
+              }
+              return undefined;
+            })()}
+            aoiParcel={aoiInfo.aoiParcel}
+            owners={aoiOwners.status === "idle" || aoiOwners.status === "loading"
+              ? { status: "loading" }
+              : aoiOwners.status === "ok"
+                ? { status: "ok", rows: aoiOwners.rows }
+                : { status: "error", message: aoiOwners.message }}
+            onClose={() => setAoiExportOpen(false)}
           />
         )}
 
@@ -1655,6 +1808,14 @@ export function ExplorePage() {
             <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur">
               {aoiInfo ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => setAoiExportOpen(true)}
+                    className="rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-atlas-cobalt"
+                    aria-label="Export drawn area of interest"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
                   <span className="flex items-center gap-2 text-sm font-medium text-obsidian-graphite">
                     <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />
                     AOI area: {formatAreaSqKm(aoiInfo.areaSqKm)}

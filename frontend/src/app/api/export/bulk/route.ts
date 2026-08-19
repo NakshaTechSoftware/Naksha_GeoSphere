@@ -1,16 +1,21 @@
 import { NextRequest } from "next/server";
 import { config } from "@/lib/config";
 import { parseUpstreamError } from "../_error";
+import { booleanIntersects, featureCollection, union } from "@turf/turf";
 
-// Walks the admin hierarchy (District -> Taluk -> Hobli -> Village) starting from whatever
-// the user right-clicked, using this app's own MinIO-backed drill-down routes
+// Walks the admin hierarchy (State -> District -> Taluk -> Hobli -> Village) starting from
+// whatever the user right-clicked, using this app's own MinIO-backed drill-down routes
 // (state-districts / district-taluks / taluk-hoblies / hobli-villages) - the same ones the
 // map itself uses to load each level - then hands the assembled features to the FastAPI
 // backend for GDAL/OGR conversion. Streams progress as Server-Sent Events since a deep
 // bulk export (e.g. every village in a district) can take a while.
 
-type BulkLevel = "district" | "taluk" | "hobli" | "village" | "survey_plot";
-type AdminLevel = "state" | BulkLevel;
+type BulkLevel = "state" | "district" | "taluk" | "hobli" | "village" | "survey_plot";
+type AdminLevel = BulkLevel;
+// The levels actually fetched from a named MinIO-backed dataset route. "state" has no such
+// route of its own - its output feature is assembled by dissolving every district instead
+// (see dissolveState below), so it's excluded from the maps keyed by fetch mechanics.
+type FetchableLevel = Exclude<BulkLevel, "state">;
 const EXPORT_FORMATS = ["geojson", "shapefile", "kml", "kmz", "gpkg", "gdb", "csv"] as const;
 type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
@@ -24,9 +29,10 @@ interface BulkRequestBody {
   clickedLevel?: unknown;
   selectedLevels?: unknown;
   nameHint?: unknown;
+  aoiGeometry?: unknown;
 }
 
-const NAME_KEYS: Record<BulkLevel, string[]> = {
+const NAME_KEYS: Record<FetchableLevel, string[]> = {
   district: ["dtname"],
   taluk: ["KGISTalukName", "subdist_nm", "name", "taluk_name", "TALUK_NAME", "TalukName"],
   hobli: ["KGISHobliName", "hobli_name", "name"],
@@ -43,7 +49,7 @@ const NAME_KEYS: Record<BulkLevel, string[]> = {
   survey_plot: ["Surveynumber_Old", "surveynumberi", "survey_no", "survey_number"],
 };
 
-const ROUTE_BY_LEVEL: Record<BulkLevel, string> = {
+const ROUTE_BY_LEVEL: Record<FetchableLevel, string> = {
   district: "state-districts",
   taluk: "district-taluks",
   hobli: "taluk-hoblies",
@@ -83,6 +89,26 @@ function filterByName(features: GeoJSON.Feature[], keys: string[], target: strin
   return features.filter((f) => (nameFromFeature(f, keys) ?? "").toLowerCase() === wanted);
 }
 
+// "state" has no boundary dataset of its own - it's assembled by dissolving every district
+// already fetched for the state-wide walk into one polygon, the same way the map's own
+// India-boundary layer is described as "dissolved from" its constituent state/UT polygons.
+// Real KGIS district data isn't always topologically clean (see the worker's export.py note
+// that roughly a third of Karnataka's districts fail strict OGC validity), which can make
+// turf's boolean-clipping union throw - return null rather than failing the whole export,
+// the other selected levels still make a legitimate download.
+function dissolveState(districts: GeoJSON.Feature[], stateName: string): GeoJSON.Feature | null {
+  const polygons = districts.filter(
+    (f): f is GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> =>
+      f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon"
+  );
+  if (polygons.length === 0) return null;
+  try {
+    return union(featureCollection(polygons), { properties: { name: stateName } });
+  } catch {
+    return null;
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -105,7 +131,7 @@ async function mapWithConcurrency<T, R>(
 
 async function fetchLevel(
   origin: string,
-  level: BulkLevel,
+  level: FetchableLevel,
   params: Record<string, string | undefined>
 ): Promise<GeoJSON.Feature[]> {
   const url = new URL(`/api/datasets/${ROUTE_BY_LEVEL[level]}`, origin);
@@ -127,7 +153,7 @@ async function fetchLevel(
 // and reports it as skipped instead of throwing.
 async function fetchLevelTolerant(
   origin: string,
-  level: BulkLevel,
+  level: FetchableLevel,
   params: Record<string, string | undefined>
 ): Promise<{ features: GeoJSON.Feature[]; skipped: boolean }> {
   try {
@@ -164,6 +190,11 @@ async function collectLayers(
     const all = keepNamed(await fetchLevel(origin, "district", { state }), NAME_KEYS.district);
     districtNames = uniqueNames(all, NAME_KEYS.district);
     if (need("district")) layers.district = all;
+    if (need("state")) {
+      emit("Assembling state boundary…");
+      const stateFeature = dissolveState(all, state);
+      if (stateFeature) layers.state = [stateFeature];
+    }
   } else {
     districtNames = [opts.district!];
     if (need("district")) {
@@ -349,7 +380,7 @@ function isExportFormat(value: unknown): value is ExportFormat {
 }
 
 const ADMIN_LEVELS: AdminLevel[] = ["state", "district", "taluk", "hobli", "village", "survey_plot"];
-const BULK_LEVELS: BulkLevel[] = ["district", "taluk", "hobli", "village", "survey_plot"];
+const BULK_LEVELS: BulkLevel[] = ["state", "district", "taluk", "hobli", "village", "survey_plot"];
 
 export async function POST(request: NextRequest) {
   let body: BulkRequestBody;
@@ -444,6 +475,26 @@ export async function POST(request: NextRequest) {
           selectedLevels,
           emit: (message, current, total) => send({ type: "progress", message, current, total }),
         });
+
+        // When an AOI geometry is provided, filter every layer to only features
+        // that spatially intersect the drawn polygon.
+        const aoiPoly = body.aoiGeometry && typeof body.aoiGeometry === "object"
+          ? body.aoiGeometry as GeoJSON.Polygon
+          : null;
+        if (aoiPoly) {
+          send({ type: "progress", message: "Clipping to drawn area…" });
+          for (const key of Object.keys(layers) as BulkLevel[]) {
+            const feats = layers[key];
+            if (!feats) continue;
+            layers[key] = feats.filter((f) => {
+              try {
+                return f.geometry && booleanIntersects(f as any, aoiPoly as any);
+              } catch {
+                return false;
+              }
+            });
+          }
+        }
 
         const layerPayload = Object.entries(layers)
           .filter(([, features]) => features && features.length > 0)

@@ -218,15 +218,19 @@ async def get_hourly_forecast(
 
 
 async def get_current_environment(
-    redis: Redis, latitude: float, longitude: float
+    redis: Redis, settings: Settings, latitude: float, longitude: float
 ) -> CurrentEnvironmentResponse:
     validate_coordinates(latitude, longitude)
     weather = await get_weather_section(redis, latitude, longitude)
+    official_air_quality = await get_official_aqi_section(
+        redis, settings, latitude, longitude
+    )
     modeled_air_quality = await get_modeled_air_quality_section(redis, latitude, longitude)
     return CurrentEnvironmentResponse(
         latitude=latitude,
         longitude=longitude,
         weather=weather,
+        official_air_quality=official_air_quality,
         modeled_air_quality=modeled_air_quality,
     )
 

@@ -67,11 +67,14 @@ async def get_air_quality(
 async def get_current(
     latitude: float = Latitude,
     longitude: float = Longitude,
+    settings: Settings = Depends(get_settings),
 ) -> CurrentEnvironmentResponse:
     """Aggregates Open-Meteo weather + modeled air quality for a
     coordinate. Each section reports AVAILABLE/UNAVAILABLE independently —
     one provider failing never blanks out the other's data."""
-    return await aggregator.get_current_environment(get_redis_client(), latitude, longitude)
+    return await aggregator.get_current_environment(
+        get_redis_client(), settings, latitude, longitude
+    )
 
 
 @router.get("/daily-forecast", response_model=DailyForecastResponse)

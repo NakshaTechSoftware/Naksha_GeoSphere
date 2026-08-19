@@ -285,6 +285,7 @@ class CurrentEnvironmentResponse(BaseModel):
     latitude: float
     longitude: float
     weather: WeatherSection
+    official_air_quality: OfficialAqiSection
     modeled_air_quality: ModeledAqiSection
 
 

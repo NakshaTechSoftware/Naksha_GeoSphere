@@ -5,12 +5,14 @@ import { DataFormatsSection } from "./DataFormatsSection";
 import { HowItWorksSection } from "./HowItWorksSection";
 import { TrustStrip } from "./TrustStrip";
 import { WelcomeBackground } from "./WelcomeBackground";
+import { FirstScrollJump } from "./FirstScrollJump";
 import { Footer } from "@/components/layout/Footer";
 
 export function LandingPage() {
   return (
     <div className="flex min-h-screen flex-col">
       <LandingHeader />
+      <FirstScrollJump />
 
       <main className="relative flex-1">
         <WelcomeBackground />

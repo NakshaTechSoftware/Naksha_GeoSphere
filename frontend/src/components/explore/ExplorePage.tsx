@@ -13,6 +13,7 @@ import {
   type AttributeInfo,
 } from "./IndiaMapViewer";
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
+import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
@@ -152,22 +153,9 @@ const PLACE_SUGGESTIONS = {
 };
 
 function filterSuggestions(query: string, category: string) {
-  const searchTerm = query.toLowerCase();
-  if (!searchTerm) return [];
-
   const allItems = PLACE_SUGGESTIONS[category as keyof typeof PLACE_SUGGESTIONS] || [];
-  return (
-    allItems
-      .filter((item) => item.toLowerCase().includes(searchTerm))
-      // Prefix matches ("Ban..." -> "Banaswadi") rank above mid-word matches ("...swadi").
-      .sort((a, b) => {
-        const aStarts = a.toLowerCase().startsWith(searchTerm);
-        const bStarts = b.toLowerCase().startsWith(searchTerm);
-        if (aStarts === bStarts) return a.localeCompare(b);
-        return aStarts ? -1 : 1;
-      })
-      .slice(0, 6)
-  ); // Limit to top 6 suggestions per category
+  // Ranked by the geosearch engine (prefix > substring > fuzzy), not raw substring order.
+  return rankStaticSuggestions(allItems, query);
 }
 
 // Wraps the portion of `text` that matches `query` in <mark> for visual emphasis.
@@ -205,28 +193,17 @@ interface LocationEntry {
   leaf: string;
 }
 
-// Filters/ranks LocationEntry[] by a typed query, matching either the full label
-// ("Karnataka, Hassan") or just the leaf name ("Hassan"), and returns plain label strings
-// ready to drop straight into the existing {category, items: string[]} suggestion shape.
-function filterLocationEntries(entries: LocationEntry[], query: string): string[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-
-  return entries
-    .filter((e) => e.label.toLowerCase().includes(q))
-    .sort((a, b) => {
-      const aLeafStarts = a.leaf.toLowerCase().startsWith(q);
-      const bLeafStarts = b.leaf.toLowerCase().startsWith(q);
-      if (aLeafStarts !== bLeafStarts) return aLeafStarts ? -1 : 1;
-
-      const aLabelStarts = a.label.toLowerCase().startsWith(q);
-      const bLabelStarts = b.label.toLowerCase().startsWith(q);
-      if (aLabelStarts !== bLabelStarts) return aLabelStarts ? -1 : 1;
-
-      return a.label.localeCompare(b.label);
-    })
-    .slice(0, 6)
-    .map((e) => e.label);
+// Filters/ranks LocationEntry[] by a typed query via the geosearch engine
+// (exact > prefix > token-prefix > substring > bounded fuzzy), returning plain
+// label strings ready for the {category, items: string[]} suggestion shape.
+// `boostLabel` biases toward the map's current drill context; `fuzzy` enables
+// typo tolerance for the leaf tier.
+function filterLocationEntries(
+  entries: LocationEntry[],
+  query: string,
+  opts: { boostLabel?: string; fuzzy?: boolean; limit?: number } = {},
+): string[] {
+  return rankLocationEntries(entries, query, opts);
 }
 
 // Formats a geodesic area in km² for the AOI chip: km² (up to 2 decimals), switching to m²
@@ -849,14 +826,29 @@ export function ExplorePage() {
     }
 
     // Real state/district/taluk matches take priority over the static Bengaluru lists.
-    const stateMatches = filterLocationEntries(stateEntries, searchQuery);
+    // All are ranked by the geosearch engine: exact > prefix > token-prefix >
+    // substring > bounded fuzzy, with aliases (blr/bangalore/bengaluru) expanded.
+    const boostLabel = drillContext?.district
+      ? `Karnataka, ${drillContext.district}${drillContext.taluk ? `, ${drillContext.taluk}` : ""}`
+      : undefined;
+
+    const stateMatches = filterLocationEntries(stateEntries, searchQuery, {
+      boostLabel,
+      fuzzy: true,
+    });
     if (stateMatches.length > 0) suggestions.push({ category: "States", items: stateMatches });
 
-    const districtMatches = filterLocationEntries(districtEntries, searchQuery);
+    const districtMatches = filterLocationEntries(districtEntries, searchQuery, {
+      boostLabel,
+      fuzzy: true,
+    });
     if (districtMatches.length > 0)
       suggestions.push({ category: "Districts", items: districtMatches });
 
-    const talukMatches = filterLocationEntries(talukEntries, searchQuery);
+    const talukMatches = filterLocationEntries(talukEntries, searchQuery, {
+      boostLabel,
+      fuzzy: true,
+    });
     if (talukMatches.length > 0) suggestions.push({ category: "Taluks", items: talukMatches });
 
     // Hobli suggestions - labeled with the full "State, District, Taluk, Hobli" chain.
@@ -869,15 +861,11 @@ export function ExplorePage() {
       // state/district/taluk categories already cover chain-queries, and matching the
       // full label would flood this category with every "Karnataka, ..." entry.
       const hobliQuery = queryParts[0].toLowerCase();
-      const hobliMatches = hobliEntries
-        .filter((e) => e.leaf.toLowerCase().includes(hobliQuery))
-        .sort((a, b) => {
-          const aStarts = a.leaf.toLowerCase().startsWith(hobliQuery);
-          const bStarts = b.leaf.toLowerCase().startsWith(hobliQuery);
-          if (aStarts === bStarts) return a.label.localeCompare(b.label);
-          return aStarts ? -1 : 1;
-        })
-        .map((e) => e.label);
+      const hobliMatches = filterLocationEntries(hobliEntries, hobliQuery, {
+        boostLabel,
+        fuzzy: true,
+        limit: 8,
+      });
       if (hobliMatches.length > 0)
         suggestions.push({ category: "Hoblies", items: hobliMatches });
 
@@ -885,16 +873,11 @@ export function ExplorePage() {
       // query would match tens of thousands of villages, so require 2+ chars and cap the
       // list so the dropdown doesn't freeze.
       if (hobliQuery.length >= 2) {
-        const villageMatches = villageEntries
-          .filter((e) => e.leaf.toLowerCase().includes(hobliQuery))
-          .sort((a, b) => {
-            const aStarts = a.leaf.toLowerCase().startsWith(hobliQuery);
-            const bStarts = b.leaf.toLowerCase().startsWith(hobliQuery);
-            if (aStarts === bStarts) return a.label.localeCompare(b.label);
-            return aStarts ? -1 : 1;
-          })
-          .slice(0, 100)
-          .map((e) => e.label);
+        const villageMatches = filterLocationEntries(villageEntries, hobliQuery, {
+          boostLabel,
+          fuzzy: true,
+          limit: 100,
+        });
         if (villageMatches.length > 0)
           suggestions.push({ category: "Villages", items: villageMatches });
       }
@@ -1533,6 +1516,7 @@ export function ExplorePage() {
             geometry={attributeInfo.geometry}
             properties={attributeInfo.properties}
             hierarchy={attributeInfo.hierarchy}
+            owners={owners}
             onClose={() => setExportModalOpen(false)}
           />
         )}

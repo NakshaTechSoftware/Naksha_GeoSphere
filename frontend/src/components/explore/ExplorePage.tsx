@@ -24,7 +24,7 @@ import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
 import { ChevronDown, ChevronUp, MapPin, Search, Menu, Mic, X } from "lucide-react";
 import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
-import { rankStaticSuggestions } from "../../lib/geosearch";
+import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },

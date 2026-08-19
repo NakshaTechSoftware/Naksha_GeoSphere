@@ -8,10 +8,12 @@ import { NextRequest, NextResponse } from "next/server";
 // Compose services, reachable at http://osrm-<mode>:5000 from this container's network) out
 // of client code, and gives us one place to adjust if OSRM ever moves to a real app-compute
 // server.
+// In Docker (compose up), NODE_ENV is "production". In local dev (next dev), it's "development".
+const isLocal = process.env.NODE_ENV !== "production";
 const OSRM_URLS: Record<string, string> = {
-  driving: "http://osrm-driving:5000",
-  walking: "http://osrm-walking:5000",
-  cycling: "http://osrm-cycling:5000",
+  driving: isLocal ? "http://localhost:5001" : "http://osrm-driving:5000",
+  walking: isLocal ? "http://localhost:5002" : "http://osrm-walking:5000",
+  cycling: isLocal ? "http://localhost:5003" : "http://osrm-cycling:5000",
 };
 
 export async function GET(request: NextRequest) {

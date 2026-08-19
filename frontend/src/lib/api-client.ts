@@ -1,9 +1,13 @@
 import { config } from "@/lib/config";
 import type {
   ApiErrorCode,
+  LoginInput,
+  LoginResult,
+  PendingSignup,
   RegisterAccountInput,
   RegisterAccountResult,
   RegisteredUser,
+  VerifyEmailResult,
 } from "@/types/auth";
 import type { AggregatedHealthResponse } from "@/types/health";
 
@@ -26,7 +30,12 @@ export class ApiRequestError extends Error {
   readonly status: number;
   readonly fields?: Record<string, string>;
 
-  constructor(errorCode: ApiErrorCode, message: string, status: number, fields?: Record<string, string>) {
+  constructor(
+    errorCode: ApiErrorCode,
+    message: string,
+    status: number,
+    fields?: Record<string, string>,
+  ) {
     super(message);
     this.name = "ApiRequestError";
     this.errorCode = errorCode;
@@ -123,18 +132,10 @@ export async function fetchPlatformHealth(signal?: AbortSignal): Promise<Aggrega
   };
 }
 
-interface RawRegisteredUser {
-  id: string;
-  full_name: string;
-  email: string;
-  organization_name: string;
-  role_or_use_case: string;
-  status: RegisteredUser["status"];
-  created_at: string;
-}
-
+// Pre-verification shape: `/auth/register` returns only full_name + email
+// (see `PendingSignup`); no users row exists until email verification.
 interface RawRegisterResponse {
-  user: RawRegisteredUser;
+  user: { full_name: string; email: string };
   next_step: "verify_email";
   message: string;
 }
@@ -178,30 +179,31 @@ export async function registerAccount(
 
   return {
     user: {
-      id: raw.user.id,
       fullName: raw.user.full_name,
       email: raw.user.email,
-      organizationName: raw.user.organization_name,
-      roleOrUseCase: raw.user.role_or_use_case,
-      status: raw.user.status,
-      createdAt: raw.user.created_at,
-    },
+    } as PendingSignup,
     nextStep: raw.next_step,
     message: raw.message,
   };
 }
 
+interface RawVerifyEmailResponse {
+  status: "active";
+  message: string;
+  user: RawUser;
+}
+
 export async function verifyEmail(
-  token: string,
+  input: { email: string; code: string },
   signal?: AbortSignal,
-): Promise<{ status: string; message: string }> {
+): Promise<VerifyEmailResult> {
   let response: Response;
 
   try {
     response = await fetch(`${config.apiUrl}/api/v1/auth/verify-email`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ email: input.email, code: input.code }),
       signal,
     });
   } catch (error) {
@@ -212,7 +214,101 @@ export async function verifyEmail(
     throw await toApiRequestError(response);
   }
 
-  return (await response.json()) as { status: string; message: string };
+  const raw = (await response.json()) as RawVerifyEmailResponse;
+
+  return {
+    status: raw.status,
+    message: raw.message,
+    user: toRegisteredUser(raw.user),
+  };
+}
+
+interface RawUser {
+  id: string;
+  full_name: string;
+  email: string;
+  organization_name: string | null;
+  role_or_use_case: string | null;
+  status: string;
+  created_at: string;
+}
+
+function toRegisteredUser(raw: RawUser): RegisteredUser {
+  return {
+    id: raw.id,
+    fullName: raw.full_name,
+    email: raw.email,
+    organizationName: raw.organization_name,
+    roleOrUseCase: raw.role_or_use_case,
+    status: raw.status as RegisteredUser["status"],
+    createdAt: raw.created_at,
+  };
+}
+
+/**
+ * Authenticates email + password against the API and resolves with the
+ * signed-in user. Throws `ApiRequestError` (INVALID_CREDENTIALS /
+ * EMAIL_NOT_VERIFIED / …) or `ApiUnavailableError`.
+ */
+export async function login(
+  input: LoginInput,
+  signal?: AbortSignal,
+): Promise<LoginResult> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${config.apiUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: input.email, password: input.password }),
+      signal,
+    });
+  } catch (error) {
+    throw new ApiUnavailableError(error);
+  }
+
+  if (!response.ok) {
+    throw await toApiRequestError(response);
+  }
+
+  const raw = (await response.json()) as { user: RawUser; message: string };
+  return {
+    user: toRegisteredUser(raw.user),
+    message: raw.message,
+  };
+}
+
+/**
+ * Swaps the single-use ticket from an OAuth callback (Google, GitHub, …)
+ * for the signed-in user. Throws `ApiRequestError` (GOOGLE_SESSION_INVALID
+ * / …) or `ApiUnavailableError`.
+ */
+export async function completeOAuthSignup(
+  ticket: string,
+  signal?: AbortSignal,
+): Promise<LoginResult> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${config.apiUrl}/api/v1/auth/oauth/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket }),
+      signal,
+    });
+  } catch (error) {
+    throw new ApiUnavailableError(error);
+  }
+
+  if (!response.ok) {
+    throw await toApiRequestError(response);
+  }
+
+  const raw = (await response.json()) as { user: RawUser; message: string };
+  return {
+    user: toRegisteredUser(raw.user),
+    message: raw.message,
+  };
 }
 
 export async function resendVerificationEmail(

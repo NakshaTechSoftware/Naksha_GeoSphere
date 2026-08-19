@@ -1,17 +1,50 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronRight, Download, Loader2, X } from "lucide-react";
 import type { AdminLevel, AttributeHierarchy } from "./IndiaMapViewer";
+import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
+import { saveExportFile } from "@/lib/nativeDownload";
 
 export type ExportFormat = "geojson" | "shapefile" | "kml" | "kmz" | "gpkg" | "gdb" | "csv";
-type BulkLevel = Exclude<AdminLevel, "state">;
+// "state" is included: an AOI spanning multiple districts scopes to the state, and the
+// state's own dissolved boundary is now offered in the checklist just like every other
+// level offers its own boundary.
+type BulkLevel = AdminLevel;
 
 export interface ExportFeatureModalProps {
   title: string;
   geometry?: GeoJSON.Geometry;
   properties?: Record<string, unknown>;
   hierarchy?: AttributeHierarchy;
+  /** When set (e.g. a drawn AOI), the bulk export filters features to only those
+   *  intersecting this polygon, and the level checklist is always shown. */
+  aoiGeometry?: GeoJSON.Polygon;
+  /** District name detected from the AOI's parent properties. When set, the hierarchy
+   *  is scoped to that district so the checklist shows Taluk → Survey Plot instead of
+   *  the full state → Survey Plot range. */
+  aoiDistrict?: string;
+  /** Taluk name detected from the AOI's parent properties. When set alongside aoiDistrict,
+   *  the hierarchy is scoped to that taluk so the checklist shows Hobli → Survey Plot. */
+  aoiTaluk?: string;
+  /** Hobli name detected from the AOI's parent properties. When set alongside aoiDistrict
+   *  and aoiTaluk, the hierarchy is scoped to that hobli so the checklist shows
+   *  Village → Survey Plot. */
+  aoiHobli?: string;
+  /** Village name detected from the AOI's parent properties. When set alongside the
+   *  full admin chain, the hierarchy is scoped to that village so the checklist shows
+   *  only Survey Plot. */
+  aoiVillage?: string;
+  /** When the AOI falls within a survey plot, this parcel key is set. The modal skips
+   *  the level checklist and exports the AOI polygon with the parcel's attributes
+   *  and owner details directly. */
+  aoiParcel?: { district: string; taluk: string; hobli: string; village: string; survey: string; surnoc: string; hissa: string };
+  // Bhoomi owner rows already fetched for the attribute panel. When available they're
+  // merged into the exported feature's properties so the file carries the owner details.
+  owners?:
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ok"; rows: RtcOwner[] };
   onClose: () => void;
 }
 
@@ -26,6 +59,7 @@ const EXPORT_FORMAT_OPTIONS: { id: ExportFormat; label: string; hint: string }[]
 ];
 
 const LEVEL_LABEL: Record<BulkLevel, string> = {
+  state: "State",
   district: "District",
   taluk: "Taluk",
   hobli: "Hobli",
@@ -33,22 +67,21 @@ const LEVEL_LABEL: Record<BulkLevel, string> = {
   survey_plot: "Survey Plot",
 };
 
-const LEVEL_ORDER: BulkLevel[] = ["district", "taluk", "hobli", "village", "survey_plot"];
+const LEVEL_ORDER: BulkLevel[] = ["state", "district", "taluk", "hobli", "village", "survey_plot"];
 
-// Levels offered in the checklist: the clicked level itself (for district/taluk/hobli/village -
-// a state click has no boundary of its own to include) plus everything below it, in hierarchy
-// order. A survey-plot click offers nothing - it's already the leaf, so the dialog falls back
-// to the plain single-feature flow below.
+// Levels offered in the checklist: the clicked level itself plus everything below it, in
+// hierarchy order. A survey-plot click offers nothing - it's already the leaf, so the
+// dialog falls back to the plain single-feature flow below.
 function offeredLevels(hierarchy: AttributeHierarchy | undefined): BulkLevel[] {
   if (!hierarchy || hierarchy.level === "survey_plot") return [];
-  const startIndex = hierarchy.level === "state" ? 0 : LEVEL_ORDER.indexOf(hierarchy.level);
-  return LEVEL_ORDER.slice(startIndex);
+  return LEVEL_ORDER.slice(LEVEL_ORDER.indexOf(hierarchy.level));
 }
 
 type Progress = { message: string; current?: number; total?: number };
 type ModalState =
   | { status: "idle" }
   | { status: "loading"; progress?: Progress }
+  | { status: "success" }
   | { status: "error"; message: string };
 
 // Centered format-picker dialog opened from the attribute panel's "Export" action. For
@@ -60,13 +93,46 @@ export function ExportFeatureModal({
   geometry,
   properties,
   hierarchy,
+  aoiGeometry,
+  aoiDistrict,
+  aoiTaluk,
+  aoiHobli,
+  aoiVillage,
+  aoiParcel,
+  owners,
   onClose,
 }: ExportFeatureModalProps) {
   const [format, setFormat] = useState<ExportFormat>("geojson");
-  const levels = useMemo(() => offeredLevels(hierarchy), [hierarchy]);
+  // When an AOI geometry is provided, build a hierarchy scoped to the deepest
+  // detected admin level (village > hobli > taluk > district > state) so the
+  // checklist shows the appropriate sub-levels.
+  // When the AOI falls within a survey plot, skip the level checklist entirely
+  // and export the parcel directly via the single-feature path.
+  const isSurveyPlotAoi = !!aoiGeometry && !!aoiParcel;
+  const effectiveHierarchy = isSurveyPlotAoi
+    ? { level: "survey_plot" as const, state: "Karnataka", district: aoiParcel.district, taluk: aoiParcel.taluk, hobli: aoiParcel.hobli, village: aoiParcel.village }
+    : aoiGeometry
+      ? aoiDistrict && aoiTaluk && aoiHobli && aoiVillage
+        ? { level: "village" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk, hobli: aoiHobli, village: aoiVillage }
+        : aoiDistrict && aoiTaluk && aoiHobli
+          ? { level: "hobli" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk, hobli: aoiHobli }
+          : aoiDistrict && aoiTaluk
+            ? { level: "taluk" as const, state: "Karnataka", district: aoiDistrict, taluk: aoiTaluk }
+            : aoiDistrict
+              ? { level: "district" as const, state: "Karnataka", district: aoiDistrict }
+              : { level: "state" as const, state: "Karnataka" }
+      : hierarchy;
+  const levels = useMemo(() => offeredLevels(effectiveHierarchy), [effectiveHierarchy]);
   const [selectedLevels, setSelectedLevels] = useState<Set<BulkLevel>>(() => new Set(levels));
   const [state, setState] = useState<ModalState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
+
+  // Keep the latest owners state readable from the export handler (which is a closure
+  // over the render-time value otherwise).
+  const ownersRef = useRef(owners);
+  useEffect(() => {
+    ownersRef.current = owners;
+  }, [owners]);
 
   const toggleLevel = (level: BulkLevel) => {
     setSelectedLevels((prev) => {
@@ -82,6 +148,14 @@ export function ExportFeatureModal({
     onClose();
   };
 
+  // Once the export succeeds, show the confirmation for a moment, then close
+  // the dialog on its own.
+  useEffect(() => {
+    if (state.status !== "success") return;
+    const timer = setTimeout(() => onClose(), 2500);
+    return () => clearTimeout(timer);
+  }, [state.status, onClose]);
+
   const runSingleExport = async () => {
     if (!geometry) {
       setState({ status: "error", message: "This feature has no geometry to export." });
@@ -89,10 +163,35 @@ export function ExportFeatureModal({
     }
     setState({ status: "loading" });
     try {
+      // The KGIS cadastral data carries no owner names - they come from the live Bhoomi
+      // lookup shown in the attribute panel. If that lookup is still running, wait for it
+      // (capped) so the export includes the owner details; on error/empty it just exports
+      // the parcel's own attributes as before.
+      const deadline = Date.now() + 20_000;
+      while (ownersRef.current?.status === "loading" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const finalOwners = ownersRef.current;
+
+      // Merge the owners into the exported properties so the file has the same
+      // Owner/Owners rows the panel displays.
+      const mergedProperties: Record<string, unknown> = { ...(properties ?? {}) };
+      const ownerRows = finalOwners?.status === "ok" ? finalOwners.rows : [];
+      if (ownerRows.length > 0) {
+        mergedProperties.Owners = ownerRows
+          .map((owner) => {
+            const parts = [owner.name];
+            if (owner.hissa) parts.push(`[Hissa ${owner.hissa}]`);
+            if (owner.extent) parts.push(`(${owner.extent}${owner.category ? `, ${owner.category}` : ""})`);
+            return parts.join(" ");
+          })
+          .join("; ");
+        mergedProperties.OwnerCount = ownerRows.length;
+      }
       const response = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exportFormat: format, geometry, properties: properties ?? {}, nameHint: title }),
+        body: JSON.stringify({ exportFormat: format, geometry, properties: mergedProperties, nameHint: title }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -101,22 +200,22 @@ export function ExportFeatureModal({
       const disposition = response.headers.get("Content-Disposition") ?? "";
       const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `${title || "export"}.${format}`;
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      onClose();
+      // Native app: writes to cache and opens the OS save/share sheet; web: a
+      // plain browser download. In the WebView the old <a download> click did
+      // nothing, so the file never reached the phone's file system.
+      await saveExportFile({
+        blob,
+        filename,
+        mimetype: response.headers.get("Content-Type") ?? undefined,
+      });
+      setState({ status: "success" });
     } catch (error) {
       setState({ status: "error", message: error instanceof Error ? error.message : "Export failed" });
     }
   };
 
   const runBulkExport = async () => {
-    if (!hierarchy || selectedLevels.size === 0) {
+    if (!effectiveHierarchy || selectedLevels.size === 0) {
       setState({ status: "error", message: "Pick at least one boundary level to export." });
       return;
     }
@@ -129,14 +228,15 @@ export function ExportFeatureModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           exportFormat: format,
-          state: hierarchy.state,
-          district: hierarchy.district,
-          taluk: hierarchy.taluk,
-          hobli: hierarchy.hobli,
-          village: hierarchy.village,
-          clickedLevel: hierarchy.level,
+          state: effectiveHierarchy.state,
+          district: effectiveHierarchy.district,
+          taluk: effectiveHierarchy.taluk,
+          hobli: effectiveHierarchy.hobli,
+          village: effectiveHierarchy.village,
+          clickedLevel: effectiveHierarchy.level,
           selectedLevels: LEVEL_ORDER.filter((l) => selectedLevels.has(l)),
           nameHint: title,
+          ...(aoiGeometry ? { aoiGeometry } : {}),
         }),
         signal: controller.signal,
       });
@@ -171,13 +271,19 @@ export function ExportFeatureModal({
             // The finished file is streamed from a dedicated download route rather
             // than embedded here - a whole-district export can be hundreds of MB,
             // past what's safe to hold as one base64 string/Blob in the browser.
-            const link = document.createElement("a");
-            link.href = event.downloadUrl;
-            link.download = event.filename;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            onClose();
+            // Fetch that stream, then save it through the shared helper so the
+            // native app lands it on the phone (web keeps the browser download).
+            const fileResponse = await fetch(event.downloadUrl);
+            if (!fileResponse.ok) {
+              throw new Error("Failed to download the exported file");
+            }
+            const blob = await fileResponse.blob();
+            await saveExportFile({
+              blob,
+              filename: event.filename,
+              mimetype: event.mimetype,
+            });
+            setState({ status: "success" });
             return;
           } else {
             throw new Error(event.message);
@@ -204,24 +310,30 @@ export function ExportFeatureModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={handleClose} />
       <div className="relative z-10 w-[22rem] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4">
+        <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-blue-600 to-blue-700 px-5 py-4">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-100">Export</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-100">Export</p>
             <h3 className="truncate text-sm font-semibold text-white">{title}</h3>
           </div>
           <button
             type="button"
             onClick={handleClose}
             aria-label="Close export dialog"
-            className="flex-shrink-0 rounded-full p-1 text-indigo-100 transition-colors hover:bg-white/15 hover:text-white"
+            className="flex-shrink-0 rounded-full p-1 text-blue-100 transition-colors hover:bg-white/15 hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {isLoading ? (
+        {state.status === "success" ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+            <CheckCircle2 className="h-9 w-9 text-green-500" />
+            <p className="text-base font-semibold text-slate-900">Export complete.</p>
+            <p className="text-xs text-slate-400">Your file has been saved.</p>
+          </div>
+        ) : isLoading ? (
           <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
-            <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
             <div className="space-y-1">
               <p className="text-sm font-medium text-slate-900">{progress?.message ?? "Exporting…"}</p>
               <p className="text-xs text-slate-400">This can take a moment for larger areas.</p>
@@ -229,7 +341,7 @@ export function ExportFeatureModal({
             {progressPct !== undefined && (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                 <div
-                  className="h-full rounded-full bg-indigo-600 transition-all duration-300"
+                  className="h-full rounded-full bg-blue-600 transition-all duration-300"
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
@@ -252,13 +364,13 @@ export function ExportFeatureModal({
                         onClick={() => toggleLevel(level)}
                         className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                           checked
-                            ? "border-indigo-500 bg-indigo-50"
+                            ? "border-blue-500 bg-blue-50"
                             : "border-gray-200 hover:bg-gray-50"
                         }`}
                       >
                         <span className="flex items-center gap-2 font-medium text-slate-900">
                           {level === hierarchy?.level && (
-                            <ChevronRight className="h-3.5 w-3.5 text-indigo-500" />
+                            <ChevronRight className="h-3.5 w-3.5 text-blue-500" />
                           )}
                           {LEVEL_LABEL[level]}
                           {level === hierarchy?.level && (
@@ -266,7 +378,7 @@ export function ExportFeatureModal({
                           )}
                         </span>
                         {checked ? (
-                          <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                          <CheckCircle2 className="h-4 w-4 text-blue-600" />
                         ) : (
                           <span className="h-4 w-4 rounded-full border border-gray-300" />
                         )}
@@ -286,7 +398,7 @@ export function ExportFeatureModal({
                   onClick={() => setFormat(option.id)}
                   className={`flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors ${
                     format === option.id
-                      ? "border-indigo-500 bg-indigo-50"
+                      ? "border-blue-500 bg-blue-50"
                       : "border-gray-200 hover:bg-gray-50"
                   }`}
                 >
@@ -306,7 +418,7 @@ export function ExportFeatureModal({
               type="button"
               onClick={handleExport}
               disabled={levels.length > 0 && selectedLevels.size === 0}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="h-4 w-4" />
               Export

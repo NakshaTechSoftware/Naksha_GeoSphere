@@ -82,6 +82,10 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
       bearing: 0,
       attributionControl: false,
       maxPitch: 60,
+      // The welcome-page demo is a cinematic: users watch the journey, they don't
+      // drag/zoom it. interactive:false still lets the GSAP camera animation drive
+      // flyTo/easeTo programmatically.
+      interactive: false,
     });
     // maplibre v6 renders the globe projection natively (the style also declares it).
     try {
@@ -192,7 +196,6 @@ export const GlobeMap = forwardRef<GlobeMapHandle, Props>(function GlobeMap(
     showKarnataka: () => {
       const m = mapRef.current;
       if (!m) return;
-      setLayerVisibility(m, GEO_LAYER_IDS.karnatakaFill, true);
       setLayerVisibility(m, GEO_LAYER_IDS.karnataka, true);
     },
     resetGeography: () => {

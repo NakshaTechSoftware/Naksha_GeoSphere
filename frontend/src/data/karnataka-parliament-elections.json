@@ -1,0 +1,387 @@
+{
+  "003": {
+    "pc_no": "003",
+    "pc_name": "Bagalkot",
+    "districts": [
+      "Bagalkot",
+      "Gadag"
+    ],
+    "assembly_segments": 8,
+    "mp": "GADDIGOUDAR. PARVATAGOUDA. CHANDANAGOUDA.",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1689019,
+    "voter_turnout": 78.01
+  },
+  "025": {
+    "pc_no": "025",
+    "pc_name": "Bangalore Central",
+    "districts": [
+      "Bangalore Urban"
+    ],
+    "assembly_segments": 8,
+    "mp": "P C MOHAN",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 2206167,
+    "voter_turnout": 59.67
+  },
+  "024": {
+    "pc_no": "024",
+    "pc_name": "Bangalore North",
+    "districts": [
+      "Bangalore Urban"
+    ],
+    "assembly_segments": 8,
+    "mp": "SHOBHA KARANDLAJE",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 2844566,
+    "voter_turnout": 61.61
+  },
+  "023": {
+    "pc_no": "023",
+    "pc_name": "Bangalore Rural",
+    "districts": [
+      "Bangalore Urban",
+      "Ramanagara",
+      "Tumakuru"
+    ],
+    "assembly_segments": 8,
+    "mp": "DR. C N MANJUNATH",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 2497889,
+    "voter_turnout": 76.85
+  },
+  "026": {
+    "pc_no": "026",
+    "pc_name": "Bangalore South",
+    "districts": [
+      "Bangalore Urban"
+    ],
+    "assembly_segments": 8,
+    "mp": "TEJASVI SURYA",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 2240442,
+    "voter_turnout": 55.76
+  },
+  "002": {
+    "pc_no": "002",
+    "pc_name": "Belgaum",
+    "districts": [
+      "Belgaum"
+    ],
+    "assembly_segments": 8,
+    "mp": "JAGADISH SHETTAR",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1761784,
+    "voter_turnout": 78.55
+  },
+  "009": {
+    "pc_no": "009",
+    "pc_name": "Bellary",
+    "districts": [
+      "Bellary"
+    ],
+    "assembly_segments": 8,
+    "mp": "E. TUKARAM",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1708565,
+    "voter_turnout": 81.35
+  },
+  "007": {
+    "pc_no": "007",
+    "pc_name": "Bidar",
+    "districts": [
+      "Bidar",
+      "Gulbarga"
+    ],
+    "assembly_segments": 8,
+    "mp": "SAGAR ESHWAR KHANDRE",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1745679,
+    "voter_turnout": 71.17
+  },
+  "004": {
+    "pc_no": "004",
+    "pc_name": "Bijapur",
+    "districts": [
+      "Bijapur"
+    ],
+    "assembly_segments": 8,
+    "mp": "RAMESH JIGAJINAGI",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1792211,
+    "voter_turnout": 72.32
+  },
+  "022": {
+    "pc_no": "022",
+    "pc_name": "Chamarajanagar",
+    "districts": [
+      "Chamarajanagar",
+      "Mysore"
+    ],
+    "assembly_segments": 8,
+    "mp": "SUNIL BOSE",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1674540,
+    "voter_turnout": 81.8
+  },
+  "027": {
+    "pc_no": "027",
+    "pc_name": "Chikkballapur",
+    "districts": [
+      "Bangalore Rural",
+      "Bangalore Urban",
+      "Chikkaballapur"
+    ],
+    "assembly_segments": 8,
+    "mp": "DR.K.SUDHAKAR",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1809515,
+    "voter_turnout": 84.6
+  },
+  "001": {
+    "pc_no": "001",
+    "pc_name": "Chikkodi",
+    "districts": [
+      "Belgaum"
+    ],
+    "assembly_segments": 8,
+    "mp": "PRIYANKA SATISH JARKIHOLI",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1579926,
+    "voter_turnout": 88.17
+  },
+  "018": {
+    "pc_no": "018",
+    "pc_name": "Chitradurga",
+    "districts": [
+      "Chitradurga",
+      "Tumakuru"
+    ],
+    "assembly_segments": 8,
+    "mp": "GOVIND MAKTHAPPA KARJOL",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1748065,
+    "voter_turnout": 78.2
+  },
+  "017": {
+    "pc_no": "017",
+    "pc_name": "Dakshina Kannada",
+    "districts": [
+      "Dakshina Kannada"
+    ],
+    "assembly_segments": 8,
+    "mp": "CAPTAIN BRIJESH CHOWTA",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1712231,
+    "voter_turnout": 82.69
+  },
+  "013": {
+    "pc_no": "013",
+    "pc_name": "Davanagere",
+    "districts": [
+      "Davangere"
+    ],
+    "assembly_segments": 8,
+    "mp": "DR. PRABHA MALLIKARJUN",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1633404,
+    "voter_turnout": 80.84
+  },
+  "011": {
+    "pc_no": "011",
+    "pc_name": "Dharwad",
+    "districts": [
+      "Dharwad",
+      "Haveri"
+    ],
+    "assembly_segments": 8,
+    "mp": "PRALHAD JOSHI",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1693679,
+    "voter_turnout": 80.68
+  },
+  "005": {
+    "pc_no": "005",
+    "pc_name": "Gulbarga",
+    "districts": [
+      "Gulbarga",
+      "Yadgir"
+    ],
+    "assembly_segments": 8,
+    "mp": "RADHAKRISHNA",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1935132,
+    "voter_turnout": 67.72
+  },
+  "016": {
+    "pc_no": "016",
+    "pc_name": "Hassan",
+    "districts": [
+      "Chikmagalur",
+      "Hassan"
+    ],
+    "assembly_segments": 8,
+    "mp": "SHREYAS. M. PATEL",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1636462,
+    "voter_turnout": 82.8
+  },
+  "010": {
+    "pc_no": "010",
+    "pc_name": "Haveri",
+    "districts": [
+      "Gadag",
+      "Haveri"
+    ],
+    "assembly_segments": 8,
+    "mp": "BASAVARAJ BOMMAI",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1683551,
+    "voter_turnout": 82.91
+  },
+  "028": {
+    "pc_no": "028",
+    "pc_name": "Kolar",
+    "districts": [
+      "Chikkaballapur",
+      "Kolar"
+    ],
+    "assembly_segments": 8,
+    "mp": "M. MALLESH BABU",
+    "party": "Janata Dal  (Secular)",
+    "election_year": 2024,
+    "total_voters": 1612317,
+    "voter_turnout": 84.05
+  },
+  "008": {
+    "pc_no": "008",
+    "pc_name": "Koppal",
+    "districts": [
+      "Bellary",
+      "Koppal",
+      "Raichur"
+    ],
+    "assembly_segments": 8,
+    "mp": "K. RAJASHEKAR BASAVARAJ HITNAL",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1714801,
+    "voter_turnout": 77.5
+  },
+  "020": {
+    "pc_no": "020",
+    "pc_name": "Mandya",
+    "districts": [
+      "Mandya",
+      "Mysore"
+    ],
+    "assembly_segments": 8,
+    "mp": "H.D. KUMARASWAMY",
+    "party": "Janata Dal  (Secular)",
+    "election_year": 2024,
+    "total_voters": 1692738,
+    "voter_turnout": 86.27
+  },
+  "021": {
+    "pc_no": "021",
+    "pc_name": "Mysore",
+    "districts": [
+      "Kodagu",
+      "Mysore"
+    ],
+    "assembly_segments": 8,
+    "mp": "YADUVEER KRISHNADATTA CHAMARAJA WADIYAR",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1880638,
+    "voter_turnout": 78.93
+  },
+  "006": {
+    "pc_no": "006",
+    "pc_name": "Raichur",
+    "districts": [
+      "Raichur",
+      "Yadgir"
+    ],
+    "assembly_segments": 8,
+    "mp": "G. KUMAR NAIK.",
+    "party": "Indian National Congress",
+    "election_year": 2024,
+    "total_voters": 1912408,
+    "voter_turnout": 67.96
+  },
+  "014": {
+    "pc_no": "014",
+    "pc_name": "Shimoga",
+    "districts": [
+      "Shimoga",
+      "Udupi"
+    ],
+    "assembly_segments": 8,
+    "mp": "B.Y.RAGHAVENDRA",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1649096,
+    "voter_turnout": 83.51
+  },
+  "019": {
+    "pc_no": "019",
+    "pc_name": "Tumkur",
+    "districts": [
+      "Tumakuru"
+    ],
+    "assembly_segments": 8,
+    "mp": "V. SOMANNA",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1614795,
+    "voter_turnout": 80.72
+  },
+  "015": {
+    "pc_no": "015",
+    "pc_name": "Udupi Chikmagalur",
+    "districts": [
+      "Chikmagalur",
+      "Udupi"
+    ],
+    "assembly_segments": 8,
+    "mp": "KOTA SRINIVAS POOJARY",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1506506,
+    "voter_turnout": 81.61
+  },
+  "012": {
+    "pc_no": "012",
+    "pc_name": "Uttara Kannada",
+    "districts": [
+      "Belgaum",
+      "Uttara Kannada"
+    ],
+    "assembly_segments": 8,
+    "mp": "VISHWESHWAR HEGDE KAGERI",
+    "party": "Bharatiya Janata Party",
+    "election_year": 2024,
+    "total_voters": 1542085,
+    "voter_turnout": 81.89
+  }
+}

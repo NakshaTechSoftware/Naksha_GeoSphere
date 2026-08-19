@@ -7,6 +7,7 @@ import type {
   GeoJSONFeature,
   GeoJSONSource,
   MapLayerMouseEvent,
+  MapMouseEvent,
   PointLike,
   QueryRenderedFeaturesOptions,
   FilterSpecification,
@@ -14,6 +15,7 @@ import type {
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   booleanIntersects,
+  bbox,
   booleanPointInPolygon,
   circle as turfCircle,
   point as turfPoint,
@@ -26,7 +28,14 @@ import {
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
+import {
+  beginGeojsonLoad,
+  endGeojsonLoad,
+  isGeojsonLoading,
+  subscribeGeojsonLoading,
+} from "../../lib/geojsonLoading";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
+import { STATE_FACTS } from "../../data/state-facts";
 
 // maplibre-gl can throw internally from queryRenderedFeatures while a source's tiles are
 // mid-reload (see maplibre-gl-js#7752 / #7765, fixed in v6.0.0-15). Treat that as "no
@@ -700,6 +709,10 @@ export type AOITool = "freehand" | "polygon" | "rectangle";
 export interface AOIResult {
   geometry: GeoJSON.Polygon;
   areaSqKm: number;
+  /** Properties collected from the parent boundary that overlaps this AOI. */
+  parentProperties?: Record<string, unknown>;
+  /** Parcel key for Bhoomi owner lookup, if the AOI intersects a cadastral parcel. */
+  aoiParcel?: ParcelLandRecordKey;
 }
 
 // One key/value row of the right-click attribute-info window (boundary type badge + title +
@@ -1297,6 +1310,56 @@ const VILLAGE_CADASTRALS_FILL_LAYER_ID = "village-cadastrals-fill";
 const VILLAGE_CADASTRALS_LINE_LAYER_ID = "village-cadastrals-line";
 const VILLAGE_CADASTRALS_LABELS_LAYER_ID = "village-cadastrals-labels";
 
+// Every fill-layer id used for boundary queries (e.g. finding which parent boundary
+// an AOI falls inside). When a new boundary layer is added, register its fill id here.
+const ALL_BOUNDARY_FILL_LAYERS = [
+  STATE_DISTRICTS_FILL_LAYER_ID,
+  KARNATAKA_STATE_FILL_LAYER_ID,
+  DISTRICT_TALUKS_FILL_LAYER_ID,
+  TALUK_HOBLIES_FILL_LAYER_ID,
+  HOBLI_VILLAGES_FILL_LAYER_ID,
+  VILLAGE_CADASTRALS_FILL_LAYER_ID,
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
+  ROADS_DISTRICTS_FILL_LAYER_ID,
+  ROADS_TALUKS_FILL_LAYER_ID,
+  ROADS_HOBLIES_FILL_LAYER_ID,
+  ROADS_VILLAGES_FILL_LAYER_ID,
+  STATE_ASSEMBLY_FILL_LAYER_ID,
+  STATE_PARLIAMENT_FILL_LAYER_ID,
+  STATE_POLICE_FILL_LAYER_ID,
+  POLICE_HOBLIES_FILL_LAYER_ID,
+  POLICE_VILLAGES_FILL_LAYER_ID,
+  CIVIC_DISTRICTS_FILL_LAYER_ID,
+  CIVIC_PINCODES_FILL_LAYER_ID,
+  GP_DISTRICTS_FILL_LAYER_ID,
+  GP_TALUKS_FILL_LAYER_ID,
+  GP_BOUNDARIES_FILL_LAYER_ID,
+];
+
+// Candidate name-property keys for the core admin-hierarchy layers, keyed by the same
+// "-fill"-stripped short id used as parentProperties' keys. Mirrors the key lists
+// ExplorePage reads aoiDistrict/aoiTaluk/aoiHobli/aoiVillage from, and the NAME_KEYS map
+// the bulk export API walks the hierarchy with - real KGIS source files aren't
+// consistently named across levels/districts, so several fallbacks are tried per level.
+const HIERARCHY_NAME_KEYS: Record<string, string[]> = {
+  "state-districts": ["dtname"],
+  "district-taluks": ["KGISTalukName", "subdist_nm", "name", "taluk_name", "TALUK_NAME", "TalukName"],
+  "taluk-hoblies": ["KGISHobliName", "hobli_name", "name"],
+  "hobli-villages": [
+    "KGISVillageName",
+    "village_name",
+    "Village_Name",
+    "vill_nm",
+    "village",
+    "vname",
+    "VILLNAME",
+    "name",
+  ],
+};
+
 // Cadastral (survey/parcel) overlay palette: bright white on satellite imagery (so the grid
 // pops against the darker aerial backdrop, with survey numbers carrying a dark halo), classic
 // navy on the OSM-style/terrain bases. Shared by the addLayer specs in loadVillageCadastrals
@@ -1368,6 +1431,16 @@ const ATTRIBUTE_POPUP_LAYER_IDS = [
   GP_DISTRICTS_FILL_LAYER_ID,
   CIVIC_DISTRICTS_FILL_LAYER_ID,
   CIVIC_PINCODES_FILL_LAYER_ID,
+  // The India national boundary (visible until the states are loaded by clicking it) is
+  // clickable like every other administrative level - the transparent fill covers the
+  // whole country, and the cyan outline line is the visible edge.
+  "india-boundary-fill",
+  "india-boundary-line",
+  // GBA hierarchy levels, so the panel opens on them too.
+  GBA_BOUNDARY_FILL_LAYER_ID,
+  GBA_CORPORATIONS_FILL_LAYER_ID,
+  GBA_ZONES_FILL_LAYER_ID,
+  GBA_WARDS_FILL_LAYER_ID,
   "states-fill-default",
 ];
 
@@ -1385,6 +1458,12 @@ const ATTRIBUTE_POPUP_ADMIN_LEVEL: Record<string, AdminLevel> = {
 
 // Friendly boundary-type names for the popup's badge, keyed by layer id.
 const ATTRIBUTE_POPUP_TYPE_LABELS: Record<string, string> = {
+  "india-boundary-fill": "Country",
+  "india-boundary-line": "Country",
+  [GBA_BOUNDARY_FILL_LAYER_ID]: "GBA Boundary",
+  [GBA_CORPORATIONS_FILL_LAYER_ID]: "Corporation",
+  [GBA_ZONES_FILL_LAYER_ID]: "Zone",
+  [GBA_WARDS_FILL_LAYER_ID]: "Ward",
   "states-fill-default": "State",
   [STATE_DISTRICTS_FILL_LAYER_ID]: "District",
   [GP_DISTRICTS_FILL_LAYER_ID]: "District",
@@ -1429,6 +1508,17 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   taluk_panchayat: "Taluk Panchayat",
   no_of_villages: "No. of Villages",
   source_file: "Source File",
+  state: "State",
+  lok_sabha: "Lok Sabha (PC)",
+  mla: "Current MLA",
+  party: "Party",
+  election_year: "Election Year",
+  total_voters: "Total Voters",
+  polling_stations: "Polling Stations",
+  voter_turnout: "Voter Turnout",
+  districts: "Districts",
+  assembly_segments: "Assembly Segments",
+  mp: "Current MP",
 };
 
 // "st_nm" -> "St Nm" is wrong for display; keys without a known label get a sensible split:
@@ -2307,6 +2397,73 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   }, [onPlaceLabelsVisibleChange]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Shown briefly when the user picks the Terrain base layer but the India DEM file
+  // isn't on this server (dev machines without DEM_Terrain/). Prevents a flood of 500
+  // tile errors that would otherwise break the map style.
+  const [terrainUnavailable, setTerrainUnavailable] = useState(false);
+  useEffect(() => {
+    if (!terrainUnavailable) return;
+    const timer = setTimeout(() => setTerrainUnavailable(false), 5000);
+    return () => clearTimeout(timer);
+  }, [terrainUnavailable]);
+  const isTerrainDataAvailable = async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/terrain/status");
+      if (!res.ok) return false;
+      const data = (await res.json()) as { available?: boolean };
+      return data.available === true;
+    } catch {
+      return false;
+    }
+  };
+
+  // True while any GeoJSON / dataset fetch is in flight, so a loading indicator can be
+  // shown during slow boundary loads. Wired to the shared counter below - see
+  // lib/geojsonLoading.ts.
+  const [geojsonBusy, setGeojsonBusy] = useState(false);
+  useEffect(() => subscribeGeojsonLoading(() => setGeojsonBusy(isGeojsonLoading())), []);
+
+  // Counts in-flight GeoJSON/dataset fetches (see lib/geojsonLoading.ts) by wrapping
+  // window.fetch for the data URLs the map loads (API dataset routes, /geodata and
+  // /data indexes, .geojson/.json files). Terrain tile requests are excluded - they are
+  // raster tiles, not boundary data, and would make the indicator flicker constantly.
+  // Declared before the map-init effect so it is installed first.
+  useEffect(() => {
+    const originalFetch = window.fetch.bind(window);
+    const shouldTrack = (input: RequestInfo | URL): boolean => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      if (url.includes("/api/terrain/")) return false;
+      return (
+        url.includes("/api/datasets/") ||
+        url.includes("/geodata/") ||
+        url.includes("/data/karnataka_") ||
+        url.includes(".geojson") ||
+        url.endsWith(".json")
+      );
+    };
+    const wrappedFetch: typeof window.fetch = (input, init) => {
+      const track = shouldTrack(input);
+      if (track) beginGeojsonLoad();
+      const promise = originalFetch(input, init);
+      if (track) {
+        promise
+          .finally(() => endGeojsonLoad())
+          .catch(() => {
+            /* the caller handles failures; this just clears the counter */
+          });
+      }
+      return promise;
+    };
+    window.fetch = wrappedFetch;
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
   const onWardSelectedRef = useRef(onWardSelected);
   useEffect(() => {
     onWardSelectedRef.current = onWardSelected;
@@ -2657,9 +2814,135 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       cancelDrawing(map);
       return;
     }
-    completedAOIRef.current = { geometry: polygon, areaSqKm };
+
+    // Query all boundary fill layers for features that intersect with the drawn AOI.
+    // This lets the export modal attach the parent boundary's attributes to the file.
+    // queryRenderedFeatures takes its bbox in screen pixels, not geographic
+    // coordinates, so the polygon's lng/lat bbox has to be projected first (via all
+    // four corners, since the map may be rotated).
+    const parentProperties: Record<string, unknown> = {};
+    const [minLng, minLat, maxLng, maxLat] = bbox(polygon) as [number, number, number, number];
+    const corners: [number, number][] = [
+      [minLng, minLat],
+      [minLng, maxLat],
+      [maxLng, minLat],
+      [maxLng, maxLat],
+    ];
+    const screenPoints = corners.map((c) => map.project(c));
+    const aoiScreenBbox: [PointLike, PointLike] = [
+      [Math.min(...screenPoints.map((p) => p.x)), Math.min(...screenPoints.map((p) => p.y))],
+      [Math.max(...screenPoints.map((p) => p.x)), Math.max(...screenPoints.map((p) => p.y))],
+    ];
+    for (const layerId of ALL_BOUNDARY_FILL_LAYERS) {
+      if (!map.getLayer(layerId)) continue;
+      const layerShort = layerId.replace(/-fill$/, "");
+      const features = map.queryRenderedFeatures(aoiScreenBbox, { layers: [layerId] });
+      const nameKeys = HIERARCHY_NAME_KEYS[layerShort];
+      if (nameKeys) {
+        // For the core admin-hierarchy layers (district/taluk/hobli/village), only treat
+        // the AOI as scoped to this level when exactly one distinct feature of that level
+        // actually intersects it. Grabbing an arbitrary first match (like the layers
+        // below still do, for display-only purposes) would silently mis-scope the export
+        // hierarchy whenever the AOI spans multiple districts/taluks/hoblis/villages.
+        const distinct = new Map<string, GeoJSON.Feature>();
+        for (const f of features) {
+          if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+          const props = (f.properties ?? {}) as Record<string, unknown>;
+          const name = nameKeys
+            .map((k) => props[k])
+            .find((v): v is string => typeof v === "string" && v.trim().length > 0);
+          if (!name) continue;
+          distinct.set(name.trim().toLowerCase(), f as unknown as GeoJSON.Feature);
+        }
+        if (distinct.size === 1) {
+          const [f] = [...distinct.values()];
+          parentProperties[layerShort] = { ...f!.properties };
+        }
+      } else {
+        for (const f of features) {
+          if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+          // Use the first match per layer — for the non-hierarchy layers below, one
+          // representative is sufficient since nothing keys the export scope off them.
+          parentProperties[layerShort] = { ...f.properties };
+          break;
+        }
+      }
+    }
+
+    // Parent boundary layers are removed from the map during drill-down (e.g.
+    // state-districts is removed when the user drills into a district), so
+    // queryRenderedFeatures won't find them. Fill in the admin hierarchy from
+    // the selection refs so the export modal always knows the full chain.
+    const districtName = selectedDistrictNameRef.current;
+    const talukName = selectedTalukNameRef.current;
+    const hobliName = selectedHobliNameRef.current;
+    const villageName = selectedVillageNameRef.current;
+    if (districtName && !parentProperties["state-districts"]) {
+      parentProperties["state-districts"] = { dtname: districtName };
+    }
+    if (talukName && !parentProperties["district-taluks"]) {
+      parentProperties["district-taluks"] = { KGISTalukName: talukName };
+    }
+    if (hobliName && !parentProperties["taluk-hoblies"]) {
+      parentProperties["taluk-hoblies"] = { KGISHobliName: hobliName };
+    }
+    if (villageName && !parentProperties["hobli-villages"]) {
+      parentProperties["hobli-villages"] = { KGISVillageName: villageName };
+    }
+
+    // Check if the AOI falls within exactly one cadastral parcel and, if so, extract
+    // the Bhoomi parcel key so owners can be looked up for the export. An AOI that
+    // spans several parcels must NOT collapse to one of them - re-query the cadastral
+    // layer on its own (rather than reusing parentProperties' single first-match
+    // representative above) and count how many distinct parcels actually intersect.
+    let aoiParcel: ParcelLandRecordKey | undefined;
+    if (map.getLayer(VILLAGE_CADASTRALS_FILL_LAYER_ID)) {
+      const cadastralFeatures = map.queryRenderedFeatures(aoiScreenBbox, {
+        layers: [VILLAGE_CADASTRALS_FILL_LAYER_ID],
+      });
+      const distinctParcels = new Map<string, Record<string, unknown>>();
+      for (const f of cadastralFeatures) {
+        if (!f.geometry || !booleanIntersects(f as any, polygon as any)) continue;
+        const props = (f.properties ?? {}) as Record<string, unknown>;
+        const survey = String(props.Surveynumber_Old ?? props.surveynumberi ?? "").trim();
+        if (!survey) continue;
+        const surnoc = String(props.Surnoc ?? "*").trim() || "*";
+        const hissa = String(props.HissaNo ?? "*").trim() || "*";
+        distinctParcels.set(`${survey}|${surnoc}|${hissa}`, props);
+      }
+      if (distinctParcels.size === 1) {
+        const cadastralProps = [...distinctParcels.values()][0]!;
+        aoiParcel = {
+          district: String(cadastralProps._parent_district ?? ""),
+          taluk: String(cadastralProps._parent_subdistrict ?? ""),
+          hobli: String(cadastralProps._parent_hobli ?? ""),
+          village: String(cadastralProps._parent_village_name ?? ""),
+          survey: String(cadastralProps.Surveynumber_Old ?? cadastralProps.surveynumberi ?? "").trim(),
+          surnoc: String(cadastralProps.Surnoc ?? "*").trim() || "*",
+          hissa: String(cadastralProps.HissaNo ?? "*").trim() || "*",
+        };
+      }
+    }
+
+    // Flatten the nested per-layer properties into a single flat object so the
+    // export API can write them as feature attributes. Each key is prefixed with
+    // the layer name to avoid collisions across boundary levels.
+    const flatProperties: Record<string, unknown> = {};
+    for (const [layer, props] of Object.entries(parentProperties)) {
+      for (const [k, v] of Object.entries(props as Record<string, unknown>)) {
+        flatProperties[`${layer}_${k}`] = v;
+      }
+    }
+    const result: AOIResult = { geometry: polygon, areaSqKm };
+    if (Object.keys(flatProperties).length > 0) {
+      result.parentProperties = flatProperties;
+    }
+    if (aoiParcel) {
+      result.aoiParcel = aoiParcel;
+    }
+    completedAOIRef.current = result;
     drawSessionRef.current = null;
-    onAOIChangeRef.current?.({ geometry: polygon, areaSqKm });
+    onAOIChangeRef.current?.(result);
     publishAOIData(map, null, null);
   };
 
@@ -6592,6 +6875,31 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
         mapRef.current = map;
 
+        // --- Middle-click panning (works independently of MapLibre's dragPan, so it
+        // continues to function even when a drawing tool disables dragPan).
+        const canvas = map.getCanvas();
+        let midPanLast: { x: number; y: number } | null = null;
+        const onMidPointerDown = (e: PointerEvent) => {
+          if (e.button !== 1 || !drawingToolRef.current) return;
+          midPanLast = { x: e.clientX, y: e.clientY };
+          canvas.setPointerCapture(e.pointerId);
+        };
+        const onMidPointerMove = (e: PointerEvent) => {
+          if (!midPanLast) return;
+          const dx = midPanLast.x - e.clientX;
+          const dy = midPanLast.y - e.clientY;
+          midPanLast = { x: e.clientX, y: e.clientY };
+          map.panBy([dx, dy], { animate: false });
+        };
+        const onMidPointerUp = (e: PointerEvent) => {
+          if (e.button !== 1 || !midPanLast) return;
+          midPanLast = null;
+          canvas.releasePointerCapture(e.pointerId);
+        };
+        canvas.addEventListener("pointerdown", onMidPointerDown);
+        canvas.addEventListener("pointermove", onMidPointerMove);
+        canvas.addEventListener("pointerup", onMidPointerUp);
+
         // --- AOI drawing handlers (Free Hand / Polygon / Rectangle). These all no-op unless
         // a tool is armed via setDrawingTool. The layer-specific boundary handlers are
         // guarded with the same check so a click/drag while drawing doesn't also select
@@ -6722,38 +7030,34 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           });
         });
 
-        map.on("contextmenu", (e) => {
-          // While an AOI drawing tool is armed, right-click cancels the in-progress shape.
-          if (drawingToolRef.current) {
-            if (drawSessionRef.current) {
-              e.preventDefault();
-              cancelDrawing(map);
-            }
-            return;
-          }
-
-          // Otherwise: report the attribute info of the deepest boundary feature under the
-          // cursor (state / district / taluk / hobli / village / cadastral parcel) so the
-          // caller's side panel can render it. The native browser context menu is suppressed
-          // only when a feature was actually hit.
-          attributeInfoOpenRef.current = false;
-
+        // Reports the attribute info of the deepest boundary feature under the cursor
+        // (country / state / district / taluk / hobli / village / cadastral parcel / GBA
+        // level / Bengaluru overlay) so the caller's side panel can render it. Returns
+        // true when a feature was hit and reported. Opened on LEFT click - alongside the
+        // layer's own drill-down action - so the panel appears everywhere without needing
+        // a right-click (the right-click now only cancels in-progress AOI drawings).
+        const reportAttributeInfo = (e: MapMouseEvent): boolean => {
           // queryRenderedFeatures throws if any listed layer doesn't exist yet - and most
           // drill-down layers (districts/taluks/hoblies/villages/cadastrals) only appear
-          // once loaded - so query only the layers currently on the map.
-          const layers = ATTRIBUTE_POPUP_LAYER_IDS.filter((id) => map.getLayer(id));
+          // once loaded - so query only the layers currently on the map. The
+          // manually-toggled Bengaluru KML/KMZ overlays use dynamic layer ids, so their
+          // fill layers are appended alongside the static list.
+          const extraLayerIds = Array.from(extraLayerKeysRef.current).map(
+            (key) => `${extraLayerIdFromKey(key)}-fill`
+          );
+          const layers = [...ATTRIBUTE_POPUP_LAYER_IDS, ...extraLayerIds].filter((id) =>
+            map.getLayer(id)
+          );
           const features = layers.length > 0
             ? queryRenderedFeaturesSafe(map, e.point, { layers })
             : [];
           const feature = features[0];
-          if (!feature || !feature.properties) {
-            onAttributeInfoRef.current?.(null);
-            return;
-          }
-          e.preventDefault();
+          if (!feature || !feature.properties) return false;
 
           const layerId = feature.layer?.id ?? "";
-          const typeLabel = ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ?? "Feature";
+          const typeLabel =
+            ATTRIBUTE_POPUP_TYPE_LABELS[layerId] ??
+            (extraLayerIds.includes(layerId) ? "Boundary" : "Feature");
           const props = feature.properties;
 
           // Display title: the first known name-key property, else the boundary type.
@@ -6768,6 +7072,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "KGISVillageName",
             "village_name",
             "vill_nm",
+            // GBA levels carry their names under these keys ("Name" for the authority
+            // and corporations, zone_name/ward_name for the deeper two levels).
+            "Name",
+            "zone_name",
+            "ward_name",
             "name",
           ];
           const title =
@@ -6797,10 +7106,56 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "district",
             "no_of_villages",
           ];
+          // Assembly/parliamentary constituency files are KML-derived and carry
+          // Google-Earth noise properties - a giant HTML "description" blob,
+          // "extrude" and "altitudeMode" - that add nothing to the panel, so drop
+          // them for both KML-based layers.
+          const isKmlBoundaryLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const KML_DROPPED_KEYS = ["description", "extrude", "altitudeMode"];
+          // Assembly constituency features carry their 2023 election facts merged in
+          // by the state-assembly API route - present them in the canonical order
+          // (state, district, Lok Sabha, MLA, party, then the election stats).
+          const isAssemblyLayer =
+            layerId === STATE_ASSEMBLY_FILL_LAYER_ID ||
+            layerId === STATE_ASSEMBLY_LINE_LAYER_ID;
+          const ASSEMBLY_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "district",
+            "lok_sabha",
+            "mla",
+            "party",
+            "election_year",
+            "total_voters",
+            "polling_stations",
+            "voter_turnout",
+          ];
+          // Parliamentary constituency features carry their 2024 election facts merged in
+          // by the state-parliament API route - present them in the canonical order
+          // (state, districts, assembly segments, MP, party, then the election stats).
+          const isParliamentLayer =
+            layerId === STATE_PARLIAMENT_FILL_LAYER_ID ||
+            layerId === STATE_PARLIAMENT_LINE_LAYER_ID;
+          const PARLIAMENT_ATTRIBUTE_ROW_ORDER = [
+            "name",
+            "state",
+            "districts",
+            "assembly_segments",
+            "mp",
+            "party",
+            "election_year",
+            "total_voters",
+            "voter_turnout",
+          ];
           const rows: AttributeRow[] = Object.entries(props)
             .filter(
               ([k, v]) =>
                 !(isGpBoundary && k === "source_file") &&
+                !(isKmlBoundaryLayer && KML_DROPPED_KEYS.includes(k)) &&
                 v !== null &&
                 v !== undefined &&
                 String(v).trim() !== ""
@@ -6808,7 +7163,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             .sort(([a], [b]) => {
               const order = isGpBoundary
                 ? GP_ATTRIBUTE_ROW_ORDER
-                : ATTRIBUTE_ROW_ORDER;
+                : isAssemblyLayer
+                  ? ASSEMBLY_ATTRIBUTE_ROW_ORDER
+                  : isParliamentLayer
+                    ? PARLIAMENT_ATTRIBUTE_ROW_ORDER
+                    : ATTRIBUTE_ROW_ORDER;
               const ia = order.indexOf(a);
               const ib = order.indexOf(b);
               if (ia === -1 && ib === -1) return 0;
@@ -6821,6 +7180,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               value: String(v),
             }));
 
+          // The states file's features carry a redundant "layer" property (e.g.
+          // "state") that just duplicates the panel's badge - drop that row for
+          // state features.
+          if (layerId === "states-fill-default") {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if (rows[i]!.label === "Layer") rows.splice(i, 1);
+            }
+          }
+
           // Karnataka's on-platform hierarchy counts, cross-checked against the remote MinIO
           // bucket (see scripts/count-karnataka-hierarchy.mjs). Shown only for the state
           // feature itself, as extra read-only rows below its native attributes.
@@ -6830,11 +7198,63 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             { label: "Hoblis", value: "852", bold: true },
             { label: "Villages", value: "30,335", bold: true },
           ];
-          const isKarnatakaState =
-            layerId === "states-fill-default" &&
-            typeof props.st_nm === "string" &&
-            props.st_nm.trim().toLowerCase() === "karnataka";
-          if (isKarnatakaState) rows.push(...KARNATAKA_HIERARCHY);
+          const isStateLayer = layerId === "states-fill-default";
+          const stateName =
+            typeof props.st_nm === "string" ? props.st_nm.trim() : "";
+          if (isStateLayer && stateName.toLowerCase() === "karnataka") {
+            rows.push(...KARNATAKA_HIERARCHY);
+          }
+
+          // Per-state / UT reference facts (revenue divisions, assembly seats, area,
+          // population, density, literacy) appended below each state feature's native
+          // attributes - see STATE_FACTS in src/data/state-facts.ts.
+          const stateFacts = isStateLayer ? STATE_FACTS[stateName] : undefined;
+          if (stateFacts) {
+            rows.push(
+              {
+                label: "Revenue Divisions",
+                value: stateFacts.revenueDivisions,
+                bold: true,
+              },
+              {
+                label: "Assembly Seats",
+                value: stateFacts.assemblySeats,
+                bold: true,
+              },
+              { label: "Total Area", value: stateFacts.totalArea, bold: true },
+              { label: "Population", value: stateFacts.population, bold: true },
+              { label: "Density", value: stateFacts.density, bold: true },
+              {
+                label: "Literacy Rate",
+                value: stateFacts.literacy,
+                bold: true,
+              },
+            );
+          }
+
+          // The India national boundary's properties carry data-provenance metadata
+          // (source / note) that's noise in the attribute panel - drop those rows, and
+          // report the country's admin composition (28 states + 8 union territories, the
+          // 36 LGD state/UT polygons the boundary was dissolved from) instead, shown right
+          // below Country Code.
+          const isIndiaBoundaryLayer =
+            layerId === "india-boundary-fill" || layerId === "india-boundary-line";
+          if (isIndiaBoundaryLayer) {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              const label = rows[i]!.label;
+              if (label === "Source" || label === "Note") rows.splice(i, 1);
+            }
+            rows.push(
+              { label: "States", value: "28" },
+              { label: "Union Territories", value: "8" },
+              { label: "Capital", value: "New Delhi" },
+              { label: "Population", value: "~1.44 Billion" },
+              { label: "Total Area", value: "3,287,263 sq km" },
+              { label: "Region", value: "South Asia" },
+              { label: "Time Zone", value: "IST (UTC +5:30)" },
+              { label: "Calling Code", value: "+91" },
+            );
+          }
 
           // Cadastral parcels carry no owner names - those come from Bhoomi, keyed by the
           // parcel's administrative chain plus survey/surnoc/hissa. Hand that key to the
@@ -6893,6 +7313,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             properties: props,
             hierarchy,
           });
+          return true;
+        };
+
+        // Right-click keeps only its AOI-drawing role: while a drawing tool is armed it
+        // cancels the in-progress shape. (The attribute-info panel itself now opens on
+        // left click, see the map-level click handler below.)
+        map.on("contextmenu", (e) => {
+          if (drawingToolRef.current && drawSessionRef.current) {
+            e.preventDefault();
+            cancelDrawing(map);
+          }
+        });
+
+        // Left-click opens the attribute-info panel for the deepest boundary feature under
+        // the cursor, in addition to whatever the layer's own click handler does (clicking
+        // India still loads the states AND shows the country panel; clicking a district
+        // still drills into its taluks AND shows the district panel). A click on empty map
+        // leaves an open panel untouched - Escape or the panel's X button dismiss it.
+        map.on("click", (e) => {
+          if (drawingToolRef.current) return;
+          reportAttributeInfo(e);
         });
 
         // Distance scale bar
@@ -8010,6 +8451,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (drawingToolRef.current) return;
               const feature = e.features?.[0];
               if (!feature || feature.id === undefined) return;
+
+              // MapLibre invokes every layer's click handler independently for a single
+              // click (it doesn't stop at the topmost layer) - a click on a loaded gram
+              // panchayat boundary, which sits geometrically inside this taluk's polygon
+              // too, would otherwise also reach this handler and toggle the taluk's GP
+              // boundaries off right as the user inspects the panchayat's attribute info.
+              // If the click actually landed on a GP boundary, let the attribute-info
+              // panel handle it and leave the loaded boundaries untouched.
+              if (
+                map.getLayer(GP_BOUNDARIES_FILL_LAYER_ID) &&
+                queryRenderedFeaturesSafe(map, e.point, {
+                  layers: [GP_BOUNDARIES_FILL_LAYER_ID],
+                }).length > 0
+              ) {
+                return;
+              }
 
               const talukName =
                 (feature.properties?.kgis_civil_taluk_name as string | undefined) ??
@@ -9587,6 +10044,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
     const map = mapRef.current;
 
+    // The Terrain base layer needs the India DEM file on the server. When it's missing,
+    // every /api/terrain tile request 500s and the style fails to load - so probe first
+    // and stay on the current layer with a friendly notice instead of switching.
+    if (layer === "terrain" && !(await isTerrainDataAvailable())) {
+      setTerrainUnavailable(true);
+      return;
+    }
+
     // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
     removeIndiaTerrain(map);
     
@@ -9645,10 +10110,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       .map((l) => l.id);
 
     // Identify custom sources we want to keep - same reasoning as customLayerIds above.
+    // The India national-boundary sources are kept too: STATE_BOUNDARY_LAYER_IDS keeps
+    // their layers (india-boundary-line/label), and removing a source while one of its
+    // layers still references it throws "Source ... cannot be removed while layer ... is
+    // using it".
     const customSourceIds = Object.keys(style.sources).filter(
       (sourceId) =>
         sourceId === STATE_SOURCE_ID ||
         sourceId === STATE_LABELS_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_SOURCE_ID ||
+        sourceId === INDIA_BOUNDARY_LABELS_SOURCE_ID ||
         BOUNDARY_SOURCE_IDS.includes(sourceId) ||
         sourceId.startsWith("police-") ||
         sourceId.startsWith("kml-") ||
@@ -9895,12 +10366,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (drawingToolRef.current) {
         const session = drawSessionRef.current;
         if (event.key === "Escape") {
-          // Escape cancels the in-progress shape, or disarms the tool if nothing is being
-          // drawn - in both cases the loaded boundaries stay put. preventDefault also stops
-          // Escape from triggering unrelated browser/button behavior.
+          // Escape cancels the in-progress shape, or - if nothing is being drawn - disarms
+          // the tool AND clears the last completed AOI (unlike a deliberate tool switch,
+          // which leaves it on the map for later export). Either way the loaded boundaries
+          // stay put. preventDefault also stops Escape from triggering unrelated
+          // browser/button behavior.
           event.preventDefault();
           if (session) cancelDrawing(map);
-          else disarmDrawingTool(map);
+          else {
+            disarmDrawingTool(map);
+            clearCompletedAOI(map);
+          }
         } else if (session && session.tool === "polygon") {
           if (event.key === "Enter") {
             // Enter finishes the polygon (same as double-clicking). preventDefault keeps a
@@ -11644,15 +12120,45 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         className="hidden"
       />
 
-      {/* Layers Control */}
+      {/* Layers Control - the small stacked-layers badge icon on the preview tile is
+          dropped here; the preview thumbnail + "Layers" label stay as the button. */}
+{/* Layers Control - the small stacked-layers badge icon on the preview tile is
+          dropped here; the preview thumbnail + "Layers" label stay as the button. */}
       {!isLoading && !loadError && (
         <LayersControl
           currentLayer={currentLayer}
           onLayerChange={handleLayerChange}
+          showBadgeIcon={false}
           placeLabelsVisible={placeLabelsVisible}
           onTogglePlaceLabels={applyPlaceLabelsVisible}
           autoExpand={findMyWayActive}
         />
+      )}
+
+      {/* GeoJSON loading indicator - shown while boundary data fetches are in flight
+          (every resolution). Skipped during the initial map load, which has its own
+          full-screen "Loading map..." overlay. Captures all pointer/touch events while
+          visible (no pointer-events-none), so every user interaction is ignored until
+          the data finishes loading. */}
+      {geojsonBusy && !isLoading && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center">
+          <div className="flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 shadow-lg ring-1 ring-gray-200">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-atlas-cobalt border-t-transparent" />
+            <span className="text-xs font-medium text-gray-700">Loading data...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Terrain-unavailable notice - shown above the layers control when the user
+          picks Terrain but the India DEM file is missing on this server. */}
+      {terrainUnavailable && (
+        <div className="absolute bottom-24 left-6 z-30 max-w-72 rounded-xl bg-white/95 px-4 py-3 shadow-lg ring-1 ring-gray-200">
+          <p className="text-xs font-medium leading-relaxed text-gray-800">
+            Terrain view isn't available yet — the India DEM data file isn't on this
+            server. Add <span className="font-semibold">DEM_Terrain/India_DEM.tif</span>
+            (or set INDIA_DEM_PATH) to enable it.
+          </p>
+        </div>
       )}
     </div>
   );

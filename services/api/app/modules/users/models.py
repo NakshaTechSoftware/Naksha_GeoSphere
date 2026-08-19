@@ -52,8 +52,11 @@ class User(Base):
     )
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     email: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
-    organization_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    role_or_use_case: Mapped[str] = mapped_column(String(100), nullable=False)
+    organization_name: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    role_or_use_case: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Unused since phone-OTP verification was removed; kept nullable so the
+    # column can be dropped in a future migration without a data migration.
+    phone_number: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[UserStatus] = mapped_column(
         user_status_enum,
@@ -62,6 +65,7 @@ class User(Base):
         index=True,
     )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     terms_accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     terms_version: Mapped[str] = mapped_column(String(32), nullable=False)
     privacy_version: Mapped[str] = mapped_column(String(32), nullable=False)

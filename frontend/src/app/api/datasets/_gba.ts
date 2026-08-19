@@ -3,7 +3,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // Remote MinIO configuration - mirrors the other dataset routes (state-districts,
 // bengaluru-boundary-list, etc.), which each hardcode the same shared storage server.
-const MINIO_ENDPOINT = "192.168.10.81:9010";
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT ?? "192.168.10.81:9010";
 const MINIO_ACCESS_KEY = "geosphere_storage";
 const MINIO_SECRET_KEY = "706f803f67c143c884305e7085b59210ffb29ac69e724a70";
 const S3_REGION = "geosphere";

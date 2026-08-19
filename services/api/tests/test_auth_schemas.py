@@ -42,9 +42,18 @@ def test_blank_full_name_is_rejected() -> None:
         RegisterRequest.model_validate({**VALID_PAYLOAD, "full_name": "   "})
 
 
-def test_blank_organization_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({**VALID_PAYLOAD, "organization_name": "   "})
+def test_blank_organization_normalizes_to_none() -> None:
+    request = RegisterRequest.model_validate({**VALID_PAYLOAD, "organization_name": "   "})
+    assert request.organization_name is None
+
+
+def test_omitted_organization_and_role_are_accepted() -> None:
+    payload = {
+        k: v for k, v in VALID_PAYLOAD.items() if k not in ("organization_name", "role_or_use_case")
+    }
+    request = RegisterRequest.model_validate(payload)
+    assert request.organization_name is None
+    assert request.role_or_use_case is None
 
 
 def test_invalid_email_is_rejected() -> None:

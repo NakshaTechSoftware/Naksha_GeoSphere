@@ -1,0 +1,22 @@
+'Log files:
+E:\Naksha_GeoSphere\frontend\npm-cache\_logs\2026-08-14T12_09_33_495Z-debug-0.log
+
+# npm resolution error report
+
+While resolving: next@15.5.22
+Found: @playwright/test@1.49.1
+node_modules/@playwright/test
+  dev @playwright/test@"1.49.1" from the root project
+
+Could not resolve dependency:
+peerOptional @playwright/test@"^1.51.1" from next@15.5.22
+node_modules/next
+  next@"^15.5.22" from the root project
+
+Conflicting peer dependency: @playwright/test@1.62.1
+node_modules/@playwright/test
+  peerOptional @playwright/test@"^1.51.1" from next@15.5.22
+  node_modules/next
+    next@"^15.5.22" from the root project
+
+Fix the upstream dependency conflict, or retry this command with --force or --legacy-peer-deps to accept an incorrect (and potentially broken) dependency resolution.

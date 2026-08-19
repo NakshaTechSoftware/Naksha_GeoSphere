@@ -4,7 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { cleanFolderName, namesMatch } from '../_folder-match';
 
 // Remote MinIO configuration
-const MINIO_ENDPOINT = '192.168.10.81:9010';
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT ?? '192.168.10.81:9010';
 const MINIO_ACCESS_KEY = 'geosphere_storage';
 const MINIO_SECRET_KEY = '706f803f67c143c884305e7085b59210ffb29ac69e724a70';
 const S3_REGION = 'geosphere';
@@ -214,17 +214,37 @@ async function addVillageCounts(
     }
   });
 
-  // Count villages per GP: exact LGD code match first, then (for villages whose
-  // file lacks LGDGPCode) centroid containment / nearest-GP fallback.
-  const countsByName = new Map<string, number>();
+  // Count villages per GP and collect their names: exact LGD code match first, then
+  // (for villages whose file lacks LGDGPCode) centroid containment / nearest-GP
+  // fallback. Both the count and the name list come from the same per-village loop,
+  // so "No. of Villages" and the "Villages" attribute can never disagree.
+  const villagesByName = new Map<string, { count: number; names: string[] }>();
+  const bumpVillage = (gpName: string, villageName: string) => {
+    const entry = villagesByName.get(gpName) ?? { count: 0, names: [] };
+    entry.count += 1;
+    if (villageName) entry.names.push(villageName);
+    villagesByName.set(gpName, entry);
+  };
+  // Village boundary features carry their name under KGISVillageName (the key the
+  // map's village labels read); a fallback chain tolerates the odd non-KGIS file.
+  const villageNameOf = (f: any): string =>
+    String(
+      f.properties?.KGISVillageName ??
+        f.properties?.village_name ??
+        f.properties?.Village_Name ??
+        f.properties?.vill_nm ??
+        f.properties?.name ??
+        ''
+    ).trim();
   villageGeojsons
     .filter((gj) => gj?.features)
     .flatMap((gj) => gj.features)
     .forEach((f: any) => {
+      const villageName = villageNameOf(f);
       const code = String(f.properties?.LGDGPCode || '').trim();
       const gpName = code ? gpNameByCode.get(code) : undefined;
       if (gpName) {
-        countsByName.set(gpName, (countsByName.get(gpName) || 0) + 1);
+        bumpVillage(gpName, villageName);
         return;
       }
       if (!f.geometry || !gpPolygons.length) return;
@@ -242,25 +262,29 @@ async function addVillageCounts(
           best = g;
         }
       }
-      if (best) countsByName.set(best.name, (countsByName.get(best.name) || 0) + 1);
+      if (best) bumpVillage(best.name, villageName);
     });
 
-  // Attach the count to the merged features (normalized-name match, with a fuzzy
-  // fallback for transliteration differences).
+  // Attach the count + the comma-separated village names to the merged features
+  // (normalized-name match, with a fuzzy fallback for transliteration differences).
   geojson.features.forEach((f: any) => {
     if (!f?.properties) return;
     const mergedName = String(f.properties.gram_panchayat || '').trim();
     if (!mergedName) return;
-    const direct = countsByName.get(mergedName);
-    if (direct !== undefined) {
-      f.properties.no_of_villages = direct;
+    const direct = villagesByName.get(mergedName);
+    if (direct) {
+      f.properties.no_of_villages = direct.count;
+      f.properties.villages = direct.names.join(', ');
       return;
     }
     const norm = normGpName(mergedName);
-    const fuzzy = [...countsByName.entries()].find(
+    const fuzzy = [...villagesByName.entries()].find(
       ([name]) => normGpName(name) === norm
     );
-    if (fuzzy) f.properties.no_of_villages = fuzzy[1];
+    if (fuzzy) {
+      f.properties.no_of_villages = fuzzy[1].count;
+      f.properties.villages = fuzzy[1].names.join(', ');
+    }
   });
 
   return geojson;
@@ -413,7 +437,7 @@ export async function GET(request: NextRequest) {
       {
         error: 'Failed to load gram panchayat boundaries',
         message: error instanceof Error ? error.message : 'Unknown error',
-        details: 'Check if MinIO storage at 192.168.10.81:9010 is accessible',
+        details: `Check if MinIO storage at ${MINIO_ENDPOINT} is accessible`,
       },
       { status: 500 }
     );

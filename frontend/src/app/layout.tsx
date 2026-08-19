@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "@/styles/globals.css";
+import { ConsentGate } from "@/components/auth/ConsentGate";
+import { AppVersionCheck } from "@/components/AppVersionCheck";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -53,6 +55,11 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         {children}
+        {/* First-open consent for the mobile app (GPS + voice). Renders nothing on
+            the web and nothing after the user has accepted once. */}
+        <ConsentGate />
+        {/* Mobile-app-only build freshness check (auto-reload once on new builds). */}
+        <AppVersionCheck />
       </body>
     </html>
   );

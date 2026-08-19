@@ -1,10 +1,51 @@
 import { GetObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { featureCollection, union } from '@turf/turf';
 import { NextRequest, NextResponse } from 'next/server';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { cleanFolderName, namesMatch } from '../_folder-match';
 
+// Dissolving a taluk's hobli boundaries (S3 round-trips per hobli + turf union over every
+// village polygon) is the slowest step in the drill-down, and the client cache-busts its
+// requests, so without caching every taluk click recomputes it. The underlying boundaries
+// are static, so cache the dissolved result per taluk: in-memory (fast within a process)
+// plus on disk under frontend/.cache (survives dev-server restarts).
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const memCache = new Map<string, { data: GeoJSON.FeatureCollection; ts: number }>();
+
+function cacheKey(state: string, district: string, taluk: string) {
+  return `${state.trim().toLowerCase()}|${district.trim().toLowerCase()}|${taluk.trim().toLowerCase()}`;
+}
+
+function diskCachePath(key: string) {
+  // '|' separates the cache-key parts but is invalid in Windows filenames, so drop all
+  // non-alphanumerics (e.g. "karnataka|chikkamagaluru|tarikere" -> "karnataka_...").
+  const safe = key.replace(/[^a-z0-9]+/g, '_');
+  return join(process.cwd(), '.cache', 'taluk-hoblies', `${safe}.json`);
+}
+
+function readDiskCache(path: string): GeoJSON.FeatureCollection | null {
+  try {
+    if (!existsSync(path)) return null;
+    const data = JSON.parse(readFileSync(path, 'utf8')) as GeoJSON.FeatureCollection;
+    return data?.features?.length ? data : null;
+  } catch (e) {
+    console.warn('[taluk-hoblies] failed to read disk cache:', e);
+    return null;
+  }
+}
+
+function writeDiskCache(path: string, data: GeoJSON.FeatureCollection) {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[taluk-hoblies] failed to write disk cache:', e);
+  }
+}
+
 const client = new S3Client({
-  endpoint: 'http://192.168.10.81:9010',
+  endpoint: `http://${process.env.MINIO_ENDPOINT ?? '192.168.10.81:9010'}`,
   region: 'geosphere',
   credentials: {
     accessKeyId: 'geosphere_storage',
@@ -80,6 +121,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: `Taluk folder not found for "${taluk}"` }, { status: 404 });
     }
 
+    // Serve the cached result when available (in-memory, then disk) - the dissolved
+    // boundaries are static, so a cache hit makes repeated taluk clicks instant.
+    const key = cacheKey(state, district, taluk);
+    const mem = memCache.get(key);
+    if (mem && Date.now() - mem.ts < CACHE_TTL_MS) {
+      return NextResponse.json(mem.data, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+    const diskPath = diskCachePath(key);
+    const diskCached = readDiskCache(diskPath);
+    if (diskCached) {
+      memCache.set(key, { data: diskCached, ts: Date.now() });
+      return NextResponse.json(diskCached, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
     let hobliFolders: string[] = [];
     for (const variant of ['Hoblis/', 'Hoblies/', 'hoblis/', 'hoblies/']) {
       hobliFolders = await listFolders(`${talukFolder}${variant}`);
@@ -91,10 +150,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: `No hobli boundaries found for taluk "${taluk}"` }, { status: 404 });
     }
 
-    return NextResponse.json(
-      { type: 'FeatureCollection', features },
-      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
-    );
+    const result: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
+    writeDiskCache(diskPath, result);
+    memCache.set(key, { data: result, ts: Date.now() });
+
+    return NextResponse.json(result, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+    });
   } catch (error) {
     console.error('[taluk-hoblies] Failed to load hobli boundaries:', error);
     return NextResponse.json({ error: 'Failed to load hobli boundaries' }, { status: 500 });

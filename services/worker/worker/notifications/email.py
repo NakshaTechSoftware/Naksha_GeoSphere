@@ -1,5 +1,5 @@
 """Plain, Celery-independent SMTP sending. Never logs a message body or
-recipient — verification emails carry a single-use raw token in the
+recipient — verification emails carry a single-use raw OTP code in the
 body, which must never reach the logs."""
 
 from __future__ import annotations
@@ -11,19 +11,20 @@ from worker.core.config import WorkerSettings
 
 
 def build_verification_email(
-    *, to_email: str, full_name: str, verification_url: str, from_email: str
+    *, to_email: str, full_name: str, code: str, from_email: str, expiry_minutes: int
 ) -> EmailMessage:
     message = EmailMessage()
-    message["Subject"] = "Verify your Naksha GeoSphere account"
+    message["Subject"] = "Your Naksha GeoSphere verification code"
     message["From"] = from_email
     message["To"] = to_email
     message.set_content(
         f"Hi {full_name},\n\n"
-        "Thanks for creating a Naksha GeoSphere account. Confirm your email "
-        "address to finish setting up your account:\n\n"
-        f"{verification_url}\n\n"
-        "This link expires soon and can only be used once. If you didn't "
-        "request this account, you can safely ignore this email.\n\n"
+        "Thanks for creating a Naksha GeoSphere account. Enter this code on "
+        "the signup page to verify your email address:\n\n"
+        f"    {code}\n\n"
+        f"This code expires in {expiry_minutes} minutes and can only be used "
+        "once. If you didn't request this account, you can safely ignore "
+        "this email.\n\n"
         "— Naksha GeoSphere"
     )
     return message

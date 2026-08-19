@@ -18,16 +18,17 @@ logger = logging.getLogger(__name__)
     default_retry_delay=30,
 )
 def send_verification_email(
-    self: object, *, to_email: str, full_name: str, verification_url: str
+    self: object, *, to_email: str, full_name: str, code: str
 ) -> None:
-    """Never logs `to_email`, `full_name`, or `verification_url` — the
-    latter embeds a single-use raw verification token."""
+    """Never logs `to_email`, `full_name`, or `code` — the latter is the
+    single-use raw OTP."""
     settings = get_worker_settings()
     message = build_verification_email(
         to_email=to_email,
         full_name=full_name,
-        verification_url=verification_url,
+        code=code,
         from_email=settings.smtp_from_email,
+        expiry_minutes=settings.email_verification_expiry_minutes,
     )
     try:
         send_email(message, settings)

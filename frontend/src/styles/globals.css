@@ -7,6 +7,18 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    /* Clip horizontal overflow instead of hiding it: prevents a left/right
+       swipe from panning the page when any element briefly extends past the
+       viewport (e.g. the feature-card slide-in animation), without creating
+       a scroll container that would break position: sticky. */
+    overflow-x: clip;
+    /* Hide the native scrollbar on desktop while keeping the page scrollable */
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+  }
+
+  html::-webkit-scrollbar {
+    display: none; /* Chrome / Safari / Edge Chromium */
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -123,7 +135,7 @@
     color: var(--color-obsidian-graphite);
     letter-spacing: -0.045em;
     line-height: 0.98;
-    font-size: clamp(2.8125rem, calc(4.2vw - 3px), 4.3125rem);
+    font-size: clamp(calc(2.8125rem - 1px), calc(4.2vw - 4px), calc(4.3125rem - 1px));
   }
 
   .hero-title-line {
@@ -138,7 +150,7 @@
   /* Responsive sizing for mobile */
   @media (max-width: 768px) {
     .hero-title {
-      font-size: clamp(2.1625rem, calc(11vw - 3px), 3.0625rem);
+      font-size: clamp(calc(1.9375rem - 1px), calc(8.5vw), calc(2.6875rem - 1px));
     }
   }
 

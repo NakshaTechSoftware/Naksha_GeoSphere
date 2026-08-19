@@ -640,7 +640,12 @@ export function ExplorePage() {
       // setRouteLoading(false) entirely since it's the line right after the await).
       let result: Awaited<ReturnType<NonNullable<IndiaMapViewerHandle["getRoutePreview"]>>> | undefined;
       try {
-        result = await mapViewerRef.current?.getRoutePreview(originPoint, destinationPoint, travelMode);
+        result = await mapViewerRef.current?.getRoutePreview(
+          originPoint,
+          destinationPoint,
+          travelMode,
+          uiTravelMode
+        );
       } catch (error) {
         console.error("Directions request failed:", error);
       }
@@ -1585,13 +1590,31 @@ export function ExplorePage() {
                           </div>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => mapViewerRef.current?.startNavigation()}
-                        className="mt-3 w-full rounded-full bg-atlas-cobalt py-2 text-sm font-medium text-white hover:bg-atlas-cobalt/90"
-                      >
-                        Start Navigation
-                      </button>
+                      {/* Compact circular "start" icon, same layout Google's route-preview
+                          card uses (trip summary on the left, a round navigate button on
+                          the right) rather than a full-width text pill. */}
+                      <div className="mt-3 flex items-center justify-between gap-3 px-1">
+                        <div className="min-w-0">
+                          <p className="text-lg font-semibold text-slate-900">
+                            {formatDuration(
+                              routePreview.alternatives[routePreview.selectedIndex]?.durationSeconds ?? 0
+                            )}
+                          </p>
+                          <p className="truncate text-xs text-gray-500">
+                            {formatDistance(
+                              routePreview.alternatives[routePreview.selectedIndex]?.distanceMeters ?? 0
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => mapViewerRef.current?.startNavigation()}
+                          aria-label="Start navigation"
+                          className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-atlas-cobalt text-white shadow-md transition-colors hover:bg-atlas-cobalt/90"
+                        >
+                          <Navigation className="h-5 w-5" />
+                        </button>
+                      </div>
                       {/* Testing tool - fakes GPS movement along the route so voice
                           guidance, the turn banner, and mid-route rerouting/route-switching
                           can all be checked without actually being there or moving. */}

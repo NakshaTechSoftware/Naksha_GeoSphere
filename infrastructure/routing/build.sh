@@ -27,13 +27,23 @@ curl -L -o "$PBF_FILE" "$EXTRACT_URL"
 build_profile() {
   local mode="$1"     # subfolder name: driving | walking | cycling
   local profile="$2"  # OSRM bundled profile: car | foot | bicycle
+  # Optional: a local .lua file (see car-arterial.lua) to use INSTEAD of the bundled
+  # /opt/$profile.lua - mounted over that exact path so its require('lib/...') calls still
+  # resolve against the image's own lib/ directory next to it, without needing to duplicate
+  # those files. Only driving passes this (see the build_profile calls below).
+  local custom_profile="${3:-}"
 
   local dir="$DATA_DIR/$mode"
   mkdir -p "$dir"
   cp "$PBF_FILE" "$dir/karnataka-latest.osm.pbf"
 
-  echo "==> [$mode] Extracting ($profile profile)..."
-  MSYS_NO_PATHCONV=1 docker run --rm -v "$dir":/data "$OSRM_IMAGE" \
+  local profile_mount_arg=()
+  if [ -n "$custom_profile" ]; then
+    profile_mount_arg=(-v "$custom_profile:/opt/$profile.lua:ro")
+  fi
+
+  echo "==> [$mode] Extracting ($profile profile${custom_profile:+, custom: $custom_profile})..."
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$dir":/data "${profile_mount_arg[@]}" "$OSRM_IMAGE" \
     osrm-extract -p "/opt/$profile.lua" /data/karnataka-latest.osm.pbf
 
   echo "==> [$mode] Partitioning..."
@@ -48,7 +58,7 @@ build_profile() {
   rm -f "$dir/karnataka-latest.osm.pbf"
 }
 
-build_profile driving car
+build_profile driving car "$SCRIPT_DIR/car-arterial.lua"
 build_profile walking foot
 build_profile cycling bicycle
 

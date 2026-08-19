@@ -21,6 +21,7 @@ import {
   along as turfAlong,
   length as turfLength,
   bearing as turfBearing,
+  distance as turfDistance,
 } from "@turf/turf";
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
@@ -241,6 +242,65 @@ function nearestInteriorPoint(
     if (best) return best;
   }
   return null;
+}
+
+// Simple area-weighted centroid of a GeoJSON Polygon or MultiPolygon, clamped to
+// the interior of the largest polygon so the label never floats outside.
+function featureCentroid(geometry: GeoJSON.Geometry): GeoJSON.Position | null {
+  const polygons =
+    geometry.type === "MultiPolygon"
+      ? geometry.coordinates
+      : geometry.type === "Polygon"
+        ? [geometry.coordinates]
+        : null;
+  if (!polygons || polygons.length === 0) return null;
+  // Pick the largest polygon by bounding-box area
+  let bestRing: GeoJSON.Position[] | null = null;
+  let bestArea = -1;
+  let bestPolygon: GeoJSON.Position[][] | null = null;
+  for (const poly of polygons) {
+    const ring = poly[0];
+    if (!ring || ring.length === 0) continue;
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (const c of ring) {
+      if (c[0] !== undefined && c[1] !== undefined) {
+        minLng = Math.min(minLng, c[0]); minLat = Math.min(minLat, c[1]);
+        maxLng = Math.max(maxLng, c[0]); maxLat = Math.max(maxLat, c[1]);
+      }
+    }
+    const area = (maxLng - minLng) * (maxLat - minLat);
+    if (area > bestArea) { bestArea = area; bestRing = ring; bestPolygon = poly; }
+  }
+  if (!bestRing || bestRing.length === 0) return null;
+  const meanLat = bestRing.reduce((s, c) => s + (c[1] ?? 0), 0) / bestRing.length;
+  const cosLat = Math.cos((meanLat * Math.PI) / 180) || 1e-9;
+  let twiceArea = 0, cx = 0, cy = 0;
+  for (let i = 0; i < bestRing.length - 1; i++) {
+    const p1 = bestRing[i], p2 = bestRing[i + 1];
+    if (!p1 || !p2) continue;
+    const x0 = (p1[0] ?? 0) * cosLat, x1 = (p2[0] ?? 0) * cosLat;
+    const cross = x0 * (p2[1] ?? 0) - x1 * (p1[1] ?? 0);
+    twiceArea += cross; cx += (x0 + x1) * cross; cy += ((p1[1] ?? 0) + (p2[1] ?? 0)) * cross;
+  }
+  let lng: number, latC: number;
+  if (twiceArea === 0) {
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (const c of bestRing) {
+      if (c[0] !== undefined && c[1] !== undefined) {
+        minLng = Math.min(minLng, c[0]); minLat = Math.min(minLat, c[1]);
+        maxLng = Math.max(maxLng, c[0]); maxLat = Math.max(maxLat, c[1]);
+      }
+    }
+    lng = (minLng + maxLng) / 2; latC = (minLat + maxLat) / 2;
+  } else {
+    lng = cx / (3 * twiceArea) / cosLat; latC = cy / (3 * twiceArea);
+  }
+  // Clamp inside if outside (concave polygon)
+  if (bestPolygon && !pointInsidePolygon([lng, latC], bestPolygon)) {
+    const interior = nearestInteriorPoint([lng, latC], bestPolygon);
+    if (interior) { lng = interior[0] ?? lng; latC = interior[1] ?? latC; }
+  }
+  return [lng, latC];
 }
 
 // Signed planar ring area (shoelace): positive = counter-clockwise. MapLibre's fill bucket
@@ -807,6 +867,30 @@ export type RoutePreviewResult =
  * profile (see infrastructure/routing/), not a runtime flag on one shared engine. */
 export type TravelMode = "driving" | "walking" | "cycling";
 
+/** Which icon the live-navigation marker shows - a finer-grained sibling of TravelMode that
+ * also distinguishes "motorcycle" from "driving" (they share the same OSRM profile/routes,
+ * so TravelMode itself can't tell them apart - see getRoutePreview's iconMode param). */
+export type NavIconMode = "driving" | "motorcycle" | "cycling" | "walking";
+
+// Minimal inline glyphs for the live-navigation marker (see processNavigationFix) - white
+// strokes so they read clearly on the marker's blue circle. "walking" isn't here since it
+// keeps the plain pulsing dot instead of an icon (see where this is used).
+const NAV_MARKER_ICON_SVG: Record<Exclude<NavIconMode, "walking">, string> = {
+  driving:
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11"/>' +
+    '<path d="M3 11h18v5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5z"/>' +
+    '<circle cx="7.5" cy="16.5" r="1.5"/><circle cx="16.5" cy="16.5" r="1.5"/></svg>',
+  motorcycle:
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="5.5" cy="17.5" r="2.5"/><circle cx="18.5" cy="17.5" r="2.5"/>' +
+    '<path d="M8 17.5h6l3-6h-3l-2-3H8l-2 4 2 2z"/></svg>',
+  cycling:
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/>' +
+    '<path d="M5.5 17.5 10 8h4l4.5 9.5M10 8l3 5.5h5.5"/></svg>',
+};
+
 /** Live turn-by-turn state, reported continuously via onNavigationUpdate while navigation is
  * active - what the on-map instruction banner shows. null once navigation stops (including
  * on arrival). */
@@ -873,7 +957,12 @@ export interface IndiaMapViewerHandle {
   getRoutePreview: (
     origin: DirectionsPoint,
     destination: DirectionsPoint,
-    mode: TravelMode
+    mode: TravelMode,
+    /** Which icon live navigation should use once started - defaults to `mode` (so callers
+     * that don't care, e.g. cycling/walking where the two are the same, can omit it).
+     * Pass "motorcycle" explicitly when the UI's selected mode is motorcycle - routing still
+     * uses `mode` ("driving") since there's no separate motorcycle OSRM profile. */
+    iconMode?: NavIconMode
   ) => Promise<RoutePreviewResult>;
   /** Switches which of the last getRoutePreview() call's alternatives is drawn on the map and
    * would be used by Start Navigation - e.g. the user tapping a different option in the
@@ -2061,7 +2150,8 @@ function addDefaultBaseLayers(
   map: MapLibreMap,
   beforeId?: string,
   boundariesVisible = true,
-  placeLabelsVisible = true
+  placeLabelsVisible = true,
+  findMyWayActive = false
 ) {
   if (!map.getSource(OSM_NOLABELS_SOURCE_ID)) {
     map.addSource(OSM_NOLABELS_SOURCE_ID, {
@@ -2085,7 +2175,7 @@ function addDefaultBaseLayers(
   if (!map.getLayer(OSM_LABELED_LAYER_ID)) {
     map.addLayer({ id: OSM_LABELED_LAYER_ID, type: "raster", source: OSM_LABELED_SOURCE_ID }, beforeId);
   }
-  updateBaseLabelVisibility(map, boundariesVisible, placeLabelsVisible);
+  updateBaseLabelVisibility(map, boundariesVisible, placeLabelsVisible, findMyWayActive);
 }
 
 // boundariesVisible is true only in "administrative" mode (the filters panel's Boundary
@@ -2096,15 +2186,22 @@ function addDefaultBaseLayers(
 function updateBaseLabelVisibility(
   map: MapLibreMap,
   boundariesVisible = true,
-  placeLabelsVisible = true
+  placeLabelsVisible = true,
+  findMyWayActive = false
 ) {
   const scaleKm = computeScaleKm(map);
 
   if (map.getLayer(OSM_LABELED_LAYER_ID) && map.getLayer(OSM_NOLABELS_LAYER_ID)) {
-    // "1km and less" keeps the default map's labels; anything beyond 1km hides them. The
-    // Layers panel's "Place names" toggle (placeLabelsVisible) overrides that entirely - off
-    // means off regardless of zoom.
-    const hideRasterLabels = !placeLabelsVisible || scaleKm > RASTER_LABELS_HIDE_THRESHOLD_KM;
+    // "1km and less" keeps the default map's labels; anything beyond 1km hides them, since
+    // our own vector label layers (states-labels-default etc.) take over instead - except
+    // "Find My Way" mode, which keeps every one of those vector labels hidden (see
+    // applyBoundaryLayerVisibility) so there'd be no label source left at all beyond 1km
+    // without this - the Default layer would go blank while Satellite (whose Google labels
+    // aren't zoom-gated) kept showing names, exactly the mismatch reported. The Layers
+    // panel's "Place names" toggle (placeLabelsVisible) still overrides everything - off
+    // means off regardless of zoom or mode.
+    const hideRasterLabels =
+      !placeLabelsVisible || (!findMyWayActive && scaleKm > RASTER_LABELS_HIDE_THRESHOLD_KM);
     map.setLayoutProperty(OSM_LABELED_LAYER_ID, "visibility", hideRasterLabels ? "none" : "visible");
     map.setLayoutProperty(OSM_NOLABELS_LAYER_ID, "visibility", hideRasterLabels ? "visible" : "none");
   }
@@ -2180,6 +2277,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     destination: [number, number];
     destinationLabel: string;
     mode: TravelMode;
+    // The UI-level mode (distinguishes "motorcycle" from "driving", which share the same
+    // OSRM profile/routes and so collapse to the same TravelMode above) - purely for
+    // picking which icon the live-navigation marker shows, never for routing itself.
+    iconMode: NavIconMode;
     routes: FetchedRoute[];
     selectedIndex: number;
   } | null>(null);
@@ -2390,7 +2491,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
     });
 
-    updateBaseLabelVisibility(map, showAll, placeLabelsVisibleRef.current);
+    updateBaseLabelVisibility(map, showAll, placeLabelsVisibleRef.current, findMyWayActiveRef.current);
   };
 
   // --- AOI drawing (Free Hand / Polygon / Rectangle) ---
@@ -6848,27 +6949,26 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           void (async () => {
             const maplibregl = await import("maplibre-gl");
 
-            // A small blue dot with the place name in a bold blue label above it - built as
-            // one marker element so they move/fly together. Text starts blank ("Looking
-            // up...") and is filled in once the reverse-geocode call below resolves.
+            // Just the place name itself, in bold blue, sitting directly over the map -
+            // no pin, no background pill. A white text-halo keeps it legible over both
+            // light and dark map areas, same trick the base map's own labels use, so this
+            // reads as "the existing name turned blue" rather than a new marker/sticker
+            // being added. Text starts blank ("Looking up…") and is filled in once the
+            // reverse-geocode call below resolves. The boundary outline (see setHighlight
+            // below) is separate and unrelated to this label.
             placeClickMarkerRef.current?.remove();
             const el = document.createElement("div");
-            el.style.cssText =
-              "display:flex;flex-direction:column;align-items:center;transform:translateY(-6px);cursor:default;";
+            el.style.cssText = "cursor:default;";
             const labelEl = document.createElement("div");
             labelEl.style.cssText =
-              "background:#fff;color:#1a73e8;font:700 13px/1.3 system-ui,sans-serif;" +
-              "padding:4px 10px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.35);" +
-              "white-space:nowrap;margin-bottom:3px;max-width:240px;overflow:hidden;text-overflow:ellipsis;";
+              "color:#1a73e8;font:700 14px/1.3 system-ui,sans-serif;" +
+              "text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff," +
+              "0 0 4px #fff;white-space:nowrap;max-width:260px;overflow:hidden;" +
+              "text-overflow:ellipsis;letter-spacing:0.01em;";
             labelEl.textContent = "Looking up…";
-            const dotEl = document.createElement("div");
-            dotEl.style.cssText =
-              "width:14px;height:14px;border-radius:50%;background:#1a73e8;" +
-              "border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.45);";
             el.appendChild(labelEl);
-            el.appendChild(dotEl);
 
-            placeClickMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "bottom" })
+            placeClickMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "center" })
               .setLngLat([lng, lat])
               .addTo(map);
 
@@ -6891,7 +6991,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 rows: [{ label: "Address", value: address ?? "Looking up…" }],
               });
             };
-            report(null, null);
+            // Don't call report() here - leave the label as "Looking up…" until the
+            // drill-down below resolves with the actual place name.
 
             // The states dataset otherwise only loads once the (hidden, in this mode)
             // India boundary layer is clicked - "Find My Way" needs it up front instead,
@@ -6917,43 +7018,60 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             // Quietly drills down through the same district/taluk/village datasets the
             // "Administrative Boundaries" mode uses, one level at a time, to find the
-            // smallest area that actually contains the click - without touching that
-            // mode's own layers/selection refs, since "Find My Way" must stand on its own.
-            // A state's own outline is too big to be useful zoomed in, so it's never shown
-            // on its own - only district and deeper are. Note there's no separate "hobli
-            // boundary" polygon in this data - /api/datasets/taluk-hoblies actually returns
-            // the taluk's individual VILLAGE polygons (each tagged with its hobli), so that
+            // named place closest to the click - without touching that mode's own layers/
+            // selection refs, since "Find My Way" must stand on its own. A state's own
+            // outline is too big to be useful zoomed in, so it's never shown on its own -
+            // only district and deeper are. Note there's no separate "hobli boundary"
+            // polygon in this data - /api/datasets/taluk-hoblies actually returns the
+            // taluk's individual VILLAGE polygons (each tagged with its hobli), so that
             // fetch goes straight from taluk to village.
-            const findContaining = (
+            //
+            // Picks the NEAREST named feature to the click, not just whichever one
+            // contains it - Google's own place-label clicks work the same way (you rarely
+            // land pixel-perfect on the label's exact hit-box, so it snaps to the closest
+            // named place instead of requiring an exact geometric hit). A feature that
+            // actually contains the click always wins outright (distance forced to 0); for
+            // datasets that mix the parent boundary itself in with its children (e.g.
+            // district-taluks includes the whole district polygon as one of its own
+            // "features"), that parent feature is filtered out below since it never has a
+            // name matching the child-level nameKeys being searched for.
+            const distanceToFeature = (feature: GeoJSON.Feature): number => {
+              if (feature.geometry) {
+                try {
+                  if (
+                    booleanPointInPolygon(
+                      clickPoint,
+                      feature as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>
+                    )
+                  ) {
+                    return 0;
+                  }
+                } catch {
+                  // fall through to centroid distance
+                }
+              }
+              const centroid = feature.geometry ? featureCentroid(feature.geometry) : null;
+              if (!centroid) return Infinity;
+              return turfDistance(clickPoint, turfPoint(centroid));
+            };
+            const findNearestNamed = (
               data: GeoJSON.FeatureCollection | undefined,
               nameKeys: string[]
             ): { feature: GeoJSON.Feature; name: string } | undefined => {
-              const matches = (data?.features ?? []).filter((f) => {
-                if (!f.geometry) return false;
-                if (f.geometry.type !== "Polygon" && f.geometry.type !== "MultiPolygon") {
-                  return false;
+              let best: { feature: GeoJSON.Feature; name: string; dist: number } | undefined;
+              for (const feature of data?.features ?? []) {
+                if (!feature.geometry) continue;
+                if (feature.geometry.type !== "Polygon" && feature.geometry.type !== "MultiPolygon") {
+                  continue;
                 }
-                try {
-                  return booleanPointInPolygon(
-                    clickPoint,
-                    f as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>
-                  );
-                } catch {
-                  return false;
-                }
-              });
-              // Some of these datasets mix the parent boundary itself into the child
-              // collection (e.g. district-taluks includes the whole district polygon as
-              // one of its "features") - that always matches too since it's a superset,
-              // but it won't carry the child's own name property, so skip over it rather
-              // than taking whichever polygon matched first.
-              for (const feature of matches) {
                 const name = nameKeys
                   .map((k) => feature.properties?.[k])
                   .find((v) => typeof v === "string" && v.trim());
-                if (typeof name === "string") return { feature, name: name.trim() };
+                if (typeof name !== "string") continue;
+                const dist = distanceToFeature(feature);
+                if (!best || dist < best.dist) best = { feature, name: name.trim(), dist };
               }
-              return undefined;
+              return best ? { feature: best.feature, name: best.name } : undefined;
             };
             const fetchBoundary = async (url: string) => {
               try {
@@ -6966,10 +7084,23 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
             let districtName: string | null = null;
             let talukName: string | null = null;
+            let hobliName: string | null = null;
             let boundaryFeature: GeoJSON.Feature | undefined;
+            let boundaryName: string | null = null;
+
+            // How far to drill down depends on how zoomed in the click was - a click while
+            // zoomed way out (e.g. tapping "Bengaluru" with most of Karnataka on screen)
+            // should select the city/district-scale area you're actually looking at, not
+            // some one specific village buried inside it that happens to be geometrically
+            // nearest. Google's own place selection scales the same way: what a tap resolves
+            // to depends on what's actually legible/meaningful at the current zoom, not just
+            // raw proximity. Only drilling deeper once genuinely zoomed in avoids that.
+            const clickZoom = map.getZoom();
+            const TALUK_MIN_ZOOM = 9;
+            const VILLAGE_MIN_ZOOM = 11;
 
             if (stateName) {
-              const found = findContaining(
+              const found = findNearestNamed(
                 await fetchBoundary(
                   `/api/datasets/state-districts?state=${encodeURIComponent(stateName)}`
                 ),
@@ -6978,11 +7109,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (found) {
                 districtName = found.name;
                 boundaryFeature = found.feature;
+                boundaryName = found.name;
                 setHighlight(found.feature);
               }
             }
-            if (districtName && stateName) {
-              const found = findContaining(
+            if (districtName && stateName && clickZoom >= TALUK_MIN_ZOOM) {
+              const found = findNearestNamed(
                 await fetchBoundary(
                   `/api/datasets/district-taluks?district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}`
                 ),
@@ -6991,18 +7123,38 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               if (found) {
                 talukName = found.name;
                 boundaryFeature = found.feature;
+                boundaryName = found.name;
                 setHighlight(found.feature);
               }
             }
-            if (talukName && districtName && stateName) {
-              const found = findContaining(
+            // taluk-hoblies returns DIS-SOLVED hobli polygons (union of all villages
+            // in each hobli), not individual village boundaries. So first find the hobli
+            // name, then fetch the actual village boundaries from hobli-villages.
+            if (talukName && districtName && stateName && clickZoom >= VILLAGE_MIN_ZOOM) {
+              const found = findNearestNamed(
                 await fetchBoundary(
                   `/api/datasets/taluk-hoblies?taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}`
                 ),
-                ["KGISVillageName", "village_name", "vill_nm"]
+                ["KGISHobliName", "hobli_name"]
+              );
+              if (found) {
+                hobliName = found.name;
+                boundaryFeature = found.feature;
+                boundaryName = found.name;
+                setHighlight(found.feature);
+              }
+            }
+            // Now fetch actual village boundaries for the matched hobli
+            if (hobliName && talukName && districtName && stateName) {
+              const found = findNearestNamed(
+                await fetchBoundary(
+                  `/api/datasets/hobli-villages?hobli=${encodeURIComponent(hobliName)}&taluk=${encodeURIComponent(talukName)}&district=${encodeURIComponent(districtName)}&state=${encodeURIComponent(stateName)}`
+                ),
+                ["KGISVillageName", "village_name", "vill_nm", "Name", "name"]
               );
               if (found) {
                 boundaryFeature = found.feature;
+                boundaryName = found.name;
                 setHighlight(found.feature);
               }
             }
@@ -7024,18 +7176,76 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15), duration: 600 });
             }
 
-            try {
-              const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
-              const data = res.ok ? await res.json() : null;
-              const address: string | null =
-                typeof data?.label === "string" ? data.label : null;
-              const shortName: string | null =
-                typeof data?.shortName === "string" ? data.shortName : null;
-              report(shortName ?? address ?? "Unknown location", address ?? "Address not found");
-            } catch (error) {
-              console.error("Reverse geocode lookup failed:", error);
-              report("Unknown location", "Address lookup failed");
-            }
+            if (boundaryFeature?.geometry && boundaryName) {
+              // Boundary found: use the name directly from our own boundary data
+              // (e.g. KGISVillageName), just like Google Maps uses its own place
+              // names — no separate reverse-geocode needed for the label itself.
+              report(boundaryName, null);
+              // Move the label to the boundary's centroid — where the place name
+              // already appears on the map — instead of the click point.
+              const centroid = featureCentroid(boundaryFeature.geometry);
+              if (centroid) placeClickMarkerRef.current?.setLngLat(centroid as [number, number]);
+              // The "Address" row still needs an actual address though - report(..., null)
+              // above leaves it permanently stuck on "Looking up…" otherwise, since nothing
+              // else ever resolves it. Fetch it now and fill it in once it's back.
+              try {
+                const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
+                const data = res.ok ? await res.json() : null;
+                const address: string | null =
+                  typeof data?.label === "string" ? data.label : null;
+                report(boundaryName, address ?? "Address not found");
+              } catch (error) {
+                console.error("Reverse geocode lookup failed:", error);
+                report(boundaryName, "Address lookup failed");
+              }
+            } else if (boundaryFeature?.geometry) {
+              // Boundary found but no name property — fall back to reverse geocode.
+              try {
+                const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
+                const data = res.ok ? await res.json() : null;
+                const address: string | null =
+                  typeof data?.label === "string" ? data.label : null;
+                const shortName: string | null =
+                  typeof data?.shortName === "string" ? data.shortName : null;
+                report(shortName ?? address ?? "Unknown location", address);
+                const centroid = featureCentroid(boundaryFeature.geometry);
+                if (centroid) placeClickMarkerRef.current?.setLngLat(centroid as [number, number]);
+              } catch {
+                report("Unknown location", null);
+              }
+            } else {
+                // No boundary found: reverse-geocode to get the name, then show a
+                // red pin like Google Maps (second image).
+                let noBoundaryName = "Unknown location";
+                let noBoundaryAddress = "Address not found";
+                try {
+                  const geoRes = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
+                  const geoData = geoRes.ok ? await geoRes.json() : null;
+                  if (typeof geoData?.label === "string") noBoundaryAddress = geoData.label;
+                  if (typeof geoData?.shortName === "string") noBoundaryName = geoData.shortName;
+                  else if (typeof geoData?.label === "string") noBoundaryName = geoData.label;
+                } catch {
+                  // keep defaults
+                }
+                placeClickMarkerRef.current?.remove();
+                const pinEl = document.createElement("div");
+                pinEl.style.cssText =
+                  "width:28px;height:38px;position:relative;" +
+                  "filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4));";
+                pinEl.innerHTML = `<svg viewBox="0 0 24 36" width="28" height="38" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z" fill="#e53935"/>
+                  <circle cx="12" cy="11" r="5" fill="#7f1d1d"/>
+                </svg>`;
+                placeClickMarkerRef.current = new maplibregl.Marker({ element: pinEl, anchor: "bottom" })
+                  .setLngLat([lng, lat])
+                  .addTo(map);
+                attributeInfoOpenRef.current = true;
+                onAttributeInfoRef.current?.({
+                  typeLabel: "Location",
+                  title: noBoundaryName,
+                  rows: [{ label: "Address", value: noBoundaryAddress }],
+                });
+              }
           })();
         });
 
@@ -7046,14 +7256,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           updateBaseLabelVisibility(
             map,
             boundaryLayerModeRef.current === "administrative",
-            placeLabelsVisibleRef.current
+            placeLabelsVisibleRef.current,
+            findMyWayActiveRef.current
           )
         );
         map.on("moveend", () =>
           updateBaseLabelVisibility(
             map,
             boundaryLayerModeRef.current === "administrative",
-            placeLabelsVisibleRef.current
+            placeLabelsVisibleRef.current,
+            findMyWayActiveRef.current
           )
         );
 
@@ -9401,11 +9613,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       NAVIGATION_ROUTE_LABELS_LAYER_ID,
       LIVE_LOCATION_ACCURACY_FILL_LAYER_ID,
       LIVE_LOCATION_ACCURACY_LINE_LAYER_ID,
+      // The "Find My Way" place-click outline (see the map's general click handler) - same
+      // problem as the route/live-location layers above: not part of the boundary-layer
+      // system, so without its own entry here a base-map switch (e.g. Satellite -> Default)
+      // silently deleted it, and it was never recreated afterward.
+      PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID,
     ];
     const NAVIGATION_SOURCE_IDS = [
       NAVIGATION_ROUTE_SOURCE_ID,
       NAVIGATION_ROUTE_LABELS_SOURCE_ID,
       LIVE_LOCATION_ACCURACY_SOURCE_ID,
+      PLACE_CLICK_HIGHLIGHT_SOURCE_ID,
     ];
 
     const customLayerIds = currentLayers
@@ -9528,7 +9746,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           map,
           firstCustomLayerId,
           boundaryLayerModeRef.current === "administrative",
-          placeLabelsVisibleRef.current
+          placeLabelsVisibleRef.current,
+          findMyWayActive
         );
         map.setMaxZoom(22);
         break;
@@ -9875,7 +10094,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!map) return;
 
     if (currentLayerRef.current === "default") {
-      updateBaseLabelVisibility(map, boundaryLayerModeRef.current === "administrative", visible);
+      updateBaseLabelVisibility(
+        map,
+        boundaryLayerModeRef.current === "administrative",
+        visible,
+        findMyWayActiveRef.current
+      );
       return;
     }
 
@@ -9959,7 +10183,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     if (!liveLocationMarkerRef.current) {
       const maplibregl = await import("maplibre-gl");
       const el = document.createElement("div");
-      el.className = "naksha-live-location-dot";
+      // Walking keeps the plain pulsing dot (Google does the same for its own walking
+      // navigation - no distinct icon there either); driving/motorcycle/cycling get a mode
+      // icon instead, same idea as Google's car/bike navigation markers. No rotation is
+      // applied to the icon itself - the map's own bearing already tracks heading (see the
+      // easeTo below), so an icon that stays pointing straight up the screen reads as
+      // "facing the direction of travel" for free.
+      if (nav.iconMode === "walking") {
+        el.className = "naksha-live-location-dot";
+      } else {
+        el.className = "naksha-nav-mode-marker";
+        el.innerHTML = NAV_MARKER_ICON_SVG[nav.iconMode];
+      }
       liveLocationMarkerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([longitude, latitude])
         .addTo(map);
@@ -9982,6 +10217,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           destination: nav.destination,
           destinationLabel: nav.destinationLabel,
           mode: nav.mode,
+          iconMode: nav.iconMode,
           routes: [rerouted[0]!],
           selectedIndex: 0,
         };
@@ -10321,7 +10557,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       onLiveLocationChangeRef.current?.(false);
     },
-    getRoutePreview: async (origin: DirectionsPoint, destination: DirectionsPoint, mode: TravelMode) => {
+    getRoutePreview: async (
+      origin: DirectionsPoint,
+      destination: DirectionsPoint,
+      mode: TravelMode,
+      iconMode: NavIconMode = mode
+    ) => {
       const map = mapRef.current;
       // Clear whatever was previously drawn right away, before even fetching - otherwise a
       // failed attempt (or one still in flight) leaves a stale, already-successful-looking
@@ -10365,6 +10606,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           destination: destResolved.coord,
           destinationLabel: destResolved.label,
           mode,
+          iconMode,
           routes,
           selectedIndex: 0,
         };
@@ -11332,6 +11574,27 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         @keyframes naksha-live-location-pulse {
           0% { transform: scale(0.4); opacity: 0.8; }
           100% { transform: scale(1.4); opacity: 0; }
+        }
+        .naksha-nav-mode-marker {
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+          background: #4285f4;
+          border: 3px solid #ffffff;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+        }
+        .naksha-nav-mode-marker::after {
+          content: "";
+          position: absolute;
+          inset: -10px;
+          border-radius: 50%;
+          background: rgba(66, 133, 244, 0.35);
+          animation: naksha-live-location-pulse 2s ease-out infinite;
+          z-index: -1;
         }
         .naksha-route-origin-dot {
           width: 14px;

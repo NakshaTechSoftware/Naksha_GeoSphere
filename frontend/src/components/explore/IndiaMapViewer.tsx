@@ -1034,6 +1034,8 @@ export interface IndiaMapViewerHandle {
   /** Whether any weather control is active (weather menu open, mode selected, radar, wind). */
   isWeatherControlActive: () => boolean;
   setRoadsClickScope: (scope: "none" | "district" | "state") => void;
+  /** Sets the active floating map panel, closing all others. */
+  setActiveMapPanel: (panel: "none" | "layers" | "weather" | "weather-details" | "my-environment" | "draw-aoi") => void;
 }
 
 export interface IndiaMapViewerProps {
@@ -1069,6 +1071,10 @@ export interface IndiaMapViewerProps {
     label?: string;
     focusOnShow?: boolean;
   } | null;
+  /** Hides the Weather toggle button. Set while another floating panel that shares its
+   * top-left anchor point (the Explore page's Filters panel) is open, so the two never
+   * render on top of each other. */
+  hideWeatherControl?: boolean;
 }
 
 // Source/layer ids for a selected state's district boundaries, loaded on demand from MinIO.
@@ -2259,6 +2265,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       onDrillContextChange,
       onWeatherToolbarChange,
       highlightedLocation = null,
+      hideWeatherControl = false,
     },
     ref,
   ) {
@@ -2354,6 +2361,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const [pressureIsobars, setPressureIsobars] = useState<IsobarLine[]>([]);
     const [pressureExtrema, setPressureExtrema] = useState<PressureExtremum[]>([]);
     const [showPressureExtrema, setShowPressureExtrema] = useState(true);
+
+    // ── Exclusive panel state ───────────────────────────────────────────────
+    // Only one floating map panel is open at a time. Derived visibility
+    // booleans below reference activeMapPanel to determine which panels
+    // should be shown.
+
+    const [activeMapPanel, setActiveMapPanel] = useState<ActiveMapPanel>("none");
 
     // Scalar forecast fields (temperature / rain / clouds) rendered as a raster
     // image source. `weatherFieldFrames` holds one frame per forecast hour.
@@ -2487,6 +2501,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       screenY: number;
     } | null>(null);
 
+    // ── Central exclusive panel state ──────────────────────────────────────────
+    // Only ONE major floating map panel may be open at a time.  Opening one panel
+    // automatically hides/conflicting panels.  Derived visibility booleans below.
+    type ActiveMapPanel =
+      | "none"
+      | "layers"
+      | "weather"
+      | "weather-details"
+      | "my-environment"
+      | "draw-aoi";
+
     const [weatherPanel, setWeatherPanel] = useState<WeatherPanelState>({ status: "idle" });
     // Mirrors isWeatherControlActive (computed further below) into a ref, so the map's
     // click listener - set up once on mount - can read the live value without stale
@@ -2572,7 +2597,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     );
 
     const closeWeatherPanel = useCallback(() => {
-      setWeatherDetailsActive(false);
+      setActiveMapPanel("none");
       setShowWeatherMenu(false);
       weatherGenerationRef.current++; // discard any still-in-flight fetches
       setWeatherPanel({ status: "idle" });
@@ -2618,6 +2643,17 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     useEffect(() => {
       if (!weatherDetailsActive) setShowImdWarnings(false);
     }, [weatherDetailsActive]);
+    // Keep weatherDetailsActive derived from activeMapPanel for backward
+    // compatibility with existing code that references it (e.g. IMD guard,
+    // click-handler guard, closeWeatherPanel). When a weather panel is the
+    // active map panel, weatherDetailsActive is true so that armed-click-mode
+    // and other guards still work; when another panel is active or none,
+    // it is false.
+    useEffect(() => {
+      setWeatherDetailsActive(
+        activeMapPanel === "weather" || activeMapPanel === "weather-details"
+      );
+    }, [activeMapPanel]);
     const weatherMenuRef = useRef<HTMLDivElement>(null);
     const windAnimatorRef = useRef<GfsWindCanvasAnimator | null>(null);
     const aqiGridRendererRef = useRef<AqiGridCanvasRenderer | null>(null);
@@ -13663,6 +13699,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       getWeatherMode: () => weatherMode,
       setWeatherMode: (mode: WeatherMapMode) => setWeatherMode(mode),
       isWeatherControlActive: () => isWeatherControlActive,
+      setActiveMapPanel: (panel: "none" | "layers" | "weather" | "weather-details" | "my-environment" | "draw-aoi") => {
+        setActiveMapPanel(panel);
+        if (panel !== "weather" && panel !== "weather-details") setShowWeatherMenu(false);
+      }
     }));
 
     // Loads Karnataka's boundary from MinIO when the user clicks its label on the map
@@ -14516,7 +14556,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
         {/* Layers Control */}
         {!isLoading && !loadError && (
-          <LayersControl currentLayer={currentLayer} onLayerChange={handleLayerChange} />
+          <LayersControl currentLayer={currentLayer} onLayerChange={handleLayerChange} isExpanded={activeMapPanel === "layers"} onToggle={isExpanded => setActiveMapPanel(isExpanded ? "layers" : "none")} />
         )}
 
         {/* Reset View - only shown once the map has been rotated/tilted away
@@ -14786,20 +14826,30 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         {/* Weather menu: select which live metrics to include. When at least one
           metric is enabled, left-clicking the map opens/updates the fixed
           right-side weather panel and boundary drill-down is paused. */}
-        {!isLoading && !loadError && (
+        {!isLoading && !loadError && !hideWeatherControl && (
           <div ref={weatherMenuRef} className="absolute left-4 top-20 z-20">
             <button
               type="button"
               onClick={() => {
-                const next = !weatherDetailsActive;
-                setWeatherDetailsActive(next);
-                setShowWeatherMenu(next ? true : false);
-                // Arming click-to-inspect weather details must take priority over
-                // the IMD warnings overlay, which otherwise swallows the same map
-                // click and makes the weather popup "get lost". IMD stays available
-                // to re-enable afterwards via the menu checkbox.
-                if (next) setShowImdWarnings(false);
-                if (!next) setWeatherPanel({ status: "idle" });
+                // Toggle the weather panel via the central activeMapPanel state.
+                // When opening weather, atomically set ALL necessary states so the
+                // Weather popup, menu, and map-click mode all become active in one transition.
+                if (activeMapPanel === "weather" || activeMapPanel === "weather-details") {
+                  // Closing weather: clear everything.
+                  setActiveMapPanel("none");
+                  setWeatherDetailsActive(false);
+                  setShowWeatherMenu(false);
+                } else {
+                  // Opening weather: atomic transition.
+                  setActiveMapPanel("weather");
+                  setWeatherDetailsActive(true);
+                  setShowWeatherMenu(true);
+                  // Arming click-to-inspect weather details must take priority over
+                  // the IMD warnings overlay, which otherwise swallows the same map
+                  // click and makes the weather popup "get lost". IMD stays available
+                  // to re-enable afterwards via the menu checkbox.
+                  setShowImdWarnings(false);
+                }
               }}
               aria-haspopup="menu"
               aria-expanded={showWeatherMenu}
@@ -16108,14 +16158,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           </div>
         )}
 
-        {weatherDetailsActive && !isLoading && !loadError && (
-          <WeatherDetailsPanel
-            weatherPanel={weatherPanel}
-            imdWarning={imdWarningAtSelectedLocation}
-            onClose={closeWeatherPanel}
-            onRetry={handleWeatherRetry}
-          />
-        )}
+        {(activeMapPanel === "weather" || activeMapPanel === "weather-details") &&
+          !isLoading &&
+          !loadError && (
+            <WeatherDetailsPanel
+              weatherPanel={weatherPanel}
+              imdWarning={imdWarningAtSelectedLocation}
+              onClose={closeWeatherPanel}
+              onRetry={handleWeatherRetry}
+            />
+          )}
 
 
       </div>

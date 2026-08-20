@@ -20,6 +20,7 @@ is down but we saw it recently.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,21 @@ _STALE_TTL_SECONDS = 6 * 60 * 60  # keep a stale fallback copy for 6 hours
 DataStatus = Literal["LIVE", "STALE"]
 
 T = TypeVar("T")
+
+# Single-flight locks, one per cache key, so concurrent requests that miss the
+# same cold key (e.g. several browser tabs loading "My Environment" at once)
+# share one upstream fetch instead of each independently paging through the
+# ~3500-row national CPCB feed - which was cheap enough alone to trip
+# data.gov.in's per-key rate limit when duplicated across requests.
+_fetch_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_lock(key: str) -> asyncio.Lock:
+    lock = _fetch_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _fetch_locks[key] = lock
+    return lock
 
 
 def build_cache_key(*parts: str) -> str:
@@ -97,16 +113,23 @@ async def get_with_stale_fallback(
 
     stale_key = f"{key}:{_STALE_SUFFIX}"
 
-    try:
-        data = await fetch()
-    except UpstreamUnavailableError:
-        stale = await _get_json(redis, stale_key)
-        if stale is not None:
-            return stale["data"], "STALE", datetime.fromisoformat(stale["fetched_at"])
-        raise
+    async with _get_lock(key):
+        # Re-check: another caller may have populated the cache while we were
+        # waiting for the lock, in which case there's nothing left to fetch.
+        fresh = await _get_json(redis, key)
+        if fresh is not None:
+            return fresh["data"], "LIVE", datetime.fromisoformat(fresh["fetched_at"])
 
-    fetched_at = datetime.now(timezone.utc)
-    payload = {"data": data, "fetched_at": fetched_at.isoformat()}
-    await _set_json(redis, key, payload, ttl_seconds)
-    await _set_json(redis, stale_key, payload, _STALE_TTL_SECONDS)
-    return data, "LIVE", fetched_at
+        try:
+            data = await fetch()
+        except UpstreamUnavailableError:
+            stale = await _get_json(redis, stale_key)
+            if stale is not None:
+                return stale["data"], "STALE", datetime.fromisoformat(stale["fetched_at"])
+            raise
+
+        fetched_at = datetime.now(timezone.utc)
+        payload = {"data": data, "fetched_at": fetched_at.isoformat()}
+        await _set_json(redis, key, payload, ttl_seconds)
+        await _set_json(redis, stale_key, payload, _STALE_TTL_SECONDS)
+        return data, "LIVE", fetched_at

@@ -1216,8 +1216,18 @@ export function ExplorePage() {
           onExtraFileToggled={handleExtraFileToggledFromSearch}
           onAOIChange={setAoiInfo}
           onDrawingToolChange={setActiveAOITool}
-          onAttributeInfo={setAttributeInfo}
+          onAttributeInfo={(info) => {
+            setAttributeInfo(info);
+            // The attribute-info panel and My Environment share the same
+            // right-side anchor point - selecting a feature on the map must
+            // close My Environment so the two never render on top of each other.
+            if (info) {
+              setShowLocationEnvironment(false);
+              mapViewerRef.current?.setActiveMapPanel("none");
+            }
+          }}
           onDrillContextChange={setDrillContext}
+          hideWeatherControl={showFilters}
           onWeatherToolbarChange={(visible) => {
             setShowWeatherToolbar(visible);
             if (visible) {
@@ -1225,12 +1235,15 @@ export function ExplorePage() {
               setWeatherToolbarMode(mapViewerRef.current?.getWeatherMode() as WeatherLayerKey | null);
               // A left-click can't simultaneously drill into a boundary layer AND open the
               // weather click-to-inspect popup - once any weather control is active, drop
-              // back to the plain administrative boundaries and close the Filters panel so
-              // the two features never fight over the same click. Also dismiss any
-              // attribute-info panel a click opened *before* weather was turned on - the
-              // map's own click handler only stops new ones from opening, it doesn't know
-              // to close one already showing.
+              // back to the plain administrative boundaries and close every other floating
+              // panel (Filters, My Environment, AOI) so the two features never fight over
+              // the same click, and no two floating panels ever render on top of each
+              // other. Also dismiss any attribute-info panel a click opened *before*
+              // weather was turned on - the map's own click handler only stops new ones
+              // from opening, it doesn't know to close one already showing.
               setShowFilters(false);
+              setShowAOIMenu(false);
+              setShowLocationEnvironment(false);
               setAttributeInfo(null);
               mapViewerRef.current?.clearAttributeInfo();
               if (selectedBoundaryLayer !== "administrative") {
@@ -1273,7 +1286,18 @@ export function ExplorePage() {
             <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
               <button
                 ref={filtersToggleRef}
-                onClick={() => !showWeatherToolbar && setShowFilters((prev) => !prev)}
+                onClick={() => {
+                  if (showWeatherToolbar) return;
+                  const next = !showFilters;
+                  setShowFilters(next);
+                  if (next) {
+                    // Only one floating panel is shown at a time - opening Filters
+                    // closes My Environment and Draw AOI so they never overlap.
+                    setShowAOIMenu(false);
+                    setShowLocationEnvironment(false);
+                    mapViewerRef.current?.setActiveMapPanel("none");
+                  }
+                }}
                 disabled={showWeatherToolbar}
                 title={showWeatherToolbar ? "Boundary layers are disabled while Weather is active" : undefined}
                 className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
@@ -1448,17 +1472,30 @@ export function ExplorePage() {
           {storedLocation && (
             <button
               type="button"
-              onClick={() => setShowLocationEnvironment((prev) => !prev)}
+              onClick={() => {
+                const next = !showLocationEnvironment;
+                setShowLocationEnvironment(next);
+                mapViewerRef.current?.setActiveMapPanel(next ? "my-environment" : "none");
+                if (next) {
+                  // Only one floating panel is shown at a time - opening My
+                  // Environment closes Filters, Draw AOI, and the attribute-info
+                  // panel (they all share the same right-side anchor point) so
+                  // none of them ever render on top of each other.
+                  setShowFilters(false);
+                  setShowAOIMenu(false);
+                  setAttributeInfo(null);
+                  mapViewerRef.current?.clearAttributeInfo();
+                }
+              }}
               aria-label="My Environment"
               title="My Environment"
-              className={`flex flex-shrink-0 items-center gap-2 rounded-full border p-2.5 text-sm font-medium shadow-md transition-colors md:px-4 md:py-2.5 ${
+              className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border shadow-md transition-colors ${
                 showLocationEnvironment
                   ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                   : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               }`}
             >
               <MapPin className="h-4 w-4 flex-shrink-0" />
-              <span className="max-md:hidden">My Environment</span>
             </button>
           )}
 
@@ -1475,8 +1512,17 @@ export function ExplorePage() {
               <button
                 type="button"
                 onClick={() => {
-                  setShowAOIMenu((prev) => !prev);
+                  const next = !showAOIMenu;
+                  setShowAOIMenu(next);
                   setAttributeInfo(null);
+                  mapViewerRef.current?.clearAttributeInfo();
+                  mapViewerRef.current?.setActiveMapPanel(next ? "draw-aoi" : "none");
+                  if (next) {
+                    // Only one floating panel is shown at a time - opening Draw AOI
+                    // closes Filters and My Environment so they never overlap.
+                    setShowFilters(false);
+                    setShowLocationEnvironment(false);
+                  }
                 }}
                 aria-haspopup="menu"
                 aria-expanded={showAOIMenu}

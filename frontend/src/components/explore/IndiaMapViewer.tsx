@@ -10990,13 +10990,13 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 id: LIVE_LOCATION_ACCURACY_FILL_LAYER_ID,
                 type: "fill",
                 source: LIVE_LOCATION_ACCURACY_SOURCE_ID,
-                paint: { "fill-color": "#4285f4", "fill-opacity": 0.15 },
+                paint: { "fill-color": "#4285f4", "fill-opacity": 0.06 },
               });
               map.addLayer({
                 id: LIVE_LOCATION_ACCURACY_LINE_LAYER_ID,
                 type: "line",
                 source: LIVE_LOCATION_ACCURACY_SOURCE_ID,
-                paint: { "line-color": "#4285f4", "line-opacity": 0.35, "line-width": 1 },
+                paint: { "line-color": "#4285f4", "line-opacity": 0.2, "line-width": 1 },
               });
             }
             const accuracySource = map.getSource(

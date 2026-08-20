@@ -2210,6 +2210,13 @@ export function ExplorePage() {
                               mapViewerRef.current?.setBoundaryLayerMode("none");
                               return;
                             }
+                            // Leaving "Find My Way" for another layer - clear whatever place
+                            // was selected there (pin, blue name label, boundary outline, and
+                            // the info card), same as its own close button does. Otherwise it
+                            // stayed on the map/panel indefinitely, looking like it belonged
+                            // to the newly-selected layer instead of a leftover from before.
+                            setAttributeInfo(null);
+                            mapViewerRef.current?.clearAttributeInfo();
                             if (showDirections) closeDirections();
                             mapViewerRef.current?.setBoundaryLayerMode(id);
                             if (id !== "roads") setSelectedRoadsScope("none");

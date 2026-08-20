@@ -1964,6 +1964,20 @@ function describeManeuver(step: OsrmStep): string {
   }
 }
 
+// GeolocationPositionError's code/message live on its prototype, not as the object's own
+// enumerable properties - so console.error(error) alone prints "{}" in Chrome/most consoles,
+// which is what showed up in practice (no code, no message, nothing to diagnose from). Pull
+// them out explicitly instead.
+function describeGeolocationError(error: GeolocationPositionError): string {
+  const codeNames: Record<number, string> = {
+    1: "PERMISSION_DENIED",
+    2: "POSITION_UNAVAILABLE",
+    3: "TIMEOUT",
+  };
+  const codeName = codeNames[error.code] ?? `code ${error.code}`;
+  return `${codeName}${error.message ? `: ${error.message}` : ""}`;
+}
+
 // Gets a one-off GPS fix via watchPosition rather than getCurrentPosition. Deliberately NOT
 // getCurrentPosition: it's demonstrably unreliable in at least one real environment this app
 // runs in (consistently times out/fails there while "My Location" - built on watchPosition -
@@ -7371,6 +7385,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.on("click", (e) => {
           if (!findMyWayActiveRef.current) return;
           if (drawingToolRef.current) return;
+          // While turn-by-turn navigation (real or simulated) is actively running, a click
+          // shouldn't pop the place-details card - it rendered right on top of the live
+          // navigation banner, overlapping it, since both sit in the same top corner.
+          if (navigationWatchIdRef.current !== null || simulationIntervalRef.current !== null) {
+            return;
+          }
 
           // Don't double-handle a click already owned by the route-alternative handlers above.
           const routeAltLayers = [
@@ -11008,7 +11028,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Live location error:", error);
+          console.error("Live location error:", describeGeolocationError(error));
           liveLocationWatchIdRef.current = null;
           onLiveLocationChangeRef.current?.(false);
         },
@@ -11167,7 +11187,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Navigation location error:", error);
+          console.error("Navigation location error:", describeGeolocationError(error));
         },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
       );

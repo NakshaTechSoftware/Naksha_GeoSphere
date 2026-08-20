@@ -1400,7 +1400,13 @@ export function ExplorePage() {
         />
 
         {/* Floating search / Directions bar */}
-        <div className="pointer-events-none absolute left-4 right-4 top-4 z-20 flex items-center gap-3">
+        {/* items-start (not items-center): this row's height stretches to match its tallest
+            child (the directions panel, which grows tall once alternatives/steps are shown) -
+            items-center would vertically center every other child (Locate, Draw AOI, profile)
+            within that full height, visibly pushing them down away from the top edge once the
+            panel got tall. items-start pins every child to the top instead, independent of
+            how tall its neighbors are. */}
+        <div className="pointer-events-none absolute left-4 right-4 top-4 z-20 flex items-start gap-3">
           {showDirections ? (
             <div
               ref={directionsFormRef}

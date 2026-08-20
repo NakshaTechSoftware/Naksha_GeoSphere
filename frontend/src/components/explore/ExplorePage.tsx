@@ -11,13 +11,57 @@ import {
   type AOITool,
   type AOIResult,
   type AttributeInfo,
+  type NavigationState,
+  type RoutePreview,
+  type TravelMode,
+  type DirectionsPoint,
 } from "./IndiaMapViewer";
 import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
 import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
-import { ChevronDown, ChevronUp, Download, MapPin, Search, Menu, Mic, X } from "lucide-react";
+import {
+  ArrowUpDown,
+  Bike,
+  Car,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Download,
+  Footprints,
+  LocateFixed,
+  MapPin,
+  Motorbike,
+  Navigation,
+  Search,
+  Menu,
+  Mic,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+
+type UiTravelModeId = "driving" | "motorcycle" | "cycling" | "walking";
+const TRAVEL_MODES: { id: UiTravelModeId; mode: TravelMode; label: string; Icon: typeof Car }[] = [
+  { id: "driving", mode: "driving", label: "Driving", Icon: Car },
+  { id: "motorcycle", mode: "driving", label: "Motorcycle", Icon: Motorbike },
+  { id: "cycling", mode: "cycling", label: "Cycling", Icon: Bike },
+  { id: "walking", mode: "walking", label: "Walking", Icon: Footprints },
+];
+
+function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function formatDuration(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h} hr ${m} min`;
+}
 
 const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "freehand", label: "Free Hand", Icon: FreeHandIcon },
@@ -25,13 +69,9 @@ const AOI_TOOLS: { id: AOITool; label: string; Icon: typeof FreeHandIcon }[] = [
   { id: "rectangle", label: "Rectangle", Icon: RectangleIcon },
 ];
 
-// The Boundary Layers group is single-select: exactly one option is active at a time
-// (radio-like behavior, rendered as checkboxes). "administrative" shows every loaded
-// administrative boundary layer; "assembly" and "parliamentary" show the neon-blue
-// india_states geojson plus their loaded constituency boundaries; "gram panchayat" shows
-// the neon-blue states too (panchayat boundaries aren't wired to data yet).
-
-const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
+type FilterSelection = "find_my_way" | BoundaryLayerMode;
+const BOUNDARY_LAYER_OPTIONS: { id: FilterSelection; label: string }[] = [
+  { id: "find_my_way", label: "Find My Way" },
   { id: "administrative", label: "Administrative Boundaries" },
   { id: "assembly", label: "Assembly Constituency Boundaries" },
   { id: "parliamentary", label: "Parliamentary Constituency Boundaries" },
@@ -41,6 +81,7 @@ const BOUNDARY_LAYER_OPTIONS: { id: BoundaryLayerMode; label: string }[] = [
   { id: "gba", label: "Bengaluru Boundaries" },
   { id: "roads", label: "Roads" },
 ];
+
 const POLICE_TYPE_OPTIONS: { id: PoliceType; label: string }[] = [
   { id: "all", label: "All Police Types" },
   { id: "law_and_order", label: "Law and Order" },
@@ -59,106 +100,49 @@ const POLICE_TYPE_OPTIONS: { id: PoliceType; label: string }[] = [
   { id: "ksisf", label: "KSISF" },
   { id: "ksrp", label: "KSRP" },
 ];
-const POLICE_DISTRICTS = ["Bagalkote", "Ballari", "Belagavi", "Bengaluru (Rural)", "Bengaluru (Urban)", "Bengaluru South", "Bidar", "Chamarajanagara", "Chikkaballapura", "Chikkamagaluru", "Chitradurga", "Dakshina Kannada", "Davanagere", "Dharwad", "Gadag", "Hassan", "Haveri", "Kalaburgi", "Kodagu", "Kolara", "Koppal", "Mandya", "Mysuru", "Raichur", "Shivamogga", "Tumakuru", "Udupi", "Uttara Kannada", "Vijayanagara", "Vijayapura", "Yadgir"];
+
+const POLICE_DISTRICTS = [
+  "Bagalkote", "Ballari", "Belagavi", "Bengaluru (Rural)", "Bengaluru (Urban)",
+  "Bengaluru South", "Bidar", "Chamarajanagara", "Chikkaballapura", "Chikkamagaluru",
+  "Chitradurga", "Dakshina Kannada", "Davanagere", "Dharwad", "Gadag", "Hassan",
+  "Haveri", "Kalaburgi", "Kodagu", "Kolara", "Koppal", "Mandya", "Mysuru",
+  "Raichur", "Shivamogga", "Tumakuru", "Udupi", "Uttara Kannada", "Vijayanagara",
+  "Vijayapura", "Yadgir"
+];
 
 const BENGALURU_REGIONS = ["Central", "East", "North", "South", "West"] as const;
 
-// Static Bengaluru-specific suggestions (ward/zone drill-down search, e.g.
-// "Bengaluru, Central, Ward Boundary"). State/district/taluk suggestions are built
-// dynamically below from real data instead of being hardcoded here.
 const PLACE_SUGGESTIONS = {
   regions: ["Bengaluru", "Bangalore"],
   bengaluruZones: [...BENGALURU_REGIONS],
   villages: [
-    "Banaswadi",
-    "Koramangala",
-    "Indiranagar",
-    "Koramangala 1st Block",
-    "Koramangala 2nd Block",
-    "Koramangala 3rd Block",
-    "Koramangala 4th Block",
-    "Koramangala 5th Block",
-    "Hebbal",
-    "Malleshwaram",
-    "Brindavan Nagar",
-    "Hombegowda Nagar",
-    "Vinayaka Nagar",
-    "Srinivasa Nagar",
-    "Chennamma Nagar",
-    "Muthanamakki",
-    "Kengeri",
-    "Attibele",
-    "Hosakote",
-    "Devanahalli",
-    "Yelahanka",
-    "Kenchapura",
-    "Varthur",
-    "Sarjapur",
-    "Electronic City",
-    "Bannerghatta",
-    "Jayanagar",
-    "JP Nagar",
-    "BTM Layout",
-    "Ulsoor",
-    "Shivaji Nagar",
-    "Panathur",
-    "Vijay Nagar",
+    "Banaswadi", "Koramangala", "Indiranagar", "Koramangala 1st Block",
+    "Koramangala 2nd Block", "Koramangala 3rd Block", "Koramangala 4th Block",
+    "Koramangala 5th Block", "Hebbal", "Malleshwaram", "Brindavan Nagar",
+    "Hombegowda Nagar", "Vinayaka Nagar", "Srinivasa Nagar", "Chennamma Nagar",
+    "Muthanamakki", "Kengeri", "Attibele", "Hosakote", "Devanahalli",
+    "Yelahanka", "Kenchapura", "Varthur", "Sarjapur", "Electronic City",
+    "Bannerghatta", "Jayanagar", "JP Nagar", "BTM Layout", "Ulsoor",
+    "Shivaji Nagar", "Panathur", "Vijay Nagar",
   ],
   wards: [
-    "Banaswadi",
-    "Koramangala",
-    "Indiranagar",
-    "Malleshwaram",
-    "Hebbal",
-    "Yelahanka",
-    "Whitefield",
-    "Electronics City",
-    "Hosur Road",
-    "BTM Layout",
-    "Jayanagar",
-    "JP Nagar",
-    "BTM 2nd Stage",
-    "BTM 4th Stage",
-    "BTM 6th Stage",
-    "Malleswaram",
-    "R V Nagar",
-    "Kaduvalli",
-    "Goraguntepalya",
-    "Punjai Palaya",
-    "Dasarahalli",
-    "Tadpalya",
-    "Pai Layout",
-    "Veerabhadra Nagar",
-    "Hoskote",
-    "Sud Flatten",
-    "Varthur",
-    "Sarjapur",
-    "Kundalahalli",
-    "Kaikondrahalli",
-    "Hegde Nagar",
-    "Vasanth Nagar",
-    "Kempapura",
-    "Kadugodi",
-    "Leelavathi Nagar",
-    "Konena Agrahara",
-    "Maruthi Seve Nagar",
-    "Prarthana Circle",
-    "Gopala Nagar",
-    "Garudacharpalya",
-    "Hoodi",
-    "Harlur",
-    "Bellandur",
-    "Yelahanka",
+    "Banaswadi", "Koramangala", "Indiranagar", "Malleshwaram", "Hebbal",
+    "Yelahanka", "Whitefield", "Electronics City", "Hosur Road", "BTM Layout",
+    "Jayanagar", "JP Nagar", "BTM 2nd Stage", "BTM 4th Stage", "BTM 6th Stage",
+    "Malleswaram", "R V Nagar", "Kaduvalli", "Goraguntepalya", "Punjai Palaya",
+    "Dasarahalli", "Tadpalya", "Pai Layout", "Veerabhadra Nagar", "Hoskote",
+    "Sud Flatten", "Varthur", "Sarjapur", "Kundalahalli", "Kaikondrahalli",
+    "Hegde Nagar", "Vasanth Nagar", "Kempapura", "Kadugodi", "Leelavathi Nagar",
+    "Konena Agrahara", "Maruthi Seve Nagar", "Prarthana Circle", "Gopala Nagar",
+    "Garudacharpalya", "Hoodi", "Harlur", "Bellandur", "Yelahanka",
   ],
 };
 
 function filterSuggestions(query: string, category: string) {
   const allItems = PLACE_SUGGESTIONS[category as keyof typeof PLACE_SUGGESTIONS] || [];
-  // Ranked by the geosearch engine (prefix > substring > fuzzy), not raw substring order.
   return rankStaticSuggestions(allItems, query);
 }
 
-// Wraps the portion of `text` that matches `query` in <mark> for visual emphasis.
 function highlightMatch(text: string, query: string) {
   if (!query) return text;
   const index = text.toLowerCase().indexOf(query.toLowerCase());
@@ -174,8 +158,6 @@ function highlightMatch(text: string, query: string) {
   );
 }
 
-// Display name for each PLACE_SUGGESTIONS key, since some (like "bengaluruZones") don't
-// read well through a naive capitalize-first-letter.
 const CATEGORY_LABELS: Record<string, string> = {
   regions: "Regions",
   bengaluruZones: "Bengaluru Zones",
@@ -183,21 +165,11 @@ const CATEGORY_LABELS: Record<string, string> = {
   wards: "Wards",
 };
 
-// A selectable state/district/taluk, built from real data (see the fetch effect below).
-// `label` is both what's shown in the dropdown and the exact string passed to
-// mapViewerRef.current.search() on selection (e.g. "Karnataka, Hassan"); `leaf` is just the
-// place's own name (e.g. "Hassan"), used to rank prefix matches on the specific place typed
-// above matches that only happen to occur earlier in the full label.
 interface LocationEntry {
   label: string;
   leaf: string;
 }
 
-// Filters/ranks LocationEntry[] by a typed query via the geosearch engine
-// (exact > prefix > token-prefix > substring > bounded fuzzy), returning plain
-// label strings ready for the {category, items: string[]} suggestion shape.
-// `boostLabel` biases toward the map's current drill context; `fuzzy` enables
-// typo tolerance for the leaf tier.
 function filterLocationEntries(
   entries: LocationEntry[],
   query: string,
@@ -206,8 +178,6 @@ function filterLocationEntries(
   return rankLocationEntries(entries, query, opts);
 }
 
-// Formats a geodesic area in km² for the AOI chip: km² (up to 2 decimals), switching to m²
-// for shapes smaller than 0.01 km² (e.g. a drawn building footprint).
 function formatAreaSqKm(areaSqKm: number): string {
   if (areaSqKm < 0.01) {
     return `${Math.max(Math.round(areaSqKm * 1_000_000), 1).toLocaleString("en-IN")} m²`;
@@ -218,9 +188,6 @@ function formatAreaSqKm(areaSqKm: number): string {
   return `${areaSqKm.toLocaleString("en-IN", { maximumFractionDigits: 2 })} km²`;
 }
 
-// Minimal typing for the Web Speech API. SpeechRecognition isn't part of TypeScript's
-// DOM lib yet, so the browser-specific constructors (webkit prefix included) are cast
-// through this shape instead of polluting the rest of the file with `any`.
 interface SpeechRecognitionResultItem {
   transcript: string;
 }
@@ -247,10 +214,6 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-// Shared body of the attribute info panel - header (type badge + title + close), the
-// attribute table (Bhoomi owner rows above the feature's own rows), and the Export
-// action. Rendered by both the desktop floating card and the mobile bottom sheet so
-// the two always show the same content.
 function AttributePanelBody({
   info,
   owners,
@@ -262,7 +225,6 @@ function AttributePanelBody({
     | { status: "loading" }
     | { status: "error"; message: string }
     | { status: "ok"; rows: RtcOwner[] };
-  // Optional: when omitted (mobile bottom sheet), the header shows no close button.
   onClose?: () => void;
   onExport: () => void;
 }) {
@@ -288,8 +250,6 @@ function AttributePanelBody({
       </div>
       <table className="w-full border-collapse text-xs">
         <tbody>
-          {/* Owner names (Bhoomi RTC) sit above the parcel's own attributes - they're
-              what the parcel is usually looked up for. */}
           {info.parcel && (
             <>
               {owners.status === "loading" && (
@@ -376,7 +336,6 @@ function AttributePanelBody({
 
 export function ExplorePage() {
   const [searchQuery, setSearchQuery] = useState("");
-  // Voice search state: true while the browser's speech recognizer is actively listening.
   const [isListening, setIsListening] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedWard, setSelectedWard] = useState<WardSelection | null>(null);
@@ -384,31 +343,33 @@ export function ExplorePage() {
   const [expandedFilters, setExpandedFilters] = useState({
     type: true,
   });
-  // The single active Boundary Layers option ("administrative" by default, so the
-  // india states / districts / taluks / hoblies / villages layers show initially).
   const [selectedBoundaryLayer, setSelectedBoundaryLayer] =
-    useState<BoundaryLayerMode>("administrative");
+    useState<FilterSelection>("find_my_way");
   const [selectedPoliceType, setSelectedPoliceType] = useState<PoliceType>("all");
   const [selectedPoliceDistrict, setSelectedPoliceDistrict] = useState("all");
-  // What a district click does in Roads mode - "none" (default, neither button pressed) is
-  // fast/boundaries-only, matching taluk/hobli/village's own lightweight click behavior.
-  // "district" makes a single click also fetch that district's full roads immediately;
-  // "state" loads every district's roads combined on the next click, since districts tile
-  // the whole state with no separate clickable "state" area.
   const [selectedRoadsScope, setSelectedRoadsScope] = useState<"none" | "district" | "state">("none");
-  const [searchSuggestions, setSearchSuggestions] = useState<
+  const [localSuggestions, setLocalSuggestions] = useState<
     { category: string; items: string[] }[]
   >([]);
+  const [placeSuggestions, setPlaceSuggestions] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  const searchSuggestions = useMemo(() => {
+    const places =
+      placeSuggestions.length > 0
+        ? [{ category: "Places", items: placeSuggestions.map((p) => p.label) }]
+        : [];
+    return [...localSuggestions, ...places];
+  }, [localSuggestions, placeSuggestions]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
-  // Refs backing the Filters panel's outside-click-to-close: the panel itself (clicks
-  // inside it are ignored) and the hamburger toggle (excluded so it keeps toggling
-  // instead of close-then-reopen).
+  const [geocoding, setGeocoding] = useState(false);
+  const suppressSuggestionsRef = useRef(false);
+
+  // Filters Panel Drawer Swipe Handling
   const filtersPanelRef = useRef<HTMLElement | null>(null);
   const filtersToggleRef = useRef<HTMLButtonElement | null>(null);
-  // Mobile drawer swipe-to-close: while the Filters drawer is open, a leftward swipe
-  // drags it off-screen; releasing past a threshold closes it, otherwise it snaps back.
   const [drawerDragX, setDrawerDragX] = useState(0);
   const drawerDragRef = useRef<{
     startX: number;
@@ -429,8 +390,6 @@ export function ExplorePage() {
     const { startX, startY } = drawerDragRef.current;
     const dx = touch.clientX - startX;
     const dy = touch.clientY - startY;
-    // Only engage for a clearly-leftward, mostly-horizontal drag; the drawer is 80vw
-    // wide, so cap the drag at its own width.
     if (dx < -20 && Math.abs(dx) > Math.abs(dy)) {
       const clamped = Math.max(dx, -window.innerWidth * 0.8);
       drawerDragRef.current.dragging = true;
@@ -441,7 +400,6 @@ export function ExplorePage() {
 
   const handleDrawerTouchEnd = () => {
     const { dragging, current } = drawerDragRef.current;
-    // Closing past ~20% of the screen width counts as a dismiss; otherwise snap back.
     if (dragging && current < -window.innerWidth * 0.2) {
       setShowFilters(false);
     }
@@ -450,9 +408,7 @@ export function ExplorePage() {
     setDrawerDragX(0);
   };
 
-  // Mobile attribute sheet swipe-to-close: while the sheet is open, a downward swipe
-  // drags it off-screen; releasing past a threshold closes it, otherwise it snaps back.
-  // (Mirrors the Filters drawer's swipe handling.)
+  // Attribute Bottom Sheet Swipe Handling
   const [attrSheetDragY, setAttrSheetDragY] = useState(0);
   const attrSheetDragRef = useRef({
     startX: 0,
@@ -473,9 +429,6 @@ export function ExplorePage() {
     const { startX, startY } = attrSheetDragRef.current;
     const dx = touch.clientX - startX;
     const dy = touch.clientY - startY;
-    // Only engage for a clearly-downward, mostly-vertical drag, and only while the
-    // sheet's content is scrolled to the top (a downward swipe mid-list should scroll
-    // the list back up instead of closing the sheet). Cap at the sheet height (30vh).
     if (dy > 20 && Math.abs(dy) > Math.abs(dx)) {
       if ((e.currentTarget as HTMLElement).scrollTop > 0) return;
       const clamped = Math.min(dy, window.innerHeight * 0.5);
@@ -487,7 +440,6 @@ export function ExplorePage() {
 
   const handleAttrSheetTouchEnd = () => {
     const { dragging, current } = attrSheetDragRef.current;
-    // Closing past ~15% of the screen height counts as a dismiss; otherwise snap back.
     if (dragging && current > window.innerHeight * 0.15) {
       setAttributePanelOpen(false);
     }
@@ -495,27 +447,284 @@ export function ExplorePage() {
     attrSheetDragRef.current.current = 0;
     setAttrSheetDragY(0);
   };
-  // Holds the live speech-recognition instance so tapping the mic again (or leaving the
-  // page) can stop it cleanly.
+
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  // Live Location
+  const [liveLocationState, setLiveLocationState] = useState<"off" | "locating" | "active">("off");
+  const handleToggleLiveLocation = () => {
+    if (liveLocationState === "off") {
+      setLiveLocationState("locating");
+      mapViewerRef.current?.startLiveLocation();
+    } else if (liveLocationState === "active") {
+      setLiveLocationState("off");
+      mapViewerRef.current?.stopLiveLocation();
+    } else {
+      mapViewerRef.current?.startLiveLocation();
+    }
+  };
+
+  // Turn-by-Turn Navigation & Directions
+  const [showDirections, setShowDirections] = useState(false);
+  const [placeLabelsVisible, setPlaceLabelsVisible] = useState(true);
+  const [routePreview, setRoutePreview] = useState<RoutePreview | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [navigationState, setNavigationState] = useState<NavigationState | null>(null);
+
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("naksha_voice_guidance_enabled");
+      if (stored !== null) setVoiceEnabled(stored === "true");
+    } catch (error) {
+      console.error("Failed to load voice guidance preference:", error);
+    }
+  }, []);
+
+  const toggleVoiceEnabled = () => {
+    setVoiceEnabled((prev) => {
+      const next = !prev;
+      if (!next && typeof window !== "undefined") window.speechSynthesis?.cancel();
+      try {
+        localStorage.setItem("naksha_voice_guidance_enabled", String(next));
+      } catch (error) {
+        console.error("Failed to save voice guidance preference:", error);
+      }
+      return next;
+    });
+  };
+
+  const speakInstruction = (text: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      console.warn("Voice guidance: speechSynthesis unavailable in this browser.");
+      return;
+    }
+    const synth = window.speechSynthesis;
+
+    const doSpeak = () => {
+      synth.resume();
+      synth.cancel();
+      const voices = synth.getVoices();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const englishVoice = voices.find((v) => v.lang?.toLowerCase().startsWith("en"));
+      if (englishVoice) utterance.voice = englishVoice;
+      utterance.onerror = (e) => {
+        if (e.error === "interrupted" || e.error === "canceled") return;
+        console.error("Voice guidance failed to speak:", e.error);
+      };
+      synth.speak(utterance);
+    };
+
+    if (synth.getVoices().length > 0) {
+      doSpeak();
+      return;
+    }
+
+    const handleVoicesChanged = () => {
+      synth.removeEventListener("voiceschanged", handleVoicesChanged);
+      doSpeak();
+    };
+    synth.addEventListener("voiceschanged", handleVoicesChanged);
+    setTimeout(() => {
+      synth.removeEventListener("voiceschanged", handleVoicesChanged);
+      doSpeak();
+    }, 500);
+  };
+
+  const lastAnnouncedInstructionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!navigationState) {
+      lastAnnouncedInstructionRef.current = null;
+      return;
+    }
+    if (!voiceEnabled) return;
+    if (navigationState.currentInstruction === lastAnnouncedInstructionRef.current) return;
+    lastAnnouncedInstructionRef.current = navigationState.currentInstruction;
+    speakInstruction(navigationState.currentInstruction);
+  }, [navigationState, voiceEnabled]);
+
+  useEffect(() => {
+    if (!navigationState && typeof window !== "undefined") window.speechSynthesis?.cancel();
+  }, [navigationState]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const [uiTravelMode, setUiTravelMode] = useState<UiTravelModeId>("driving");
+  const travelMode: TravelMode = TRAVEL_MODES.find((m) => m.id === uiTravelMode)?.mode ?? "driving";
+
+  const [originPoint, setOriginPoint] = useState<DirectionsPoint>({ type: "current" });
+  const [originText, setOriginText] = useState("");
+  const [destinationPoint, setDestinationPoint] = useState<DirectionsPoint | null>(null);
+  const [destinationText, setDestinationText] = useState("");
+  const [activeDirectionsField, setActiveDirectionsField] = useState<"origin" | "destination" | null>(null);
+  const [directionsFieldSuggestions, setDirectionsFieldSuggestions] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  const [directionsFieldGeocoding, setDirectionsFieldGeocoding] = useState(false);
+  const directionsFormRef = useRef<HTMLDivElement>(null);
+
+  const DIRECTIONS_RECENTS_KEY = "naksha_recent_directions";
+  const [recentDestinations, setRecentDestinations] = useState<
+    { label: string; lat: number; lon: number }[]
+  >([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DIRECTIONS_RECENTS_KEY);
+      if (raw) setRecentDestinations(JSON.parse(raw));
+    } catch (error) {
+      console.error("Failed to load recent directions:", error);
+    }
+  }, []);
+
+  const addRecentDestination = (dest: { label: string; lat: number; lon: number }) => {
+    setRecentDestinations((prev) => {
+      const next = [dest, ...prev.filter((r) => r.label !== dest.label)].slice(0, 5);
+      try {
+        localStorage.setItem(DIRECTIONS_RECENTS_KEY, JSON.stringify(next));
+      } catch (error) {
+        console.error("Failed to save recent directions:", error);
+      }
+      return next;
+    });
+  };
+
+  const openDirections = () => {
+    setShowDirections(true);
+    setOriginPoint({ type: "current" });
+    setOriginText("");
+    setDestinationPoint(null);
+    setDestinationText("");
+    setActiveDirectionsField("destination");
+    setDirectionsFieldSuggestions([]);
+    setRoutePreview(null);
+    setRouteError(null);
+  };
+
+  const closeDirections = () => {
+    setShowDirections(false);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+    setRoutePreview(null);
+    setRouteError(null);
+    setNavigationState(null);
+    mapViewerRef.current?.stopNavigation();
+  };
+
+  const selectOriginPoint = (point: DirectionsPoint, label: string) => {
+    setOriginPoint(point);
+    setOriginText(label);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+  };
+
+  const selectDestinationPoint = (dest: { label: string; lat: number; lon: number }) => {
+    setDestinationPoint({ type: "place", ...dest });
+    setDestinationText(dest.label);
+    setActiveDirectionsField(null);
+    setDirectionsFieldSuggestions([]);
+    addRecentDestination(dest);
+  };
+
+  const handleSwapDirections = () => {
+    const prevOrigin = originPoint;
+    const prevOriginText = originText;
+    setOriginPoint(destinationPoint ?? { type: "current" });
+    setOriginText(destinationPoint ? destinationText : "");
+    setDestinationPoint(prevOrigin.type === "place" ? prevOrigin : null);
+    setDestinationText(prevOrigin.type === "place" ? prevOriginText : "");
+  };
+
+  useEffect(() => {
+    if (!activeDirectionsField) return;
+    const text = (activeDirectionsField === "origin" ? originText : destinationText).trim();
+    if (text.length < 3) {
+      setDirectionsFieldSuggestions([]);
+      setDirectionsFieldGeocoding(false);
+      return;
+    }
+    setDirectionsFieldGeocoding(true);
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(text)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        setDirectionsFieldSuggestions(await res.json());
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error("Failed to load directions field suggestions:", error);
+      } finally {
+        if (!controller.signal.aborted) setDirectionsFieldGeocoding(false);
+      }
+    }, 400);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [activeDirectionsField, originText, destinationText]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (directionsFormRef.current && !directionsFormRef.current.contains(e.target as Node)) {
+        setActiveDirectionsField(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (!showDirections || !destinationPoint) return;
+    let cancelled = false;
+    (async () => {
+      setRoutePreview(null);
+      setRouteError(null);
+      setRouteLoading(true);
+      let result: Awaited<ReturnType<NonNullable<IndiaMapViewerHandle["getRoutePreview"]>>> | undefined;
+      try {
+        result = await mapViewerRef.current?.getRoutePreview(
+          originPoint,
+          destinationPoint,
+          travelMode,
+          uiTravelMode
+        );
+      } catch (error) {
+        console.error("Directions request failed:", error);
+      }
+      if (cancelled) return;
+      setRouteLoading(false);
+      if (!result || !result.ok) {
+        const reason = result?.reason;
+        setRouteError(
+          reason === "geolocation-denied"
+            ? "Location access is blocked. Allow it in your browser's site settings, then try again."
+            : reason === "geolocation-unavailable"
+              ? "Couldn't determine your current location - check your device's location settings and try again."
+              : "Couldn't find a route between these points - one may be outside Karnataka, which is the only area with directions support right now."
+        );
+        return;
+      }
+      setRoutePreview(result.preview);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showDirections, originPoint, destinationPoint, travelMode, uiTravelMode]);
 
   // "Draw AOI" tool dropdown
   const [showAOIMenu, setShowAOIMenu] = useState(false);
   const [activeAOITool, setActiveAOITool] = useState<AOITool | null>(null);
-  // The last completed drawn AOI (area + geometry), reported by the map viewer; null until
-  // the user finishes drawing a shape.
   const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
   const aoiMenuRef = useRef<HTMLDivElement>(null);
 
-  // Right-click attribute info for the side panel (boundary type + title + rows), reported
-  // by the map viewer; null when no feature is shown.
+  // Attribute panel
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
-  // Whether the attribute panel itself is visible. On mobile (common phone resolutions) a
-  // new feature selection only shows an info chip, and the panel opens when the chip is
-  // tapped; on desktop the panel opens immediately. Initialized from the current screen
-  // size (false on phones) so a first selection never flashes the panel open for a frame
-  // before the effect below closes it. The `typeof window` guard keeps SSR safe; the
-  // server value (false) is irrelevant because nothing renders until a feature is picked.
   const [attributePanelOpen, setAttributePanelOpen] = useState<boolean>(() =>
     typeof window !== "undefined"
       ? window.matchMedia("(min-width: 768px)").matches
@@ -524,16 +733,10 @@ export function ExplorePage() {
 
   useEffect(() => {
     if (!attributeInfo) return;
-    // Each new selection starts in the default state for the current screen size:
-    // open on desktop (md and up), closed (chip-only) on mobile.
     setAttributePanelOpen(window.matchMedia("(min-width: 768px)").matches);
   }, [attributeInfo]);
 
-  // Whether the export-format picker (opened from the attribute panel's "Export" action) is
-  // showing. It reads geometry/properties off `attributeInfo`, so it closes itself whenever
-  // the panel closes rather than tracking its own copy of the feature.
   const [exportModalOpen, setExportModalOpen] = useState(false);
-  // Controls the export modal for a drawn AOI (separate from the attribute-panel export).
   const [aoiExportOpen, setAoiExportOpen] = useState(false);
   const [aoiOwners, setAoiOwners] = useState<
     | { status: "idle" }
@@ -542,9 +745,6 @@ export function ExplorePage() {
     | { status: "ok"; rows: RtcOwner[] }
   >({ status: "idle" });
 
-  // Owner names for the selected cadastral parcel. They aren't in the cadastral GeoJSON, so
-  // they're fetched from Bhoomi (via /api/land-records/rtc) once a parcel is selected - a
-  // slow, multi-step lookup against the state portal, hence the explicit loading state.
   const [owners, setOwners] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
@@ -574,7 +774,6 @@ export function ExplorePage() {
       }
     })();
     return () => controller.abort();
-    // A parcel object is rebuilt on every right-click, so key the effect on its values.
   }, [
     parcel?.district,
     parcel?.taluk,
@@ -585,21 +784,18 @@ export function ExplorePage() {
     parcel?.hissa,
   ]);
 
-  // Fetch Bhoomi owner details for a drawn AOI's cadastral parcel when the export
-  // modal opens. The parcel key is extracted from the intersecting cadastral layer
-  // in IndiaMapViewer.completeAOI.
   useEffect(() => {
     if (!aoiExportOpen || !aoiInfo?.aoiParcel) {
       setAoiOwners({ status: "idle" });
       return;
     }
-    const parcel = aoiInfo.aoiParcel;
+    const aoiP = aoiInfo.aoiParcel;
     const controller = new AbortController();
     setAoiOwners({ status: "loading" });
     (async () => {
       try {
         const res = await fetch(
-          `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
+          `/api/land-records/rtc?${new URLSearchParams({ ...aoiP }).toString()}`,
           { signal: controller.signal },
         );
         const data = await res.json();
@@ -614,22 +810,23 @@ export function ExplorePage() {
       }
     })();
     return () => controller.abort();
-  }, [aoiExportOpen, aoiInfo?.aoiParcel?.district, aoiInfo?.aoiParcel?.taluk, aoiInfo?.aoiParcel?.hobli, aoiInfo?.aoiParcel?.village, aoiInfo?.aoiParcel?.survey, aoiInfo?.aoiParcel?.surnoc, aoiInfo?.aoiParcel?.hissa]);
+  }, [
+    aoiExportOpen,
+    aoiInfo?.aoiParcel?.district,
+    aoiInfo?.aoiParcel?.taluk,
+    aoiInfo?.aoiParcel?.hobli,
+    aoiInfo?.aoiParcel?.village,
+    aoiInfo?.aoiParcel?.survey,
+    aoiInfo?.aoiParcel?.surnoc,
+    aoiInfo?.aoiParcel?.hissa,
+  ]);
 
-  // Real state/district/taluk names, fetched once on mount, that back the dynamic
-  // suggestion categories below (as opposed to the hardcoded Bengaluru ward/zone lists).
   const [statesList, setStatesList] = useState<string[]>([]);
-  const [districtsList, setDistrictsList] = useState<string[]>([]); // Karnataka only, for now
+  const [districtsList, setDistrictsList] = useState<string[]>([]);
   const [taluksList, setTaluksList] = useState<{ district: string; taluk: string }[]>([]);
-  // All-Karnataka hobli index (district/taluk/hobli triples from
-  // /data/karnataka_hoblis.json), so a bare hobli name can suggest every matching hobli
-  // across the state - not just the ones in the currently-selected taluk.
   const [hoblisList, setHoblisList] = useState<
     { district: string; taluk: string; hobli: string }[]
   >([]);
-  // All-Karnataka village index (district/taluk/hobli/village quadruples from
-  // /data/karnataka_villages.json), so a bare village name can suggest every matching
-  // village across the state. ~27k villages, loaded once on mount.
   const [villagesList, setVillagesList] = useState<
     { district: string; taluk: string; hobli: string; village: string }[]
   >([]);
@@ -676,9 +873,7 @@ export function ExplorePage() {
     (async () => {
       try {
         const res = await fetch("/data/karnataka_taluks.json");
-        if (res.ok) {
-          setTaluksList(await res.json());
-        }
+        if (res.ok) setTaluksList(await res.json());
       } catch (error) {
         console.error("Failed to load Karnataka taluk names for search suggestions:", error);
       }
@@ -687,9 +882,7 @@ export function ExplorePage() {
     (async () => {
       try {
         const res = await fetch("/data/karnataka_hoblis.json");
-        if (res.ok) {
-          setHoblisList(await res.json());
-        }
+        if (res.ok) setHoblisList(await res.json());
       } catch (error) {
         console.error("Failed to load Karnataka hobli names for search suggestions:", error);
       }
@@ -698,9 +891,7 @@ export function ExplorePage() {
     (async () => {
       try {
         const res = await fetch("/data/karnataka_villages.json");
-        if (res.ok) {
-          setVillagesList(await res.json());
-        }
+        if (res.ok) setVillagesList(await res.json());
       } catch (error) {
         console.error("Failed to load Karnataka village names for search suggestions:", error);
       }
@@ -723,8 +914,6 @@ export function ExplorePage() {
       })),
     [taluksList],
   );
-  // One entry per hobli, labeled with its full "State, District, Taluk, Hobli" chain so a
-  // bare hobli name lists every matching hobli across the state (Kasaba has ~95 of them).
   const hobliEntries = useMemo<LocationEntry[]>(
     () =>
       hoblisList.map(({ district, taluk, hobli }) => ({
@@ -733,8 +922,6 @@ export function ExplorePage() {
       })),
     [hoblisList],
   );
-  // One entry per village, labeled with its full "State, District, Taluk, Hobli, Village"
-  // chain so a bare village name lists every matching village across the state.
   const villageEntries = useMemo<LocationEntry[]>(
     () =>
       villagesList.map(({ district, taluk, hobli, village }) => ({
@@ -744,7 +931,6 @@ export function ExplorePage() {
     [villagesList],
   );
 
-  // Close the suggestions dropdown when clicking anywhere outside the search bar.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchWrapperRef.current && !searchWrapperRef.current.contains(e.target as Node)) {
@@ -755,7 +941,6 @@ export function ExplorePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Close the "Draw AOI" tool dropdown when clicking anywhere outside it.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (aoiMenuRef.current && !aoiMenuRef.current.contains(e.target as Node)) {
@@ -766,9 +951,6 @@ export function ExplorePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Close the Filters panel when clicking anywhere outside it - the map, the search
-  // bar (input, voice icon, profile icon) all dismiss it. The hamburger toggle itself
-  // is excluded so it keeps toggling instead of close-then-reopen.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -780,18 +962,12 @@ export function ExplorePage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // The map's current state/district/taluk drill-down (reported by IndiaMapViewer), used
-  // to scope bare hobli-name suggestions to the taluk the user is currently looking at.
   const [drillContext, setDrillContext] = useState<{
     state: string;
     district: string;
     taluk: string;
   } | null>(null);
 
-  // Hobli names are fetched on demand from the taluk-hoblies API (no static list exists),
-  // keyed by "district|taluk", to back the hobli search suggestions - both the 4-part
-  // "Karnataka, <district>, <taluk>, ..." queries and bare hobli names while a taluk is
-  // selected on the map.
   const [hobliesByTaluk, setHobliesByTaluk] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
@@ -807,13 +983,12 @@ export function ExplorePage() {
       district = parts[1];
       taluk = parts[2];
     } else if (parts.length === 1 && parts[0] && drillContext) {
-      // Bare hobli-name query - scope it to the map's currently-selected taluk.
       district = drillContext.district;
       taluk = drillContext.taluk;
     }
     if (!district || !taluk) return;
     const key = `${district}|${taluk}`;
-    if (hobliesByTaluk[key]) return; // already fetched
+    if (hobliesByTaluk[key]) return;
     let cancelled = false;
     (async () => {
       try {
@@ -847,26 +1022,20 @@ export function ExplorePage() {
     };
   }, [searchQuery, hobliesByTaluk, drillContext]);
 
-  // Generate search suggestions based on current query
   useEffect(() => {
     if (!searchQuery) {
-      setSearchSuggestions([]);
+      setLocalSuggestions([]);
       setShowSuggestions(false);
       return;
     }
+    if (suppressSuggestionsRef.current) return;
 
     const suggestions: { category: string; items: string[] }[] = [];
-
-    // The country itself is always searchable ("India") - it isn't a state, so it
-    // would otherwise never match the state/district/taluk lists below.
     const normalizedQuery = searchQuery.trim().toLowerCase();
     if (normalizedQuery && "india".includes(normalizedQuery)) {
       suggestions.push({ category: "Country", items: ["India"] });
     }
 
-    // Real state/district/taluk matches take priority over the static Bengaluru lists.
-    // All are ranked by the geosearch engine: exact > prefix > token-prefix >
-    // substring > bounded fuzzy, with aliases (blr/bangalore/bengaluru) expanded.
     const boostLabel = drillContext?.district
       ? `Karnataka, ${drillContext.district}${drillContext.taluk ? `, ${drillContext.taluk}` : ""}`
       : undefined;
@@ -890,15 +1059,8 @@ export function ExplorePage() {
     });
     if (talukMatches.length > 0) suggestions.push({ category: "Taluks", items: talukMatches });
 
-    // Hobli suggestions - labeled with the full "State, District, Taluk, Hobli" chain.
-    // A bare hobli name matches against the all-Karnataka hobli index so EVERY matching
-    // hobli across the state is offered (e.g. "kasaba" lists all ~95 Kasaba hoblies,
-    // each with its own district/taluk).
     const queryParts = searchQuery.split(",").map((p) => p.trim());
     if (queryParts.length === 1 && queryParts[0]) {
-      // Match against the hobli name itself (the leaf), not the whole chain - the
-      // state/district/taluk categories already cover chain-queries, and matching the
-      // full label would flood this category with every "Karnataka, ..." entry.
       const hobliQuery = queryParts[0].toLowerCase();
       const hobliMatches = filterLocationEntries(hobliEntries, hobliQuery, {
         boostLabel,
@@ -908,9 +1070,6 @@ export function ExplorePage() {
       if (hobliMatches.length > 0)
         suggestions.push({ category: "Hoblies", items: hobliMatches });
 
-      // Villages: same treatment, matching the village name itself (leaf). A 1-char
-      // query would match tens of thousands of villages, so require 2+ chars and cap the
-      // list so the dropdown doesn't freeze.
       if (hobliQuery.length >= 2) {
         const villageMatches = filterLocationEntries(villageEntries, hobliQuery, {
           boostLabel,
@@ -921,8 +1080,6 @@ export function ExplorePage() {
           suggestions.push({ category: "Villages", items: villageMatches });
       }
     } else if (queryParts.length >= 4 && queryParts[0]?.toLowerCase() === "karnataka") {
-      // Full "Karnataka, <district>, <taluk>, <hobli>, ..." chain - match the 5th
-      // segment (the village name) against the entries whose chain matches parts 1-3.
       const chainDistrict = queryParts[1] ?? "";
       const chainTaluk = queryParts[2] ?? "";
       const chainHobli = queryParts[3] ?? "";
@@ -942,8 +1099,6 @@ export function ExplorePage() {
       if (villageMatches.length > 0)
         suggestions.push({ category: "Villages", items: villageMatches });
     } else if (queryParts.length >= 3 && queryParts[0]?.toLowerCase() === "karnataka") {
-      // Full "Karnataka, <district>, <taluk>, ..." chain - fetch that taluk's hoblies on
-      // demand (fresh from the actual boundary data) and match the 4th segment.
       const hobliDistrict = queryParts[1] ?? "";
       const hobliTaluk = queryParts[2] ?? "";
       const hobliNames = hobliesByTaluk[`${hobliDistrict}|${hobliTaluk}`];
@@ -963,7 +1118,6 @@ export function ExplorePage() {
       }
     }
 
-    // Search across the remaining (static, Bengaluru-specific) categories
     Object.keys(PLACE_SUGGESTIONS).forEach((category) => {
       const filtered = filterSuggestions(searchQuery, category);
       if (filtered.length > 0) {
@@ -974,8 +1128,6 @@ export function ExplorePage() {
       }
     });
 
-    // Merge categories that share a label (e.g. the dynamic all-Karnataka "Villages" and
-    // the static Bengaluru "Villages") so the dropdown never renders duplicate keys.
     const merged: { category: string; items: string[] }[] = [];
     for (const cat of suggestions) {
       const existing = merged.find((m) => m.category === cat.category);
@@ -983,8 +1135,8 @@ export function ExplorePage() {
       else merged.push(cat);
     }
 
-    setSearchSuggestions(merged);
-    setShowSuggestions(merged.length > 0);
+    setLocalSuggestions(merged);
+    setShowSuggestions(true);
     setSelectedSuggestionIndex(-1);
   }, [
     searchQuery,
@@ -995,12 +1147,58 @@ export function ExplorePage() {
     villageEntries,
     hobliesByTaluk,
     drillContext,
+    placeSuggestions.length,
   ]);
 
-  // Handle keyboard navigation for suggestions
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!showSuggestions) return;
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 3) {
+      setPlaceSuggestions([]);
+      setGeocoding(false);
+      return;
+    }
+    if (suppressSuggestionsRef.current) return;
 
+    setGeocoding(true);
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const results = (await res.json()) as { label: string; lat: number; lon: number }[];
+        setPlaceSuggestions(results);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error("Failed to load place search suggestions:", error);
+      } finally {
+        if (!controller.signal.aborted) setGeocoding(false);
+      }
+    }, 400);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (showSuggestions && selectedSuggestionIndex >= 0) {
+        const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
+        if (suggestion) selectSuggestion(suggestion);
+      } else if (showSuggestions && getTotalSuggestions() > 0) {
+        const suggestion = getSuggestionByIndex(0);
+        if (suggestion) selectSuggestion(suggestion);
+      } else {
+        setShowSuggestions(false);
+        mapViewerRef.current?.search(searchQuery);
+      }
+      return;
+    }
+
+    if (!showSuggestions) return;
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
@@ -1009,17 +1207,6 @@ export function ExplorePage() {
       case "ArrowUp":
         e.preventDefault();
         setSelectedSuggestionIndex((prev) => Math.max(prev - 1, -1));
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectedSuggestionIndex >= 0) {
-          const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
-          if (suggestion) {
-            setSearchQuery(suggestion);
-            setShowSuggestions(false);
-            mapViewerRef.current?.search(suggestion);
-          }
-        }
         break;
       case "Escape":
         setShowSuggestions(false);
@@ -1042,31 +1229,33 @@ export function ExplorePage() {
     return null;
   };
 
-  const handleSuggestionClick = (suggestion: string) => {
+  const selectSuggestion = (suggestion: string) => {
+    suppressSuggestionsRef.current = true;
     setSearchQuery(suggestion);
     setShowSuggestions(false);
-    mapViewerRef.current?.search(suggestion);
+    const place = placeSuggestions.find((p) => p.label === suggestion);
+    if (place) {
+      mapViewerRef.current?.flyToPlace(place.lat, place.lon, place.label);
+    } else {
+      mapViewerRef.current?.search(suggestion);
+    }
   };
+
+  const handleSuggestionClick = (suggestion: string) => selectSuggestion(suggestion);
 
   const clearSearch = () => {
     setSearchQuery("");
     setShowSuggestions(false);
+    setPlaceSuggestions([]);
     mapViewerRef.current?.search("");
   };
 
-  // Voice search (mobile only): the spoken place name is transcribed live into the search
-  // bar, and the normal suggestion dropdown then appears so the user can confirm the text
-  // before running the search. Uses the Web Speech API (Chrome/Android WebView support it).
   const stopVoiceSearch = () => {
     recognitionRef.current?.stop();
     recognitionRef.current = null;
     setIsListening(false);
   };
 
-  // Native app (Capacitor WebView): make sure Android's microphone permission is
-  // granted before the WebView starts speech recognition - otherwise the WebView
-  // reports "not-allowed" even after the user granted access at the consent screen.
-  // On the web this resolves immediately without doing anything.
   const ensureNativeVoicePermission = (): Promise<boolean> => {
     if (typeof window === "undefined") return Promise.resolve(true);
     const w = window as unknown as {
@@ -1083,7 +1272,7 @@ export function ExplorePage() {
     const ensure = w.Capacitor.Plugins?.NativePermissions?.ensureVoicePermission;
     return (ensure?.() ?? Promise.resolve({ granted: true }))
       .then((r) => r.granted !== false)
-      .catch(() => true); // plugin missing/failed - let the WebView's own flow decide
+      .catch(() => true);
   };
 
   const toggleVoiceSearch = async () => {
@@ -1106,8 +1295,6 @@ export function ExplorePage() {
     recognition.interimResults = true;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
-    // Live transcription: every interim result updates the input as the user speaks, and
-    // the final result stays put - exactly like typing it in by hand.
     recognition.onresult = (event) => {
       const transcript = Array.from(event.results)
         .slice(event.resultIndex)
@@ -1121,7 +1308,6 @@ export function ExplorePage() {
       setIsListening(false);
     };
     recognition.onerror = (event) => {
-      // "no-speech" / "aborted" fire on normal stops; only surface permission problems.
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         alert("Microphone access was denied. Please allow microphone access to use voice search.");
       }
@@ -1131,17 +1317,13 @@ export function ExplorePage() {
     try {
       recognition.start();
     } catch {
-      // Double-start can throw in some browsers; keep the button usable.
       recognitionRef.current = null;
       setIsListening(false);
     }
   };
 
-  // Stop any in-flight recognition when the page unmounts so the mic indicator never
-  // stays stuck on.
   useEffect(() => () => recognitionRef.current?.abort(), []);
 
-  // "Type" filter: Bengaluru's region subfolders, each expandable to show/load its files
   const [bengaluruFileTree, setBengaluruFileTree] = useState<Record<string, string[]> | null>(null);
   const [expandedRegions, setExpandedRegions] = useState<Record<string, boolean>>({});
   const [loadedExtraFiles, setLoadedExtraFiles] = useState<Record<string, boolean>>({});
@@ -1174,8 +1356,6 @@ export function ExplorePage() {
 
   const regionFromKey = (key: string) => key.match(/Bengaluru\/([^/]+)\//i)?.[1];
 
-  // Keeps the Type filter's checkboxes/expansion in sync when a search (e.g.
-  // "Bengaluru, Central, Ward Boundary") loads a file directly, bypassing the checkboxes.
   const handleExtraFileToggledFromSearch = async (key: string, visible: boolean) => {
     setLoadedExtraFiles((prev) => ({ ...prev, [key]: visible }));
 
@@ -1191,7 +1371,6 @@ export function ExplorePage() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gray-100">
-      {/* Main Content - map fills the full page, everything else floats on top */}
       <main className="relative min-h-0 flex-1 overflow-hidden">
         <IndiaMapViewer
           ref={mapViewerRef}
@@ -1202,189 +1381,518 @@ export function ExplorePage() {
           onDrawingToolChange={setActiveAOITool}
           onAttributeInfo={setAttributeInfo}
           onDrillContextChange={setDrillContext}
+          onLiveLocationChange={(active) => setLiveLocationState(active ? "active" : "off")}
+          onNavigationUpdate={setNavigationState}
+          onRequestDirections={(lat, lon, label) => {
+            setShowDirections(true);
+            setOriginPoint({ type: "current" });
+            setOriginText("");
+            setDestinationPoint({ type: "place", label, lat, lon });
+            setDestinationText(label);
+            setActiveDirectionsField(null);
+            addRecentDestination({ label, lat, lon });
+          }}
+          onRouteAlternativeSelected={(index) =>
+            setRoutePreview((prev) => (prev ? { ...prev, selectedIndex: index } : prev))
+          }
+          findMyWayActive={selectedBoundaryLayer === "find_my_way"}
+          onPlaceLabelsVisibleChange={setPlaceLabelsVisible}
         />
 
-        {/* Floating search bar */}
-        <div ref={aoiMenuRef} className="absolute left-4 right-4 top-4 z-20">
-        <div className="flex items-center gap-3">
-          {/* Search Bar - takes the full width on mobile (common phone resolutions) where
-              the Draw AOI and User Profile controls are hidden. */}
-          {/* min-w-0 is critical: without it the wrapper's min-width defaults to auto,
-              so if the input ever fails to shrink (Android WebView quirk) the wrapper
-              grows with the input's intrinsic width and the bar visibly widens while
-              typing. min-w-0 lets the wrapper stay put and clip inside instead. */}
-          <div ref={searchWrapperRef} className="relative min-w-0 max-w-md flex-1">
-            {/* Taller on mobile (common phone resolutions) for easier touch; the
-                compact desktop size is restored at md and up. On mobile the profile
-                avatar is absolutely positioned over the pill's right edge (and space
-                reserved via pr-14) so it never participates in the flex layout - this
-                keeps the pill width constant no matter what the user types, even on
-                Android WebViews that refuse to shrink the input. */}
-            {/* overflow-hidden guarantees the pill never visually grows even if some
-                engine refuses to shrink the input - content clips at the pill edge. */}
-            <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
-              <button
-                ref={filtersToggleRef}
-                onClick={() => setShowFilters((prev) => !prev)}
-                className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
-                  showFilters
-                    ? "bg-gray-100 text-obsidian-graphite"
-                    : "text-gray-500 hover:bg-gray-100"
-                }`}
-                aria-label="Toggle filters"
-                aria-pressed={showFilters}
-              >
-                <Menu className="h-5 w-5 md:h-4 md:w-4" />
-              </button>
-              <input
-                type="text"
-                // size={1} collapses the input's intrinsic min-content width (the
-                // default size=20 is what Android WebViews fall back to when they
-                // ignore min-width:0, inflating the bar). flex-1 + min-w-0 then grow
-                // it to fill the remaining space normally.
-                size={1}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    if (selectedSuggestionIndex >= 0) {
-                      const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
-                      if (suggestion) {
-                        setSearchQuery(suggestion);
-                        setShowSuggestions(false);
-                        mapViewerRef.current?.search(suggestion);
-                      }
-                    } else {
-                      setShowSuggestions(false);
-                      mapViewerRef.current?.search(searchQuery);
-                    }
-                  } else {
-                    handleKeyDown(e);
-                  }
-                }}
-                onFocus={() =>
-                  searchQuery && searchSuggestions.length > 0 && setShowSuggestions(true)
-                }
-                placeholder="Search location, village, taluk, district..."
-                role="combobox"
-                aria-expanded={showSuggestions}
-                aria-autocomplete="list"
-                aria-controls="search-suggestions-listbox"
-                className="min-w-0 flex-1 bg-transparent py-1.5 text-base md:py-1 md:text-sm focus:outline-none"
-              />
-              {searchQuery && (
-                <button
-                  onClick={clearSearch}
-                  className="flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:p-2"
-                  aria-label="Clear search"
-                >
-                  <X className="h-5 w-5 md:h-4 md:w-4" />
-                </button>
-              )}
-              <button
-                onClick={() => {
-                  setShowSuggestions(false);
-                  mapViewerRef.current?.search(searchQuery);
-                }}
-                className="hidden flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:flex md:p-2"
-                aria-label="Search"
-              >
-                <Search className="h-5 w-5 md:h-4 md:w-4" />
-              </button>
-              {/* Voice search icon - mobile only (common phone resolutions), sitting
-                  just left of the profile avatar. Absolutely positioned (outside the
-                  flex flow) so typing never moves it; the pill's pr-28 reserves its
-                  space. While listening it turns red so the state is obvious. */}
-              <button
-                onClick={toggleVoiceSearch}
-                className={`absolute right-14 top-1/2 -translate-y-1/2 rounded-full p-2.5 transition-colors md:hidden ${
-                  isListening
-                    ? "bg-red-50 text-red-500"
-                    : "text-gray-500 hover:bg-gray-100"
-                }`}
-                aria-label={isListening ? "Stop voice search" : "Search by voice"}
-                aria-pressed={isListening}
-              >
-                <Mic className="h-5 w-5" />
-              </button>
-              {/* User Profile replaces the search icon on mobile (common phone
-                  resolutions); desktop keeps the search icon in the pill. Absolutely
-                  positioned over the pill's right edge (outside the flex flow) so the
-                  pill's width can't change while typing. The menu is a fixed overlay
-                  that matches the search bar's bounds. Opening the profile menu closes
-                  the Filters panel so the two fixed overlays never stack. */}
-              {/* No transform here on purpose: a transform (e.g. -translate-y-1/2)
-                  would make this wrapper the containing block for the menu's `fixed`
-                  positioning, collapsing it to a sliver. Centering is done with
-                  top-1/2 + a negative half-height margin (-mt-5 = half of the 40px
-                  avatar), which keeps the exact same position with no transform, so
-                  the fixed menu anchors to the viewport and spans the search bar's
-                  width. */}
-              <div className="absolute right-2 top-1/2 -mt-5 md:hidden">
-                <UserProfile
-                  onMenuToggle={(open) => {
-                    if (open) setShowFilters(false);
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Suggestions dropdown */}
-            {showSuggestions && searchSuggestions.length > 0 && (
-              <div
-                id="search-suggestions-listbox"
-                role="listbox"
-                className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-lg"
-              >
-                {searchSuggestions.map((cat, catIdx) => {
-                  const offset = searchSuggestions
-                    .slice(0, catIdx)
-                    .reduce((sum, c) => sum + c.items.length, 0);
-                  return (
-                    <div key={cat.category}>
-                      <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-                        {cat.category}
+        {/* Floating search / Directions bar */}
+        {/* items-start (not items-center): this row's height stretches to match its tallest
+            child (the directions panel, which grows tall once alternatives/steps are shown) -
+            items-center would vertically center every other child (Locate, Draw AOI, profile)
+            within that full height, visibly pushing them down away from the top edge once the
+            panel got tall. items-start pins every child to the top instead, independent of
+            how tall its neighbors are. */}
+        <div className="pointer-events-none absolute left-4 right-4 top-4 z-20 flex items-start gap-3">
+          {showDirections ? (
+            <div
+              ref={directionsFormRef}
+              className="pointer-events-auto relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-md"
+            >
+              {navigationState ? (
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-3">
+                      <Navigation className="mt-0.5 h-6 w-6 flex-shrink-0 text-atlas-cobalt" />
+                      <div>
+                        <p className="text-base font-semibold leading-snug text-slate-900">
+                          {navigationState.currentInstruction}
+                        </p>
+                        {!navigationState.arrived && (
+                          <p className="mt-0.5 text-xs text-gray-500">
+                            in {formatDistance(navigationState.distanceToNextTurnMeters)}
+                          </p>
+                        )}
                       </div>
-                      {cat.items.map((item, i) => {
-                        const idx = offset + i;
-                        const isActive = idx === selectedSuggestionIndex;
-                        return (
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={toggleVoiceEnabled}
+                        aria-label={voiceEnabled ? "Mute voice guidance" : "Unmute voice guidance"}
+                        aria-pressed={voiceEnabled}
+                        className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        {voiceEnabled ? (
+                          <Volume2 className="h-4 w-4" />
+                        ) : (
+                          <VolumeX className="h-4 w-4" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeDirections}
+                        aria-label="Stop navigation"
+                        className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {navigationState.nextInstruction && (
+                    <p className="mt-2 truncate border-t border-gray-100 pt-2 text-xs text-gray-400">
+                      Then {navigationState.nextInstruction}
+                    </p>
+                  )}
+                  {!navigationState.arrived && (
+                    <p className="mt-2 text-sm text-gray-600">
+                      {formatDistance(navigationState.distanceRemainingMeters)} ·{" "}
+                      {formatDuration(navigationState.durationRemainingSeconds)} to{" "}
+                      <span className="font-medium">{navigationState.destinationLabel}</span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-2">
+                    {TRAVEL_MODES.map(({ id, mode, label, Icon }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setUiTravelMode(id)}
+                        aria-label={label}
+                        aria-pressed={uiTravelMode === id}
+                        title={id === "motorcycle" ? `${label} (uses ${mode} routing - no dedicated motorcycle data)` : label}
+                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
+                          uiTravelMode === id
+                            ? "bg-atlas-cobalt text-white"
+                            : "text-gray-500 hover:bg-gray-100"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </button>
+                    ))}
+                    <div className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={closeDirections}
+                      aria-label="Close directions"
+                      className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                    >
+                      <X className="h-5 w-5 md:h-4 md:w-4" />
+                    </button>
+                  </div>
+
+                  <div className="relative h-0.5 overflow-hidden bg-gray-100">
+                    {routeLoading && (
+                      <div className="directions-loading-bar absolute inset-y-0 w-1/3 bg-atlas-cobalt" />
+                    )}
+                  </div>
+
+                  <div className="relative px-3 py-3">
+                    <div className="pointer-events-none absolute bottom-[34px] left-[26px] top-[34px] flex flex-col items-center justify-between">
+                      {[0, 1, 2].map((i) => (
+                        <span key={i} className="h-1 w-1 rounded-full bg-gray-300" />
+                      ))}
+                    </div>
+
+                    <div
+                      className={`flex items-center gap-2 rounded-full border bg-white px-3 py-2 transition-colors ${
+                        activeDirectionsField === "origin"
+                          ? "border-teal-500 ring-1 ring-teal-500"
+                          : "border-gray-200"
+                      }`}
+                    >
+                      <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full border-2 border-gray-400" />
+                      <input
+                        type="text"
+                        value={originText}
+                        onChange={(e) => setOriginText(e.target.value)}
+                        onFocus={() => setActiveDirectionsField("origin")}
+                        placeholder="Choose starting point, or click on the map"
+                        className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+                      />
+                      <Search className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                    </div>
+
+                    <div className="h-2" />
+
+                    <div
+                      className={`flex items-center gap-2 rounded-full border bg-white px-3 py-2 transition-colors ${
+                        activeDirectionsField === "destination"
+                          ? "border-teal-500 ring-1 ring-teal-500"
+                          : "border-gray-200"
+                      }`}
+                    >
+                      <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-red-500" />
+                      <input
+                        type="text"
+                        value={destinationText}
+                        onChange={(e) => setDestinationText(e.target.value)}
+                        onFocus={() => setActiveDirectionsField("destination")}
+                        placeholder="Choose destination"
+                        className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleSwapDirections}
+                      aria-label="Swap starting point and destination"
+                      className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm hover:bg-gray-50"
+                    >
+                      <ArrowUpDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  {activeDirectionsField && (
+                    <div className="max-h-64 overflow-y-auto border-t border-gray-100">
+                      {activeDirectionsField === "origin" && !originText.trim() && (
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectOriginPoint({ type: "current" }, "Your location")}
+                          className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          <LocateFixed className="h-3.5 w-3.5 flex-shrink-0 text-atlas-cobalt" />
+                          Your location
+                        </button>
+                      )}
+                      {(activeDirectionsField === "origin" ? originText : destinationText).trim().length < 3 &&
+                        recentDestinations.map((r, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() =>
+                              activeDirectionsField === "origin"
+                                ? selectOriginPoint({ type: "place", ...r }, r.label)
+                                : selectDestinationPoint(r)
+                            }
+                            className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                          >
+                            <Clock className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                            <span className="truncate">{r.label}</span>
+                          </button>
+                        ))}
+                      {(activeDirectionsField === "origin" ? originText : destinationText).trim().length >= 3 &&
+                        (directionsFieldGeocoding ? (
+                          <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400">
+                            <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-gray-500" />
+                            Searching...
+                          </div>
+                        ) : directionsFieldSuggestions.length === 0 ? (
+                          <div className="px-4 py-3 text-sm text-gray-400">No results found</div>
+                        ) : (
+                          directionsFieldSuggestions.map((s, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() =>
+                                activeDirectionsField === "origin"
+                                  ? selectOriginPoint({ type: "place", ...s }, s.label)
+                                  : selectDestinationPoint(s)
+                              }
+                              className="flex w-full items-start gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                            >
+                              <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                              <span className="truncate">{s.label}</span>
+                            </button>
+                          ))
+                        ))}
+                    </div>
+                  )}
+
+                  {destinationPoint && (
+                    <div className="border-t border-gray-100 p-3">
+                      {routeLoading && (
+                        <p className="text-sm text-gray-500">Getting directions...</p>
+                      )}
+                      {routeError && <p className="text-sm text-red-600">{routeError}</p>}
+
+                      {routePreview && (
+                        <div>
+                          <div className="space-y-1.5">
+                            {routePreview.alternatives.map((alt, i) => {
+                              const selected = i === routePreview.selectedIndex;
+                              return (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => {
+                                    mapViewerRef.current?.selectRouteAlternative(i);
+                                    setRoutePreview((prev) => (prev ? { ...prev, selectedIndex: i } : prev));
+                                  }}
+                                  className={`flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                                    selected
+                                      ? "border-atlas-cobalt bg-atlas-cobalt/5"
+                                      : "border-gray-100 hover:bg-gray-50"
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-slate-900">
+                                      {formatDuration(alt.durationSeconds)}
+                                      {i === 0 && (
+                                        <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                                          Best
+                                        </span>
+                                      )}
+                                    </p>
+                                    <p className="truncate text-xs text-gray-500">
+                                      {formatDistance(alt.distanceMeters)}
+                                      {alt.summary ? ` · ${alt.summary}` : ""}
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div className="mt-2 max-h-48 overflow-y-auto rounded-xl border border-gray-100">
+                            {routePreview.alternatives[routePreview.selectedIndex]?.steps.map((step, i) => (
+                              <div
+                                key={i}
+                                className="border-b border-gray-50 px-3 py-2 text-xs text-gray-600 last:border-b-0"
+                              >
+                                {step.instruction}
+                                <span className="ml-1 text-gray-400">
+                                  ({formatDistance(step.distanceMeters)})
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-3 px-1">
+                            <div className="min-w-0">
+                              <p className="text-lg font-semibold text-slate-900">
+                                {formatDuration(
+                                  routePreview.alternatives[routePreview.selectedIndex]?.durationSeconds ?? 0
+                                )}
+                              </p>
+                              <p className="truncate text-xs text-gray-500">
+                                {formatDistance(
+                                  routePreview.alternatives[routePreview.selectedIndex]?.distanceMeters ?? 0
+                                )}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => mapViewerRef.current?.startNavigation()}
+                              aria-label="Start navigation"
+                              className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-atlas-cobalt text-white shadow-md transition-colors hover:bg-atlas-cobalt/90"
+                            >
+                              <Navigation className="h-5 w-5" />
+                            </button>
+                          </div>
+
                           <button
                             type="button"
-                            key={`${cat.category}-${item}-${i}`}
-                            role="option"
-                            aria-selected={isActive}
-                            // Prevents the input's blur (and its click-outside-triggered
-                            // dropdown close) from firing before the click is registered.
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => handleSuggestionClick(item)}
-                            onMouseEnter={() => setSelectedSuggestionIndex(idx)}
-                            className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
-                              isActive
-                                ? "bg-gray-100 text-obsidian-graphite"
-                                : "text-gray-700 hover:bg-gray-50"
-                            }`}
+                            onClick={() => mapViewerRef.current?.startSimulatedNavigation()}
+                            className="mt-1.5 w-full rounded-full border border-gray-200 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
                           >
-                            <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
-                            <span className="truncate">{highlightMatch(item, searchQuery)}</span>
+                            Test drive this route (simulate)
                           </button>
-                        );
-                      })}
+                        </div>
+                      )}
                     </div>
-                  );
-                })}
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
+            <div ref={searchWrapperRef} className="pointer-events-auto relative min-w-0 max-w-md flex-1">
+              <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
+                <button
+                  ref={filtersToggleRef}
+                  onClick={() => setShowFilters((prev) => !prev)}
+                  className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
+                    showFilters
+                      ? "bg-gray-100 text-obsidian-graphite"
+                      : "text-gray-500 hover:bg-gray-100"
+                  }`}
+                  aria-label="Toggle filters"
+                  aria-pressed={showFilters}
+                >
+                  <Menu className="h-5 w-5 md:h-4 md:w-4" />
+                </button>
+                <input
+                  type="text"
+                  size={1}
+                  value={searchQuery}
+                  onChange={(e) => {
+                    suppressSuggestionsRef.current = false;
+                    setSearchQuery(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      if (selectedSuggestionIndex >= 0) {
+                        const suggestion = getSuggestionByIndex(selectedSuggestionIndex);
+                        if (suggestion) {
+                          selectSuggestion(suggestion);
+                        }
+                      } else {
+                        setShowSuggestions(false);
+                        mapViewerRef.current?.search(searchQuery);
+                      }
+                    } else {
+                      handleKeyDown(e);
+                    }
+                  }}
+                  onFocus={() => searchQuery && setShowSuggestions(true)}
+                  placeholder="Search location, village, taluk, district..."
+                  role="combobox"
+                  aria-expanded={showSuggestions}
+                  aria-autocomplete="list"
+                  aria-controls="search-suggestions-listbox"
+                  className="min-w-0 flex-1 bg-transparent py-1.5 text-base focus:outline-none md:py-1 md:text-sm"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={clearSearch}
+                    className="flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:p-2"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-5 w-5 md:h-4 md:w-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowSuggestions(false);
+                    mapViewerRef.current?.search(searchQuery);
+                  }}
+                  className="hidden flex-shrink-0 rounded-full p-2.5 text-gray-500 hover:bg-gray-100 md:flex md:p-2"
+                  aria-label="Search"
+                >
+                  <Search className="h-5 w-5 md:h-4 md:w-4" />
+                </button>
+                <button
+                  onClick={toggleVoiceSearch}
+                  className={`absolute right-14 top-1/2 -translate-y-1/2 rounded-full p-2.5 transition-colors md:hidden ${
+                    isListening
+                      ? "bg-red-50 text-red-500"
+                      : "text-gray-500 hover:bg-gray-100"
+                  }`}
+                  aria-label={isListening ? "Stop voice search" : "Search by voice"}
+                  aria-pressed={isListening}
+                >
+                  <Mic className="h-5 w-5" />
+                </button>
+                <div className="absolute right-2 top-1/2 -mt-5 md:hidden">
+                  <UserProfile
+                    onMenuToggle={(open) => {
+                      if (open) setShowFilters(false);
+                    }}
+                  />
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Spacer to push items to the right (hidden on mobile) */}
+              {showSuggestions && searchQuery.trim() && (
+                <div
+                  id="search-suggestions-listbox"
+                  role="listbox"
+                  className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-gray-100 bg-white shadow-lg"
+                >
+                  {searchSuggestions.length === 0 ? (
+                    geocoding ? (
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400">
+                        <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-gray-500" />
+                        Searching...
+                      </div>
+                    ) : (
+                      <div className="px-4 py-3 text-sm text-gray-400">No results found</div>
+                    )
+                  ) : (
+                    searchSuggestions.map((cat, catIdx) => {
+                      const offset = searchSuggestions
+                        .slice(0, catIdx)
+                        .reduce((sum, c) => sum + c.items.length, 0);
+                      return (
+                        <div key={cat.category}>
+                          <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                            {cat.category}
+                          </div>
+                          {cat.items.map((item, i) => {
+                            const idx = offset + i;
+                            const isActive = idx === selectedSuggestionIndex;
+                            return (
+                              <button
+                                type="button"
+                                key={`${cat.category}-${item}-${i}`}
+                                role="option"
+                                aria-selected={isActive}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => handleSuggestionClick(item)}
+                                onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                                className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
+                                  isActive
+                                    ? "bg-gray-100 text-obsidian-graphite"
+                                    : "text-gray-700 hover:bg-gray-50"
+                                }`}
+                              >
+                                <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+                                <span className="truncate">{highlightMatch(item, searchQuery)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Directions Button */}
+          <button
+            type="button"
+            onClick={() => (showDirections ? closeDirections() : openDirections())}
+            aria-label="Directions"
+            aria-pressed={showDirections}
+            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+              showDirections
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Navigation className="h-4 w-4" />
+          </button>
+
           <div className="hidden flex-1 md:block" />
 
-          {/* Draw AOI Button - hidden on mobile (common phone resolutions) */}
-          <div className="relative hidden md:block">
-            {/* Pill container: a "open menu" button plus, while a tool is active, a separate
-                close button to deselect it - kept as siblings so no button nests inside a
-                button (valid HTML, and clicking the X never toggles the menu). */}
+          {/* My Location Button */}
+          <button
+            type="button"
+            onClick={handleToggleLiveLocation}
+            aria-label={liveLocationState === "active" ? "Stop tracking my location" : "Show my location"}
+            aria-pressed={liveLocationState !== "off"}
+            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+              liveLocationState === "active"
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <LocateFixed
+              className={`h-4 w-4 ${liveLocationState === "locating" ? "animate-pulse" : ""}`}
+            />
+          </button>
+
+          {/* Desktop Draw AOI Button */}
+          <div ref={aoiMenuRef} className="pointer-events-auto relative hidden md:block">
             <div
               className={`flex items-center overflow-hidden rounded-full border shadow-md transition-colors ${
                 activeAOITool ? "border-atlas-cobalt bg-atlas-cobalt" : "border-gray-200 bg-white"
@@ -1413,8 +1921,6 @@ export function ExplorePage() {
                   <DrawAOIIcon className="h-5 w-5" />
                 )}
                 {activeAOITool ? AOI_TOOLS.find((t) => t.id === activeAOITool)!.label : "Draw AOI"}
-                {/* Chevron spins 180° clockwise when the menu opens, and smoothly back on close.
-                    Hidden while a tool is active - the close button replaces it. */}
                 {!activeAOITool && (
                   <ChevronDown
                     className={`h-4 w-4 transition-transform duration-300 ease-in-out ${
@@ -1424,8 +1930,6 @@ export function ExplorePage() {
                 )}
               </button>
 
-              {/* Close button: shown instead of the chevron while a tool is selected, so the
-                  tool can be deselected (button reverts to "Draw AOI") without opening the menu. */}
               {activeAOITool && (
                 <button
                   type="button"
@@ -1445,8 +1949,6 @@ export function ExplorePage() {
             {showAOIMenu && (
               <div
                 role="menu"
-                // Stretched left-0/right-0 (instead of w-full) so the dropdown, borders
-                // included, is exactly as wide as the button it hangs from
                 className="aoi-menu-in absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
               >
                 {AOI_TOOLS.map(({ id, label, Icon }) => (
@@ -1474,16 +1976,13 @@ export function ExplorePage() {
             )}
           </div>
 
-          {/* User Profile Icon - reads the signed-in user from the session; hidden on
-              mobile (common phone resolutions) so only the search bar stays at the top. */}
-          <div className="hidden md:block">
+          {/* Desktop User Profile */}
+          <div className="pointer-events-auto hidden md:block">
             <UserProfile />
           </div>
         </div>
 
-        {/* Mobile Draw AOI button - round icon below the search bar, aligned right.
-            Visible only on common phone resolutions. On tap it shows a small dropdown
-            with the same AOI tool options as the desktop pill. */}
+        {/* Mobile Draw AOI Button */}
         <div className="absolute right-2 top-[4.5rem] z-20 md:hidden">
           <button
             type="button"
@@ -1535,12 +2034,8 @@ export function ExplorePage() {
             </div>
           )}
         </div>
-        </div>
 
-        {/* Attribute info panel - appears below the Draw AOI / User Profile buttons, on the
-            right side, when the user right-clicks a boundary feature on the map. No height
-            limit: all attribute rows are shown in full. On mobile the panel only opens
-            after tapping the "View Details" chip. */}
+        {/* Desktop Attribute info panel */}
         {attributeInfo && attributePanelOpen && (
           <aside className="attr-panel-in scrollbar-hide absolute right-4 top-20 z-20 hidden max-h-[calc(100vh-120px)] w-80 overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-xl md:block">
             <AttributePanelBody
@@ -1556,11 +2051,7 @@ export function ExplorePage() {
           </aside>
         )}
 
-        {/* Mobile (common phone resolutions) attribute info bottom sheet - instead of the
-            floating card, the info slides up from the bottom as a 30%-height sheet when
-            the "View Details" chip is tapped (mirrors the Filters drawer's slide-in). It
-            stays mounted while a feature is selected so the slide animates both ways; a
-            dimmed scrim closes it back to the chip. Hidden on desktop. */}
+        {/* Mobile Attribute info bottom sheet */}
         {attributeInfo && (
           <div className="pointer-events-none fixed inset-0 z-40 md:hidden">
             <div
@@ -1595,9 +2086,7 @@ export function ExplorePage() {
           </div>
         )}
 
-        {/* Info chip - on mobile (common phone resolutions) the attribute panel is hidden
-            behind this chip; tapping it opens the panel. Hidden on desktop, where the
-            panel opens directly on selection. */}
+        {/* Mobile View Details Chip */}
         {attributeInfo && !attributePanelOpen && (
           <button
             type="button"
@@ -1621,16 +2110,12 @@ export function ExplorePage() {
           />
         )}
 
-        {/* Export modal for a drawn AOI — opens from the AOI area chip's export icon. */}
         {aoiExportOpen && aoiInfo && (
           <ExportFeatureModal
             title="Area of Interest"
             geometry={aoiInfo.geometry}
             properties={(() => {
               if (!aoiInfo.aoiParcel) return aoiInfo.parentProperties;
-              // Survey-plot case: strip the layer prefix so exported attributes have
-              // clean names (e.g. "Surveynumber_Old" instead of
-              // "village-cadastrals_Surveynumber_Old").
               const p = aoiInfo.parentProperties ?? {};
               const clean: Record<string, unknown> = {};
               for (const [k, v] of Object.entries(p)) {
@@ -1674,14 +2159,7 @@ export function ExplorePage() {
           />
         )}
 
-        {/* FLOATING - Filters, toggled via the search bar's menu icon.
-            Mobile (common phone resolutions): a full-height drawer that slides in from
-            the left - Gmail navigation drawer style (~80% width, rounded right edge)
-            with a dimmed scrim behind it. Always mounted so the slide animates both
-            ways; desktop keeps the compact card below the search bar. */}
-        {/* Scrim - dims and closes the drawer (mobile only). Also carries the same
-            swipe-left-to-close touch handlers as the drawer, so a swipe anywhere
-            dismisses it. */}
+        {/* Filters drawer / modal */}
         <div
           className={`fixed inset-0 z-20 hidden max-md:block max-md:bg-black/40 max-md:transition-opacity max-md:duration-300 ${
             showFilters ? "max-md:opacity-100" : "max-md:pointer-events-none max-md:opacity-0"
@@ -1702,33 +2180,25 @@ export function ExplorePage() {
             showFilters ? "max-md:translate-x-0" : "max-md:-translate-x-full md:hidden"
           }`}
         >
-            {/* Text sizes are a step larger on mobile (common phone resolutions) to
-                suit the wider panel; desktop sizes are restored at md and up. */}
-            <div className="p-4">
-              <h2 className="mb-4 text-lg font-semibold text-obsidian-graphite md:text-base">Filters</h2>
+          <div className="p-4">
+            <h2 className="mb-4 text-lg font-semibold text-obsidian-graphite md:text-base">Filters</h2>
 
-              {/* Boundary Layers Filter */}
-              <div className="mb-4 border-b border-gray-200 pb-4">
-                <button
-                  onClick={() => toggleFilter("type")}
-                  className="mb-2 flex w-full items-center justify-between text-base font-semibold text-obsidian-graphite md:text-sm"
-                >
-                  Boundary Layers
-                  {expandedFilters.type ? (
-                    <ChevronUp className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
-                  ) : (
-                    <ChevronDown className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
-                  )}
-                </button>
-                {expandedFilters.type && (
-                  <div className="space-y-2">
-                    {/* Single-select: picking a new option deselects the previous one.
-                      "administrative" shows every loaded boundary layer; "assembly" and
-                      "parliamentary" show the neon-blue india_states geojson plus their
-                      loaded constituency boundaries; "gram panchayat" isn't wired to data
-                      yet (no extra layers). */}
-                    {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
-                      <div key={id}>
+            <div className="mb-4 border-b border-gray-200 pb-4">
+              <button
+                onClick={() => toggleFilter("type")}
+                className="mb-2 flex w-full items-center justify-between text-base font-semibold text-obsidian-graphite md:text-sm"
+              >
+                Boundary Layers
+                {expandedFilters.type ? (
+                  <ChevronUp className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
+                ) : (
+                  <ChevronDown className="h-5 w-5 text-gray-400 md:h-4 md:w-4" />
+                )}
+              </button>
+              {expandedFilters.type && (
+                <div className="space-y-2">
+                  {BOUNDARY_LAYER_OPTIONS.map(({ id, label }) => (
+                    <div key={id}>
                       <label className="flex items-center text-base text-gray-600 md:text-sm">
                         <input
                           type="checkbox"
@@ -1736,39 +2206,64 @@ export function ExplorePage() {
                           checked={selectedBoundaryLayer === id}
                           onChange={() => {
                             setSelectedBoundaryLayer(id);
+                            if (id === "find_my_way") {
+                              mapViewerRef.current?.setBoundaryLayerMode("none");
+                              return;
+                            }
+                            // Leaving "Find My Way" for another layer - clear whatever place
+                            // was selected there (pin, blue name label, boundary outline, and
+                            // the info card), same as its own close button does. Otherwise it
+                            // stayed on the map/panel indefinitely, looking like it belonged
+                            // to the newly-selected layer instead of a leftover from before.
+                            setAttributeInfo(null);
+                            mapViewerRef.current?.clearAttributeInfo();
+                            if (showDirections) closeDirections();
                             mapViewerRef.current?.setBoundaryLayerMode(id);
                             if (id !== "roads") setSelectedRoadsScope("none");
                           }}
                         />
                         {label}
                       </label>
+                      {id === "find_my_way" && selectedBoundaryLayer === "find_my_way" && (
+                        <div className="ml-6 mt-2">
+                          <label className="flex items-center text-sm text-gray-600">
+                            <input
+                              type="checkbox"
+                              className="mr-2 accent-atlas-cobalt"
+                              checked={placeLabelsVisible}
+                              onChange={(e) => mapViewerRef.current?.setPlaceLabelsVisible(e.target.checked)}
+                            />
+                            Place names
+                          </label>
+                        </div>
+                      )}
                       {id === "police_station" && selectedBoundaryLayer === "police_station" && (
                         <div>
-                        <select
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
-                          value={selectedPoliceType}
-                          onChange={(event) => {
-                            const type = event.target.value as PoliceType;
-                            setSelectedPoliceType(type);
-                            mapViewerRef.current?.setPoliceType(type);
-                          }}
-                        >
-                          {POLICE_TYPE_OPTIONS.map((type) => (
-                            <option key={type.id} value={type.id}>{type.label}</option>
-                          ))}
-                        </select>
-                        <select
-                          aria-label="Police district"
-                          className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
-                          value={selectedPoliceDistrict}
-                          onChange={(event) => {
-                            setSelectedPoliceDistrict(event.target.value);
-                            mapViewerRef.current?.setPoliceDistrict(event.target.value);
-                          }}
-                        >
-                          <option value="all">All Districts</option>
-                          {POLICE_DISTRICTS.map((district) => <option key={district} value={district}>{district}</option>)}
-                        </select>
+                          <select
+                            className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
+                            value={selectedPoliceType}
+                            onChange={(event) => {
+                              const type = event.target.value as PoliceType;
+                              setSelectedPoliceType(type);
+                              mapViewerRef.current?.setPoliceType(type);
+                            }}
+                          >
+                            {POLICE_TYPE_OPTIONS.map((type) => (
+                              <option key={type.id} value={type.id}>{type.label}</option>
+                            ))}
+                          </select>
+                          <select
+                            aria-label="Police district"
+                            className="ml-6 mt-2 w-[calc(100%-1.5rem)] rounded-md border border-gray-300 bg-white px-2 py-1.5 text-base text-gray-700 md:text-sm"
+                            value={selectedPoliceDistrict}
+                            onChange={(event) => {
+                              setSelectedPoliceDistrict(event.target.value);
+                              mapViewerRef.current?.setPoliceDistrict(event.target.value);
+                            }}
+                          >
+                            <option value="all">All Districts</option>
+                            {POLICE_DISTRICTS.map((district) => <option key={district} value={district}>{district}</option>)}
+                          </select>
                         </div>
                       )}
                       {id === "roads" && selectedBoundaryLayer === "roads" && (
@@ -1793,16 +2288,15 @@ export function ExplorePage() {
                           ))}
                         </div>
                       )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
+          </div>
         </aside>
 
-        {/* Floating chip: shows the completed AOI's area (with a clear button), or - while a
-            drawing tool is armed - a hint for how to use it. */}
+        {/* Drawn AOI Info Bottom Chip */}
         {(activeAOITool || aoiInfo) && (
           <div className="absolute bottom-6 left-1/2 z-20 -translate-x-1/2">
             <div className="flex items-center gap-3 rounded-full border border-gray-200 bg-white/95 px-4 py-2 shadow-lg backdrop-blur">

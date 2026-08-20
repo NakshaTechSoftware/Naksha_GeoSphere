@@ -64,6 +64,10 @@ infrastructure/docker/data/
 **/minio-data/
 **/redis-data/
 
+# === Routing engine data (OSRM) - regenerated via infrastructure/routing/build.sh,
+# multi-hundred-MB derived files, never committed ===
+infrastructure/routing/data/
+
 # === Terraform ===
 **/.terraform/
 *.tfstate

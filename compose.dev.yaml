@@ -32,6 +32,63 @@ services:
       retries: 5
       start_period: 5s
 
+  # Turn-by-turn directions (Karnataka only) - see infrastructure/routing/. One service per
+  # travel mode - OSRM serves exactly one profile per running instance, so driving/walking/
+  # cycling each need their own prebuilt dataset (see build.sh) and their own osrm-routed
+  # process, not just a config flag on a shared one. Dev-only for now (no separate app-compute
+  # server exists yet to run this in production - see infrastructure/routing/README.md). Data
+  # is prebuilt offline via build.sh, not at container start, so these come up in seconds.
+  osrm-driving:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/karnataka-latest.osrm
+    networks:
+      - naksha-network
+    ports:
+      - "${OSRM_DRIVING_HOST_PORT:-5001}:5000"
+    volumes:
+      - ./infrastructure/routing/data/driving:/data:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5000/route/v1/driving/77.59,12.97;77.60,12.98"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  osrm-walking:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/karnataka-latest.osrm
+    networks:
+      - naksha-network
+    ports:
+      - "${OSRM_WALKING_HOST_PORT:-5002}:5000"
+    volumes:
+      - ./infrastructure/routing/data/walking:/data:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5000/route/v1/walking/77.59,12.97;77.60,12.98"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  osrm-cycling:
+    image: ghcr.io/project-osrm/osrm-backend:v6.0.0
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/karnataka-latest.osrm
+    networks:
+      - naksha-network
+    ports:
+      - "${OSRM_CYCLING_HOST_PORT:-5003}:5000"
+    volumes:
+      - ./infrastructure/routing/data/cycling:/data:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5000/route/v1/cycling/77.59,12.97;77.60,12.98"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   api:
     build:
       target: dev

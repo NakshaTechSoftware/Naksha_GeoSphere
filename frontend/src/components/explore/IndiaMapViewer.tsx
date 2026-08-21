@@ -17,6 +17,8 @@ import {
   booleanIntersects,
   bbox,
   booleanPointInPolygon,
+  buffer as turfBuffer,
+  centroid as turfCentroid,
   circle as turfCircle,
   point as turfPoint,
   nearestPointOnLine,
@@ -720,7 +722,7 @@ export interface AOIResult {
 // panel, so the viewer only reports plain data - no HTML.
 export interface AttributeRow {
   label: string;
-  value: string;
+  value: React.ReactNode;
   bold?: boolean;
 }
 
@@ -735,6 +737,13 @@ export interface ParcelLandRecordKey {
   survey: string;
   surnoc: string;
   hissa: string;
+}
+
+// A cadastral parcel found touching the selected one, plus the rough compass direction it
+// sits in relative to the selection (centroid-to-centroid bearing). Owner names still have
+// to be fetched separately from Bhoomi, same as the selected parcel itself.
+export interface AdjacentParcel extends ParcelLandRecordKey {
+  direction: string;
 }
 
 // The five admin-hierarchy levels the Explore page's bulk export can walk. Assembly/
@@ -769,6 +778,92 @@ export interface AttributeInfo {
   geometry?: GeoJSON.Geometry;
   properties?: Record<string, unknown>;
   hierarchy?: AttributeHierarchy;
+  /** Cadastral parcels touching the selected one on any side. Set only for cadastral
+   * features - see findAdjacentParcels(). */
+  adjacentParcels?: AdjacentParcel[];
+}
+
+const COMPASS_DIRECTIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+function bearingToCompass(bearingDeg: number): string {
+  const normalized = ((bearingDeg % 360) + 360) % 360;
+  return COMPASS_DIRECTIONS[Math.round(normalized / 45) % 8]!;
+}
+
+// Finds every cadastral parcel in the already-loaded village dataset that touches the
+// selected parcel, on any side. Buffers the selected polygon by a few meters before testing
+// intersection so parcels don't need pixel-perfect shared edges to count as adjacent (source
+// topology sometimes has tiny gaps between neighboring survey boundaries). Owner names are
+// deliberately not resolved here - that's a separate, slow Bhoomi lookup the caller fetches
+// per neighbor after this returns.
+function findAdjacentParcels(
+  selectedFeature: { geometry?: GeoJSON.Geometry | null },
+  dataset: GeoJSON.FeatureCollection | null,
+  selectedKey: ParcelLandRecordKey,
+): AdjacentParcel[] {
+  if (!dataset || !selectedFeature.geometry) return [];
+
+  let bufferedSelected: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null = null;
+  let selectedCentroid: GeoJSON.Feature<GeoJSON.Point> | null = null;
+  try {
+    bufferedSelected = turfBuffer(
+      { type: "Feature", properties: {}, geometry: selectedFeature.geometry } as GeoJSON.Feature,
+      4,
+      { units: "meters" },
+    ) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
+    selectedCentroid = turfCentroid(selectedFeature.geometry as any);
+  } catch {
+    return [];
+  }
+  if (!bufferedSelected) return [];
+
+  const results: AdjacentParcel[] = [];
+  const seen = new Set<string>();
+  const MAX_RESULTS = 16;
+
+  for (const f of dataset.features) {
+    if (results.length >= MAX_RESULTS) break;
+    if (!f.geometry) continue;
+    const props = (f.properties ?? {}) as Record<string, unknown>;
+    const survey = String(props.Surveynumber_Old ?? props.surveynumberi ?? "").trim();
+    if (!survey) continue;
+    const surnoc = String(props.Surnoc ?? "*").trim() || "*";
+    const hissa = String(props.HissaNo ?? "*").trim() || "*";
+    if (survey === selectedKey.survey && surnoc === selectedKey.surnoc && hissa === selectedKey.hissa) {
+      continue; // the selected parcel itself
+    }
+    const dedupeKey = `${survey}|${surnoc}|${hissa}`;
+    if (seen.has(dedupeKey)) continue;
+
+    let intersects = false;
+    try {
+      intersects = booleanIntersects(bufferedSelected, f as unknown as GeoJSON.Feature);
+    } catch {
+      continue;
+    }
+    if (!intersects) continue;
+    seen.add(dedupeKey);
+
+    let direction = "";
+    try {
+      const neighborCentroid = turfCentroid(f.geometry as any);
+      direction = bearingToCompass(turfBearing(selectedCentroid, neighborCentroid));
+    } catch {
+      direction = "";
+    }
+
+    results.push({
+      district: String(props._parent_district ?? selectedKey.district),
+      taluk: String(props._parent_subdistrict ?? selectedKey.taluk),
+      hobli: String(props._parent_hobli ?? selectedKey.hobli),
+      village: String(props._parent_village_name ?? selectedKey.village),
+      survey,
+      surnoc,
+      hissa,
+      direction,
+    });
+  }
+  return results;
 }
 
 // Live state of an in-progress drawing. `points` holds [lng, lat] positions: the freehand
@@ -7290,6 +7385,36 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 : undefined
               : undefined;
 
+          const adjacentParcels = parcel
+            ? findAdjacentParcels(feature, loadedCadastralsDataRef.current, parcel)
+            : undefined;
+
+          // Append a "Survey Sketch" link row for cadastral parcels.
+          if (parcel) {
+            const sketchUrl = `/survey-sketch?${new URLSearchParams({
+              district: parcel.district,
+              taluk: parcel.taluk,
+              hobli: parcel.hobli,
+              village: parcel.village,
+              survey: parcel.survey,
+              surnoc: parcel.surnoc,
+              hissa: parcel.hissa,
+            }).toString()}`;
+            rows.push({
+              label: "Survey Sketch",
+              value: (
+                <a
+                  href="#"
+                  className="sketch-link text-blue-600 underline hover:text-blue-800 cursor-pointer"
+                  data-sketch-url={sketchUrl}
+                  onClick={(e) => e.preventDefault()}
+                >
+                  Get Survey Sketch
+                </a>
+              ),
+            });
+          }
+
           // Ancestor names for the bulk-export hierarchy walk. Each drill-down layer only
           // ever holds the children of one currently-selected parent, so whichever ancestor
           // refs are set are reliably this feature's own ancestors - except at the feature's
@@ -7326,6 +7451,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             geometry: feature.geometry,
             properties: props,
             hierarchy,
+            adjacentParcels,
           });
           return true;
         };

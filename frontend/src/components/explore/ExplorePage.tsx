@@ -11,12 +11,13 @@ import {
   type AOITool,
   type AOIResult,
   type AttributeInfo,
+  type AdjacentParcel,
   type NavigationState,
   type RoutePreview,
   type TravelMode,
   type DirectionsPoint,
 } from "./IndiaMapViewer";
-import type { RtcOwner } from "@/app/api/land-records/_bhoomi";
+import type { RtcOwner, RtcUseCase } from "@/app/api/land-records/_bhoomi";
 import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
@@ -217,19 +218,41 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
 function AttributePanelBody({
   info,
   owners,
+  useCase,
+  adjacentPlots,
   onClose,
   onExport,
+  onSketchClick,
 }: {
   info: AttributeInfo;
   owners:
     | { status: "loading" }
     | { status: "error"; message: string }
     | { status: "ok"; rows: RtcOwner[] };
+  useCase?: RtcUseCase | null;
+  adjacentPlots?: {
+    key: AdjacentParcel;
+    status: "loading" | "error" | "ok";
+    owners?: RtcOwner[];
+    message?: string;
+  }[];
   onClose?: () => void;
   onExport: () => void;
+  onSketchClick?: (url: string) => void;
 }) {
+  const handlePanelClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const link = target.closest(".sketch-link") as HTMLElement | null;
+    if (link && onSketchClick) {
+      e.preventDefault();
+      const url = link.getAttribute("data-sketch-url");
+      if (url) onSketchClick(url);
+    }
+  };
+
   return (
     <>
+      <div onClick={handlePanelClick}>
       <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-600">
@@ -300,6 +323,96 @@ function AttributePanelBody({
                     </td>
                   </tr>
                 ))}
+              {/* Use case row — cultivation / land-use details from RTC Preview */}
+              {useCase && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Land Use
+                  </td>
+                  <td className="break-words px-3 py-1.5">
+                    <span className="font-semibold text-slate-900">{useCase.landClassification}</span>
+                    {useCase.soilType && (
+                      <span className="ml-1 font-normal text-slate-600">· {useCase.soilType}</span>
+                    )}
+                    {useCase.crops && useCase.crops.length > 0 && (
+                      <span className="ml-1 font-normal text-slate-600">· Crop: {useCase.crops.join(", ")}</span>
+                    )}
+                    {useCase.irrigationSource && (
+                      <span className="ml-1 font-normal text-slate-600">· Water: {useCase.irrigationSource}</span>
+                    )}
+                    {useCase.pattaType && (
+                      <span className="ml-1 font-normal text-slate-500">· {useCase.pattaType}</span>
+                    )}
+                    {useCase.season && (
+                      <span className="ml-1 font-normal text-slate-500">· {useCase.season}</span>
+                    )}
+                    {useCase.imageUrl && (
+                      <span className="ml-1">
+                        <a href={useCase.imageUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline hover:text-blue-800">
+                          View RTC
+                        </a>
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              )}
+              {!useCase && owners.status === "ok" && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Land Use
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-400">Not available</td>
+                </tr>
+              )}
+              {/* Adjacent Plots row — cadastral neighbors touching the selected parcel, with
+                  their own survey number + owner (each fetched independently, so one slow
+                  neighbor doesn't block the rest from showing). */}
+              {info.parcel && info.adjacentParcels && info.adjacentParcels.length > 0 && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Adjacent Plots
+                  </td>
+                  <td className="break-words px-3 py-1.5">
+                    <ul className="space-y-1">
+                      {(adjacentPlots && adjacentPlots.length > 0
+                        ? adjacentPlots
+                        : info.adjacentParcels.map((key) => ({ key, status: "loading" as const }))
+                      ).map((plot, i) => (
+                        <li key={`${plot.key.survey}-${plot.key.surnoc}-${plot.key.hissa}-${i}`}>
+                          <span className="mr-1 inline-block w-6 flex-shrink-0 font-semibold text-slate-500">
+                            {plot.key.direction || "·"}
+                          </span>
+                          <span className="font-semibold text-slate-900">
+                            Survey {plot.key.survey}
+                            {plot.key.hissa && plot.key.hissa !== "*" ? ` [Hissa ${plot.key.hissa}]` : ""}
+                          </span>
+                          {plot.status === "loading" && (
+                            <span className="ml-1 text-slate-400">Loading owner…</span>
+                          )}
+                          {plot.status === "error" && (
+                            <span className="ml-1 text-amber-600">Owner unavailable</span>
+                          )}
+                          {plot.status === "ok" && (
+                            <span className="ml-1 font-normal text-slate-600">
+                              {plot.owners && plot.owners.length > 0
+                                ? `— ${plot.owners.map((o) => o.name).join(", ")}`
+                                : "— Owner not on record"}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </td>
+                </tr>
+              )}
+              {info.parcel && info.adjacentParcels && info.adjacentParcels.length === 0 && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Adjacent Plots
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-400">None found</td>
+                </tr>
+              )}
             </>
           )}
           {info.rows.map((row, i) => (
@@ -329,6 +442,7 @@ function AttributePanelBody({
         >
           Export
         </button>
+      </div>
       </div>
     </>
   );
@@ -734,7 +848,10 @@ export function ExplorePage() {
   useEffect(() => {
     if (!attributeInfo) return;
     setAttributePanelOpen(window.matchMedia("(min-width: 768px)").matches);
+    setSketchUrl(null);
   }, [attributeInfo]);
+
+  const [sketchUrl, setSketchUrl] = useState<string | null>(null);
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [aoiExportOpen, setAoiExportOpen] = useState(false);
@@ -750,27 +867,46 @@ export function ExplorePage() {
     | { status: "error"; message: string }
     | { status: "ok"; rows: RtcOwner[] }
   >({ status: "loading" });
+  const [useCase, setUseCase] = useState<RtcUseCase | null>(null);
+
+  const [adjacentPlots, setAdjacentPlots] = useState<
+    {
+      key: AdjacentParcel;
+      status: "loading" | "error" | "ok";
+      owners?: RtcOwner[];
+      message?: string;
+    }[]
+  >([]);
 
   const parcel = attributeInfo?.parcel;
+  const adjacentParcels = attributeInfo?.adjacentParcels;
+  const adjacentParcelsKey = adjacentParcels
+    ?.map((p) => `${p.survey}|${p.surnoc}|${p.hissa}`)
+    .join(",");
+
   useEffect(() => {
     if (!parcel) return;
     const controller = new AbortController();
     setOwners({ status: "loading" });
+    setUseCase(null);
+    const parcelParams = new URLSearchParams({ ...parcel }).toString();
+
     (async () => {
       try {
-        const res = await fetch(
-          `/api/land-records/rtc?${new URLSearchParams({ ...parcel }).toString()}`,
+        const res = await fetch(`/api/land-records/rtc?${parcelParams}`,
           { signal: controller.signal },
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
         setOwners({ status: "ok", rows: data.owners ?? [] });
+        setUseCase(data.useCase ?? null);
       } catch (error) {
         if (controller.signal.aborted) return;
         setOwners({
           status: "error",
           message: error instanceof Error ? error.message : "Lookup failed",
         });
+        setUseCase(null);
       }
     })();
     return () => controller.abort();
@@ -782,6 +918,70 @@ export function ExplorePage() {
     parcel?.survey,
     parcel?.surnoc,
     parcel?.hissa,
+  ]);
+
+  // Adjacent-plot owner lookups: one Bhoomi request per touching neighbor, in parallel, with
+  // `ownersOnly=1` so each skips the slow RTC-preview/OCR chain — we only need survey number
+  // + owner here, not land-use detail, and doing that for a handful of neighbors on every
+  // click would be far too slow.
+  useEffect(() => {
+    const neighbors = adjacentParcels ?? [];
+    if (!parcel || neighbors.length === 0) {
+      setAdjacentPlots([]);
+      return;
+    }
+    const controller = new AbortController();
+    setAdjacentPlots(neighbors.map((key) => ({ key, status: "loading" as const })));
+
+    neighbors.forEach((key, i) => {
+      const params = new URLSearchParams({
+        district: key.district,
+        taluk: key.taluk,
+        hobli: key.hobli,
+        village: key.village,
+        survey: key.survey,
+        surnoc: key.surnoc,
+        hissa: key.hissa,
+        ownersOnly: "1",
+      }).toString();
+      (async () => {
+        try {
+          const res = await fetch(`/api/land-records/rtc?${params}`, { signal: controller.signal });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+          if (controller.signal.aborted) return;
+          setAdjacentPlots((prev) => {
+            const next = [...prev];
+            if (next[i]) next[i] = { key, status: "ok", owners: data.owners ?? [] };
+            return next;
+          });
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          setAdjacentPlots((prev) => {
+            const next = [...prev];
+            if (next[i]) {
+              next[i] = {
+                key,
+                status: "error",
+                message: error instanceof Error ? error.message : "Lookup failed",
+              };
+            }
+            return next;
+          });
+        }
+      })();
+    });
+
+    return () => controller.abort();
+  }, [
+    parcel?.district,
+    parcel?.taluk,
+    parcel?.hobli,
+    parcel?.village,
+    parcel?.survey,
+    parcel?.surnoc,
+    parcel?.hissa,
+    adjacentParcelsKey,
   ]);
 
   useEffect(() => {
@@ -2041,14 +2241,43 @@ export function ExplorePage() {
             <AttributePanelBody
               info={attributeInfo}
               owners={owners}
+              useCase={useCase}
+              adjacentPlots={adjacentPlots}
               onClose={() => {
                 setAttributeInfo(null);
                 setExportModalOpen(false);
+                setSketchUrl(null);
                 mapViewerRef.current?.clearAttributeInfo();
               }}
               onExport={() => setExportModalOpen(true)}
+              onSketchClick={(url) => setSketchUrl(url)}
             />
           </aside>
+        )}
+
+        {/* Survey Sketch panel — exactly centered on screen */}
+        {sketchUrl && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setSketchUrl(null)}>
+            <div className="overflow-auto rounded-2xl border border-gray-200 bg-white shadow-2xl flex flex-col" style={{ width: "calc(100vh - 120px)", height: "calc(100vh - 120px)" }} onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 flex-shrink-0">
+                <span className="text-sm font-semibold text-slate-700">Survey Sketch</span>
+                <button
+                  type="button"
+                  onClick={() => setSketchUrl(null)}
+                  className="rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <iframe
+                  src={sketchUrl}
+                  className="w-full h-full border-0"
+                  title="Survey Sketch"
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Mobile Attribute info bottom sheet */}
@@ -2080,6 +2309,8 @@ export function ExplorePage() {
               <AttributePanelBody
                 info={attributeInfo}
                 owners={owners}
+                useCase={useCase}
+                adjacentPlots={adjacentPlots}
                 onExport={() => setExportModalOpen(true)}
               />
             </div>

@@ -14460,40 +14460,47 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       // out of date (missing the entire GBA, Roads, Gram Panchayat and Civic Amenities
       // hierarchies, plus the new Karnataka state layer), so switching the base map (satellite/
       // default/terrain) was silently deleting whichever of those was currently loaded.
+      // Turn-by-turn route (see drawNavigationRoutes) and live-location accuracy ring (see
+      // startLiveLocation) layers/sources - not part of the boundary-layer system above, so
+      // they need their own explicit entries here or a base-map switch silently deletes them
+      // mid-route/mid-navigation (the actual bug this list is fixing: everything below worked
+      // fine on the default satellite layer only because it's what the map starts on and this
+      // function had never actually run yet - switching to *any* other layer wiped them out).
+      const NAVIGATION_LAYER_IDS = [
+        NAVIGATION_ROUTE_LINE_LAYER_ID,
+        NAVIGATION_ROUTE_CASING_LAYER_ID,
+        NAVIGATION_ROUTE_ALT_LINE_LAYER_ID,
+        NAVIGATION_ROUTE_LABELS_LAYER_ID,
+        LIVE_LOCATION_ACCURACY_FILL_LAYER_ID,
+        LIVE_LOCATION_ACCURACY_LINE_LAYER_ID,
+        // The "Find My Way" place-click outline (see the map's general click handler) - same
+        // problem as the route/live-location layers above: not part of the boundary-layer
+        // system, so without its own entry here a base-map switch (e.g. Satellite -> Default)
+        // silently deleted it, and it was never recreated afterward.
+        PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID,
+      ];
+      const NAVIGATION_SOURCE_IDS = [
+        NAVIGATION_ROUTE_SOURCE_ID,
+        NAVIGATION_ROUTE_LABELS_SOURCE_ID,
+        LIVE_LOCATION_ACCURACY_SOURCE_ID,
+        PLACE_CLICK_HIGHLIGHT_SOURCE_ID,
+      ];
+
       const customLayerIds = currentLayers
         .filter(
           (l) =>
-            l.id === "states-fill-default" ||
-            l.id === "states-borders-default" ||
-            l.id === "states-labels-default" ||
-            l.id === STATE_DISTRICTS_FILL_LAYER_ID ||
-            l.id === STATE_DISTRICTS_LINE_LAYER_ID ||
-            l.id === STATE_DISTRICTS_LABELS_LAYER_ID ||
-            l.id === STATE_ASSEMBLY_FILL_LAYER_ID ||
-            l.id === STATE_ASSEMBLY_LINE_LAYER_ID ||
-            l.id === STATE_PARLIAMENT_FILL_LAYER_ID ||
-            l.id === STATE_PARLIAMENT_LINE_LAYER_ID ||
-            l.id === STATE_POLICE_FILL_LAYER_ID ||
-            l.id === STATE_POLICE_LINE_LAYER_ID ||
-            l.id === STATE_POLICE_LABEL_LAYER_ID ||
+            STATE_BOUNDARY_LAYER_IDS.includes(l.id) ||
+            BOUNDARY_LAYER_IDS.includes(l.id) ||
+            l.id.endsWith("-hover") ||
+            l.id === STATE_POLICE_POINT_LAYER_ID ||
+            l.id === STATE_POLICE_POINT_HALO_LAYER_ID ||
             l.id === STATE_POLICE_POINT_LABEL_LAYER_ID ||
             l.id.startsWith("police-") ||
-            l.id === DISTRICT_TALUKS_FILL_LAYER_ID ||
-            l.id === DISTRICT_TALUKS_LINE_LAYER_ID ||
-            l.id === DISTRICT_TALUKS_LABELS_LAYER_ID ||
-            l.id === TALUK_HOBLIES_FILL_LAYER_ID ||
-            l.id === TALUK_HOBLIES_LINE_LAYER_ID ||
-            l.id === TALUK_HOBLIES_LABELS_LAYER_ID ||
-            l.id === HOBLI_VILLAGES_FILL_LAYER_ID ||
-            l.id === HOBLI_VILLAGES_LINE_LAYER_ID ||
-            l.id === HOBLI_VILLAGES_LABELS_LAYER_ID ||
-            l.id === VILLAGE_CADASTRALS_FILL_LAYER_ID ||
-            l.id === VILLAGE_CADASTRALS_LINE_LAYER_ID ||
-            l.id === VILLAGE_CADASTRALS_LABELS_LAYER_ID ||
             l.id.startsWith("kml-") ||
             l.id.startsWith("bengaluru-") ||
             l.id.startsWith("extra-") ||
-            AOI_LAYER_IDS.includes(l.id),
+            AOI_LAYER_IDS.includes(l.id) ||
+            NAVIGATION_LAYER_IDS.includes(l.id),
         )
         .map((l) => l.id);
 
@@ -14510,18 +14517,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           sourceId === INDIA_BOUNDARY_LABELS_SOURCE_ID ||
           BOUNDARY_SOURCE_IDS.includes(sourceId) ||
           sourceId.startsWith("police-") ||
-          sourceId === DISTRICT_TALUKS_SOURCE_ID ||
-          sourceId === DISTRICT_TALUKS_LABELS_SOURCE_ID ||
-          sourceId === TALUK_HOBLIES_SOURCE_ID ||
-          sourceId === TALUK_HOBLIES_LABELS_SOURCE_ID ||
-          sourceId === HOBLI_VILLAGES_SOURCE_ID ||
-          sourceId === HOBLI_VILLAGES_LABELS_SOURCE_ID ||
-          sourceId === VILLAGE_CADASTRALS_SOURCE_ID ||
-          sourceId === "kml-data" ||
-          sourceId === "bengaluru-data" ||
+          sourceId.startsWith("kml-") ||
+          sourceId.startsWith("bengaluru-") ||
           sourceId.startsWith("extra-") ||
           sourceId === AOI_SOURCE_ID ||
-          sourceId === AOI_VERTICES_SOURCE_ID,
+          sourceId === AOI_VERTICES_SOURCE_ID ||
+          NAVIGATION_SOURCE_IDS.includes(sourceId),
       );
 
       // Get custom sources data
@@ -14760,12 +14761,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (drawingToolRef.current) {
           const session = drawSessionRef.current;
           if (event.key === "Escape") {
-            // Escape cancels the in-progress shape, or disarms the tool if nothing is being
-            // drawn - in both cases the loaded boundaries stay put. preventDefault also stops
-            // Escape from triggering unrelated browser/button behavior.
+            // Escape cancels the in-progress shape, or disarms the tool and clears any
+            // previously completed AOI if nothing is being drawn - in both cases the loaded
+            // boundaries stay put. preventDefault also stops Escape from triggering unrelated
+            // browser/button behavior.
             event.preventDefault();
             if (session) cancelDrawing(map);
-            else disarmDrawingTool(map);
+            else {
+              disarmDrawingTool(map);
+              clearCompletedAOI(map);
+            }
           } else if (session && session.tool === "polygon") {
             if (event.key === "Enter") {
               // Enter finishes the polygon (same as double-clicking). preventDefault keeps a

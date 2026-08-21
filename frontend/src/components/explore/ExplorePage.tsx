@@ -2375,14 +2375,46 @@ export function ExplorePage() {
             <AttributePanelBody
               info={attributeInfo}
               owners={owners}
+              useCase={useCase}
+              adjacentPlots={adjacentPlots}
               onClose={() => {
                 setAttributeInfo(null);
                 setExportModalOpen(false);
+                setSketchUrl(null);
                 mapViewerRef.current?.clearAttributeInfo();
               }}
               onExport={() => setExportModalOpen(true)}
+              onSketchClick={(url) => setSketchUrl(url)}
             />
           </aside>
+        )}
+
+        {/* Survey Sketch panel — exactly centered on screen */}
+        {sketchUrl && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+            onClick={() => setSketchUrl(null)}
+          >
+            <div
+              className="flex flex-col overflow-auto rounded-2xl border border-gray-200 bg-white shadow-2xl"
+              style={{ width: "calc(100vh - 120px)", height: "calc(100vh - 120px)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-100 px-4 py-3">
+                <span className="text-sm font-semibold text-slate-700">Survey Sketch</span>
+                <button
+                  type="button"
+                  onClick={() => setSketchUrl(null)}
+                  className="rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <iframe src={sketchUrl} className="h-full w-full border-0" title="Survey Sketch" />
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Mobile Attribute info bottom sheet */}
@@ -2414,6 +2446,8 @@ export function ExplorePage() {
               <AttributePanelBody
                 info={attributeInfo}
                 owners={owners}
+                useCase={useCase}
+                adjacentPlots={adjacentPlots}
                 onExport={() => setExportModalOpen(true)}
               />
             </div>

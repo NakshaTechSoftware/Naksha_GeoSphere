@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     s3_bucket_temporary_data: str = "geosphere-temporary-data"
     signed_url_expiry_seconds: int = 900
 
+    # --- KGIS administrative-boundary source data ------------------------
+    # A *separate* remote MinIO server, not the local `minio_endpoint` above -
+    # the "Administrative Boundaries/..." KGIS district/taluk/hobli/village
+    # GeoJSON this platform ships with lives here, not in the app's own
+    # object storage. Defaults match the values `frontend/src/app/api/
+    # datasets/hobli-villages/route.ts` already hardcodes (read-only source
+    # data, not a secret this app's own data depends on), kept overridable
+    # via env like every other setting here rather than hardcoded again.
+    kgis_source_minio_endpoint: str = "192.168.10.81:9010"
+    kgis_source_minio_access_key: str = "geosphere_storage"
+    kgis_source_minio_secret_key: str = "706f803f67c143c884305e7085b59210ffb29ac69e724a70"
+    kgis_source_bucket: str = "geosphere-source-data"
+
     # --- Mail --------------------------------------------------------
     mail_host: str = "mailpit"
     mail_port: int = 1025

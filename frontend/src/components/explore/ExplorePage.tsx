@@ -18,6 +18,7 @@ import {
   type DirectionsPoint,
 } from "./IndiaMapViewer";
 import type { RtcOwner, RtcUseCase } from "@/app/api/land-records/_bhoomi";
+import { config } from "@/lib/config";
 import { LocationEnvironmentPanel } from "@/components/environment/LocationEnvironmentPanel";
 import {
   getStoredUserSession,
@@ -221,11 +222,35 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+// Karnataka Kaveri Online Services government guideline value ("SR Rate") for a
+// cadastral parcel - see /api/v1/pricing/guideline-value (services/api/app/api/v1/pricing.py).
+// "unavailable" (no village mapping / no road / no rate) and "error" (the upstream
+// request itself failed) are kept distinct from the fetch's own perspective, but both
+// render as the backend's own `message` string - the task spec's exact wording either way.
+type GuidelineValueState =
+  | { status: "loading" }
+  | {
+      status: "ok";
+      standardRate: number;
+      plotAreaSqm: number;
+      estimatedLandValue: number;
+      landType: string;
+      availableRates?: string[] | null;
+      source: string;
+    }
+  | {
+      status: "unavailable" | "error";
+      message: string;
+      reason?: string;
+      debugDetail?: string | null;
+    };
+
 function AttributePanelBody({
   info,
   owners,
   useCase,
   adjacentPlots,
+  guidelineValue,
   onClose,
   onExport,
   onSketchClick,
@@ -242,6 +267,7 @@ function AttributePanelBody({
     owners?: RtcOwner[];
     message?: string;
   }[];
+  guidelineValue?: GuidelineValueState;
   onClose?: () => void;
   onExport: () => void;
   onSketchClick?: (url: string) => void;
@@ -417,6 +443,68 @@ function AttributePanelBody({
                     Adjacent Plots
                   </td>
                   <td className="px-3 py-1.5 text-slate-400">None found</td>
+                </tr>
+              )}
+              {/* Government Guideline Value — Karnataka Kaveri Online Services SR Rate,
+                  see /api/v1/pricing/guideline-value. Loading/unavailable/error states
+                  keep the row present so it never looks like the fetch was skipped. */}
+              {info.parcel && guidelineValue && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Guideline Value
+                  </td>
+                  <td className="break-words px-3 py-1.5">
+                    {guidelineValue.status === "loading" && (
+                      <span className="text-slate-400">Loading guideline value…</span>
+                    )}
+                    {(guidelineValue.status === "unavailable" || guidelineValue.status === "error") && (
+                      <div className="space-y-0.5">
+                        <span className="text-amber-600">{guidelineValue.message}</span>
+                        {guidelineValue.reason && (
+                          <p className="text-[11px] text-slate-400">Reason: {guidelineValue.reason}</p>
+                        )}
+                        {guidelineValue.debugDetail && (
+                          <p className="text-[11px] text-slate-400 break-words">
+                            Debug: {guidelineValue.debugDetail}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {guidelineValue.status === "ok" && (
+                      <div className="space-y-0.5">
+                        <p>
+                          <span className="text-slate-500">Land Type: </span>
+                          <span className="font-semibold text-slate-900">
+                            {guidelineValue.landType}
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Standard Rate: </span>
+                          <span className="font-semibold text-slate-900">
+                            ₹{guidelineValue.standardRate.toLocaleString("en-IN")} / Sq.m
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Plot Area: </span>
+                          <span className="font-semibold text-slate-900">
+                            {guidelineValue.plotAreaSqm.toLocaleString("en-IN")} Sq.m
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Estimated Land Value: </span>
+                          <span className="font-semibold text-slate-900">
+                            ₹{Math.round(guidelineValue.estimatedLandValue).toLocaleString("en-IN")}
+                          </span>
+                        </p>
+                        {guidelineValue.availableRates && guidelineValue.availableRates.length > 0 && (
+                          <p className="text-[11px] text-slate-400">
+                            Available Rates: {guidelineValue.availableRates.join(", ")}
+                          </p>
+                        )}
+                        <p className="text-[11px] text-slate-400">Source: {guidelineValue.source}</p>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               )}
             </>
@@ -1004,6 +1092,99 @@ export function ExplorePage() {
     parcel?.surnoc,
     parcel?.hissa,
     adjacentParcelsKey,
+  ]);
+
+  const [guidelineValue, setGuidelineValue] = useState<GuidelineValueState | undefined>(undefined);
+
+  // Karnataka Kaveri Online Services guideline value ("SR Rate") for the selected cadastral
+  // parcel. Reads the KGIS village code and plot area straight off the parcel's own raw
+  // properties (already carried on `attributeInfo.properties` for every cadastral feature -
+  // see IndiaMapViewer.tsx's KGISVillageCode/UniqueVillageCode/KGISVill_1 fallback chain used
+  // for the same field elsewhere), so no IndiaMapViewer changes were needed for this feature.
+  useEffect(() => {
+    if (!parcel) {
+      setGuidelineValue(undefined);
+      return;
+    }
+    const props = attributeInfo?.properties ?? {};
+    const kgisVillageCode = String(
+      props.KGISVillageCode ?? props.UniqueVillageCode ?? props.KGISVill_1 ?? "",
+    ).split("_")[0];
+    const rawArea =
+      props["SHAPE.STArea()"] ?? props.Shape_Area ?? props.shape_area ?? props.SHAPE_Area;
+    const plotAreaSqm = rawArea !== undefined ? Number(rawArea) : NaN;
+
+    if (!kgisVillageCode || !Number.isFinite(plotAreaSqm) || plotAreaSqm <= 0) {
+      setGuidelineValue(undefined);
+      return;
+    }
+
+    const controller = new AbortController();
+    setGuidelineValue({ status: "loading" });
+    const params = new URLSearchParams({
+      kgis_village_code: kgisVillageCode,
+      plot_area_sqm: String(plotAreaSqm),
+    });
+    // Send the parcel's own KGIS district/taluk/hobli/village names so the
+    // backend can auto-resolve + persist the Kaveri mapping on first click
+    // (no pre-seeded crosswalk required).
+    if (parcel?.district) params.set("district", String(parcel.district));
+    if (parcel?.taluk) params.set("taluk", String(parcel.taluk));
+    if (parcel?.hobli) params.set("hobli", String(parcel.hobli));
+    if (parcel?.village) params.set("village", String(parcel.village));
+    // Land-use GIS attributes (if the cadastral layer carries them) drive the
+    // backend's agricultural vs vacant endpoint choice — never a hardcoded rate.
+    const gisCategory =
+      props.Category ?? props.category ?? props.LandUse ?? props.land_use ?? "";
+    const gisLandcode =
+      props.Landcode ?? props.landcode ?? props.LandCode ?? props.LANDCODE ?? "";
+    if (gisCategory) params.set("category", String(gisCategory));
+    if (gisLandcode) params.set("landcode", String(gisLandcode));
+    (async () => {
+      try {
+        const res = await fetch(
+          `${config.apiUrl}/api/v1/pricing/guideline-value?${params.toString()}`,
+          { signal: controller.signal },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Unable to fetch government guideline value");
+        if (data.status === "ok") {
+          setGuidelineValue({
+            status: "ok",
+            standardRate: Number(data.standard_rate),
+            plotAreaSqm: Number(data.plot_area_sqm),
+            estimatedLandValue: Number(data.estimated_land_value),
+            landType: data.land_type ?? data.property_type ?? "Residential",
+            availableRates: data.available_rates ?? null,
+            source: data.source,
+          });
+        } else {
+          setGuidelineValue({
+            status: "unavailable",
+            message: data.message ?? "Guideline value unavailable for this location",
+            reason: data.reason,
+            debugDetail: data.debug_detail ?? null,
+          });
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setGuidelineValue({
+          status: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to fetch government guideline value",
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [
+    parcel?.district,
+    parcel?.taluk,
+    parcel?.hobli,
+    parcel?.village,
+    parcel?.survey,
+    parcel?.surnoc,
+    parcel?.hissa,
+    attributeInfo?.properties,
   ]);
 
   useEffect(() => {
@@ -2377,6 +2558,7 @@ export function ExplorePage() {
               owners={owners}
               useCase={useCase}
               adjacentPlots={adjacentPlots}
+              guidelineValue={guidelineValue}
               onClose={() => {
                 setAttributeInfo(null);
                 setExportModalOpen(false);

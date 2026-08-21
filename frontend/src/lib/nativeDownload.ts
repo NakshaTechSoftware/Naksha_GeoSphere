@@ -1,6 +1,17 @@
-import { Directory, Filesystem } from "@capacitor/filesystem";
-import { Share } from "@capacitor/share";
 import { isNativeApp } from "./native";
+
+/** Lazy-loaded Capacitor modules — only imported on native app to avoid webpack resolve issues. */
+let _capacitorFs: typeof import("@capacitor/filesystem") | null = null;
+let _capacitorShare: typeof import("@capacitor/share") | null = null;
+
+async function getCapacitorFs() {
+  if (!_capacitorFs) _capacitorFs = await import("@capacitor/filesystem");
+  return _capacitorFs;
+}
+async function getCapacitorShare() {
+  if (!_capacitorShare) _capacitorShare = await import("@capacitor/share");
+  return _capacitorShare;
+}
 
 /**
  * Bridge to the native NativePermissions plugin (see
@@ -113,12 +124,14 @@ export async function saveExportFile(opts: {
     // 3) Fallback: write to the app cache and hand it to the OS share/save
     //    sheet so the user can still save it somewhere.
     try {
+      const { Filesystem, Directory } = await getCapacitorFs();
       const result = await Filesystem.writeFile({
         path: filename,
         data: blob,
         directory: Directory.Cache,
         recursive: true,
       });
+      const { Share } = await getCapacitorShare();
       await Share.share({
         url: result.uri,
         title: filename,

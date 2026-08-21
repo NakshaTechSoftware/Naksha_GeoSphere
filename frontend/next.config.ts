@@ -53,7 +53,18 @@ const nextConfig: NextConfig = {
       "../DEM_Terrain/India_DEM_overview.tif",
     ],
   },
-  serverExternalPackages: ["geotiff", "sharp"],
+  serverExternalPackages: ["geotiff", "sharp", "@capacitor/filesystem", "@capacitor/share"],
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Capacitor packages only run inside Android/iOS WebViews.
+      // Webpack cannot resolve the pnpm symlinks, so stub them on the web client.
+      config.resolve = config.resolve || {};
+      config.resolve.alias = config.resolve.alias || {};
+      config.resolve.alias["@capacitor/filesystem"] = false;
+      config.resolve.alias["@capacitor/share"] = false;
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

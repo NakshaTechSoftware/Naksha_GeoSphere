@@ -134,6 +134,21 @@
     animation: weather-fade 180ms ease-out both;
   }
 
+  /* Indeterminate loading bar under the directions panel's travel-mode icons, while a route
+     fetch is in flight - a strip that slides back and forth, same idea as Google's. */
+  @keyframes directions-loading-bar {
+    0% {
+      left: -33%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+
+  .directions-loading-bar {
+    animation: directions-loading-bar 1s ease-in-out infinite;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .weather-panel-in,
     .weather-fade {

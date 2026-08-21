@@ -322,7 +322,14 @@ function parseOcrText(text: string): RtcUseCase | undefined {
   // --- Soil type (Section 5: ಮಣ್ಣಿನ ಸಮೂಹ) ---
   let soilType: string | undefined;
   // OCR often misreads Kannada characters, so include common mangling patterns
+  // "ಮಿಶ್ರ" ("mishra" = mixed) variants are checked before their plain counterparts - Bhoomi's
+  // soil-sample section commonly records mixed categories (e.g. ಕೆಂಪು ಮಿಶ್ರ = "Red Mixed") and
+  // the soil-cell OCR crop sometimes clips the form right after "ಮಿಶ್ರ", before the trailing
+  // "ಮಣ್ಣು" the plain patterns below require - so these need to match without that suffix.
   const soilPatterns: [RegExp, string][] = [
+    [/ಕೆ[ಂ೦]ಪು\s*ಮಿಶ್ರ|kempu\s*mishra|Red\s*Mixed/i, "Red Mixed Soil"],
+    [/ಕಪ್ಪು\s*ಮಿಶ್ರ|kappu\s*mishra|Black\s*Mixed/i, "Black Mixed Soil"],
+    [/ಮರಳು\s*ಮಿಶ್ರ|maralu\s*mishra|Sandy\s*Mixed/i, "Sandy Mixed Soil"],
     [/ಕೆಂಪು\s*ಮಣ್ಣು|ಕೆಂಪುಮಣ್ಣು|ಕೆ[ಂ೦]\s*ಪು\s*ಮಣ|ಕೆ೦ಪು\s*ಮ[ಣ್]*ಣ್ಣಿ|ಕೆಂಪುಮ[ಣ್]*ಣ್ಣಿ|kempu\s*mannu|Red\s*Soil/i, "Red Soil"],
     [/ಕಪ್ಪು\s*ಮಣ್ಣು|ಕಪ್ಪುಮಣ್ಣು|ಕಪ್ಪು\s*ಮಣ|ಕಪ್ಪುಮ[ಣ್]*ಣ್ಣಿ|kappu\s*mannu|Black\s*Soil/i, "Black Soil"],
     [/ಹಳದಿ\s*ಮಣ್ಣು|haladi\s*mannu|Yellow\s*Soil/i, "Yellow Soil"],

@@ -9620,32 +9620,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       if (!ndviResolved) return;
 
-            // These layers are added with no explicit visibility, so they'd otherwise
-            // default to visible regardless of boundaryLayerModeRef's actual value (that ref
-            // only gets *applied* when something later calls applyBoundaryLayerVisibility -
-            // e.g. clicking a Filters checkbox - not automatically just because it's set).
-            // Since the default mode is "none" (see boundaryLayerModeRef's declaration -
-            // "Find My Way" is the app's real default, not any boundary layer), apply it
-            // immediately so the India outline/label don't flash into view on every fresh
-            // load before the user has picked a boundary layer at all.
-            applyBoundaryLayerVisibility(map);
-
-            // Empty at first - filled with the single found boundary feature by the
-            // "Find My Way" place-click handler further below.
-            map.addSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID, {
-              type: "geojson",
-              data: { type: "FeatureCollection", features: [] },
-            });
-            map.addLayer({
-              id: PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID,
-              type: "line",
-              source: PLACE_CLICK_HIGHLIGHT_SOURCE_ID,
-              paint: {
-                "line-color": "#1a73e8",
-                "line-width": 3,
-              },
-            });
-
       const tileUrl = ndviTileUrlTemplate(ndviResolved.date);
 
       if (!map.getSource(NDVI_SOURCE_ID)) {
@@ -11778,6 +11752,22 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               map.addLayer(indiaLabelLayer);
               map.addLayer(hoverLabelLayerSpec(indiaLabelLayer));
               attachLabelHoverGrow(map, "india-boundary-label", "india-boundary-label-hover");
+
+              // Empty at first - filled with the single found boundary feature by the
+              // "Find My Way" place-click handler further below.
+              map.addSource(PLACE_CLICK_HIGHLIGHT_SOURCE_ID, {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] },
+              });
+              map.addLayer({
+                id: PLACE_CLICK_HIGHLIGHT_LINE_LAYER_ID,
+                type: "line",
+                source: PLACE_CLICK_HIGHLIGHT_SOURCE_ID,
+                paint: {
+                  "line-color": "#1a73e8",
+                  "line-width": 3,
+                },
+              });
 
               // Hover highlight + cursor over the country.
               let hoveredBoundaryId: string | number | null = null;
@@ -18231,7 +18221,31 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             />
           )}
 
+        {/* GeoJSON loading indicator - shown while boundary data fetches are in flight
+            (every resolution). Skipped during the initial map load, which has its own
+            full-screen "Loading map..." overlay. Captures all pointer/touch events while
+            visible (no pointer-events-none), so every user interaction is ignored until
+            the data finishes loading. */}
+        {geojsonBusy && !isLoading && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center">
+            <div className="flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 shadow-lg ring-1 ring-gray-200">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-atlas-cobalt border-t-transparent" />
+              <span className="text-xs font-medium text-gray-700">Loading data...</span>
+            </div>
+          </div>
+        )}
 
+        {/* Terrain-unavailable notice - shown above the layers control when the user
+            picks Terrain but the India DEM file is missing on this server. */}
+        {terrainUnavailable && (
+          <div className="absolute bottom-24 left-6 z-30 max-w-72 rounded-xl bg-white/95 px-4 py-3 shadow-lg ring-1 ring-gray-200">
+            <p className="text-xs font-medium leading-relaxed text-gray-800">
+              Terrain view isn't available yet — the India DEM data file isn't on this
+              server. Add <span className="font-semibold">DEM_Terrain/India_DEM.tif</span>
+              (or set INDIA_DEM_PATH) to enable it.
+            </p>
+          </div>
+        )}
       </div>
     );
   },

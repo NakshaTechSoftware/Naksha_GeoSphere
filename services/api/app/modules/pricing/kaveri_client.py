@@ -130,13 +130,18 @@ class KaveriSession:
         result = await self._post("/api/SearchVacantTypeRateDetails", {"roadcode": road_code})
         return result if isinstance(result, list) else []
 
-    async def get_agricultural_rate(self, village_code: str) -> list[dict[str, Any]]:
-        """Future support (spec section "Future Support" #1) — not called by
-        today's guideline-value endpoint (that only handles vacant/
-        non-agricultural land), kept here so the client is ready once
-        agricultural parcels are wired up. Payload assumed to mirror the
-        village-keyed calls above; unverified."""
-        result = await self._post("/api/SearchAgriculturalPropertyType", {"villagecode": village_code})
+    async def get_agricultural_rate(self, road_code: str) -> list[dict[str, Any]]:
+        """Agricultural SR Rate for one road/locality. VERIFIED against the live
+        portal (2026-08-24): this endpoint is keyed by **roadcode**, not
+        villagecode — a village-keyed payload silently returns `[]` for every
+        village, which is why agricultural rates previously always came back
+        empty. Real response shape, e.g. for a Beltangadi taluk village:
+        [{"villageCode": 26526, "roadcode": 67450, "propertytype": "Bagayat, Dry",
+          "rate": 500000, "agrilandtypeid": 10, "rateagricode": 3669468}, ...].
+        Note the response carries no unit field — see
+        `app.modules.pricing.land_unit` for the documented per-acre convention
+        this module assumes in its absence."""
+        result = await self._post("/api/SearchAgriculturalPropertyType", {"roadcode": road_code})
         return result if isinstance(result, list) else []
 
     async def get_construction_rates(self, village_code: str) -> list[dict[str, Any]]:

@@ -67,6 +67,12 @@ class KaveriVillageMapping(Base):
     kaveri_taluk_code: Mapped[str] = mapped_column(String(50), nullable=False)
     kaveri_hobli_code: Mapped[str] = mapped_column(String(50), nullable=False)
     kaveri_village_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Corroborating government identifiers (spec Part 7/8). `lgd_village_code`
+    # and `bhucode` are stored whenever available so a human reviewer can verify
+    # the KGIS<->Kaveri crosswalk against the LGD / Bhoomi registries; they are
+    # NEVER derived by a fabricated code transformation.
+    lgd_village_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    bhucode: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Manually-inserted rows (e.g. during earlier development) default to
     # CONFIRMED — only rows written by the generator's own fuzzy matching
     # ever land in PENDING_REVIEW/FAILED.
@@ -74,6 +80,12 @@ class KaveriVillageMapping(Base):
         mapping_status_enum, nullable=False, server_default=MappingStatus.CONFIRMED.value
     )
     matching_score: Mapped[Decimal | None] = mapped_column(Numeric(precision=5, scale=2))
+    # How the match was produced (spec Part 8): one of the resolver's `method`
+    # values, e.g. "unique_village_within_taluk" / "unique_village_in_alternate_taluk".
+    mapping_method: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -121,8 +133,22 @@ class KaveriRateCache(Base):
     )
     kaveri_village_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     road_code: Mapped[str] = mapped_column(String(50), nullable=False)
-    property_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 255, not 50: Kaveri's own agricultural category labels are free text
+    # and can run long — a real live example (Kodagu district) is 82
+    # characters: "Dry, Paddy/Areca/Coconut/Mango/Grapes/Fruit grown with
+    # rain water, Other Soil". A too-narrow column here previously caused a
+    # silent `StringDataRightTruncationError` on every parcel whose
+    # resolved category used a long label, masked as a generic
+    # `kaveri_api_error` by the endpoint's broad exception handler.
+    property_type: Mapped[str] = mapped_column(String(255), nullable=False)
     standard_rate: Mapped[Decimal] = mapped_column(Numeric(precision=12, scale=2), nullable=False)
+    # Audit/provenance metadata (spec Part 10/13) — never used to decide
+    # freshness (that's still `updated_at` + RATE_CACHE_TTL), only to explain
+    # *why* a cached rate was trusted when it was written.
+    rate_unit: Mapped[str | None] = mapped_column(String(20))
+    road_confidence: Mapped[Decimal | None] = mapped_column(Numeric(precision=4, scale=3))
+    road_resolution_method: Mapped[str | None] = mapped_column(String(30))
+    classification: Mapped[str | None] = mapped_column(String(30))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

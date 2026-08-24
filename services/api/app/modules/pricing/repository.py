@@ -56,6 +56,10 @@ class KaveriPricingRepository:
         kaveri_village_code: str,
         mapping_status: MappingStatus,
         matching_score: Decimal,
+        lgd_village_code: str | None = None,
+        bhucode: str | None = None,
+        mapping_method: str | None = None,
+        resolved_at: "datetime | None" = None,
     ) -> None:
         stmt = pg_insert(KaveriVillageMapping).values(
             kgis_village_code=kgis_village_code,
@@ -69,6 +73,10 @@ class KaveriPricingRepository:
             kaveri_village_code=kaveri_village_code,
             mapping_status=mapping_status,
             matching_score=matching_score,
+            lgd_village_code=lgd_village_code,
+            bhucode=bhucode,
+            mapping_method=mapping_method,
+            resolved_at=resolved_at,
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_kaveri_village_mapping_kgis_code",
@@ -83,6 +91,10 @@ class KaveriPricingRepository:
                 "kaveri_village_code": stmt.excluded.kaveri_village_code,
                 "mapping_status": stmt.excluded.mapping_status,
                 "matching_score": stmt.excluded.matching_score,
+                "lgd_village_code": stmt.excluded.lgd_village_code,
+                "bhucode": stmt.excluded.bhucode,
+                "mapping_method": stmt.excluded.mapping_method,
+                "resolved_at": stmt.excluded.resolved_at,
             },
         )
         await self._session.execute(stmt)
@@ -121,26 +133,8 @@ class KaveriPricingRepository:
     async def commit(self) -> None:
         await self._session.commit()
 
-    async def get_fresh_rate_cache_for_village(
-        self, kaveri_village_code: str
-    ) -> KaveriRateCache | None:
-        """Looks up a cached guideline rate for a whole Kaveri village, without
-        needing to know the road code or the property type first. Property-type
-        discovery means a village's canonical rate (the highest-priority
-        available land type) is what we cache & reuse, so a cache *hit* skips
-        the live GetRoadDetailsAsync + rate calls entirely. Returns the most
-        recently updated fresh row, or None if none is fresh."""
-        result = await self._session.execute(
-            select(KaveriRateCache)
-            .where(KaveriRateCache.kaveri_village_code == kaveri_village_code)
-            .order_by(KaveriRateCache.updated_at.desc())
-        )
-        row = result.scalars().first()
-        if row is None:
-            return None
-        if datetime.now(timezone.utc) - row.updated_at > RATE_CACHE_TTL:
-            return None
-        return row
+    async def rollback(self) -> None:
+        await self._session.rollback()
 
     async def get_fresh_rate_cache(
         self, kaveri_village_code: str, road_code: str, property_type: str
@@ -162,18 +156,113 @@ class KaveriPricingRepository:
             return None
         return row
 
+    async def get_fresh_rate_entries_for_road(
+        self, kaveri_village_code: str, road_code: str
+    ) -> list[KaveriRateCache] | None:
+        """Every fresh cached rate row for one (village, road) — the full
+        candidate set Kaveri returned there, not one parcel's selection.
+        Returns None (a genuine miss, not an empty list) when nothing fresh is
+        cached for this road at all, so the caller knows to hit Kaveri live;
+        callers must still apply their own parcel-specific selection to
+        whatever this returns (spec Part 11/14 — cache the catalogue once,
+        select per parcel every time)."""
+        result = await self._session.execute(
+            select(KaveriRateCache).where(
+                KaveriRateCache.kaveri_village_code == kaveri_village_code,
+                KaveriRateCache.road_code == road_code,
+            )
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            return None
+        fresh = [r for r in rows if datetime.now(timezone.utc) - r.updated_at <= RATE_CACHE_TTL]
+        return fresh or None
+
+    async def upsert_rate_cache_bulk(
+        self,
+        kaveri_village_code: str,
+        road_code: str,
+        entries: list[dict],
+        *,
+        road_confidence: Decimal,
+        road_resolution_method: str,
+        classification: str,
+    ) -> None:
+        """Caches EVERY rate entry Kaveri returned for a road (not just the
+        one a particular parcel selected), so the next parcel on the same
+        road/locality can skip the live Kaveri calls entirely while still
+        resolving its own category independently.
+
+        Written as ONE multi-row statement + ONE commit, not N sequential
+        auto-committing calls — a real production incident showed why: an
+        earlier per-entry-commit version left a road's cache holding only
+        the first 1 of 5 real categories after a later entry's write failed
+        (a too-narrow column), and callers had no way to tell that
+        "1 cached entry" meant "the other 4 are missing" rather than
+        "Kaveri only has 1 category here". Atomic means either every entry
+        for this road is cached, or none are — the cache can never be
+        silently partial."""
+        if not entries:
+            return
+        stmt = pg_insert(KaveriRateCache).values(
+            [
+                {
+                    "kaveri_village_code": kaveri_village_code,
+                    "road_code": road_code,
+                    "property_type": entry["label"],
+                    "standard_rate": entry["rate"],
+                    "rate_unit": entry["rate_unit"],
+                    "road_confidence": road_confidence,
+                    "road_resolution_method": road_resolution_method,
+                    "classification": classification,
+                }
+                for entry in entries
+            ]
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_kaveri_rate_cache_village_road_property",
+            set_={
+                "standard_rate": stmt.excluded.standard_rate,
+                "rate_unit": stmt.excluded.rate_unit,
+                "road_confidence": stmt.excluded.road_confidence,
+                "road_resolution_method": stmt.excluded.road_resolution_method,
+                "classification": stmt.excluded.classification,
+            },
+        )
+        await self._session.execute(stmt)
+        await self._session.commit()
+
     async def upsert_rate_cache(
-        self, kaveri_village_code: str, road_code: str, property_type: str, standard_rate: Decimal
+        self,
+        kaveri_village_code: str,
+        road_code: str,
+        property_type: str,
+        standard_rate: Decimal,
+        *,
+        rate_unit: str,
+        road_confidence: Decimal,
+        road_resolution_method: str,
+        classification: str,
     ) -> None:
         stmt = pg_insert(KaveriRateCache).values(
             kaveri_village_code=kaveri_village_code,
             road_code=road_code,
             property_type=property_type,
             standard_rate=standard_rate,
+            rate_unit=rate_unit,
+            road_confidence=road_confidence,
+            road_resolution_method=road_resolution_method,
+            classification=classification,
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_kaveri_rate_cache_village_road_property",
-            set_={"standard_rate": stmt.excluded.standard_rate},
+            set_={
+                "standard_rate": stmt.excluded.standard_rate,
+                "rate_unit": stmt.excluded.rate_unit,
+                "road_confidence": stmt.excluded.road_confidence,
+                "road_resolution_method": stmt.excluded.road_resolution_method,
+                "classification": stmt.excluded.classification,
+            },
         )
         await self._session.execute(stmt)
         await self._session.commit()

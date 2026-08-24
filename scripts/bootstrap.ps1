@@ -45,7 +45,12 @@ Write-Host "    git, docker, docker compose: OK"
 function New-LocalSecret {
     param([int]$Bytes = 24)
     $buffer = New-Object byte[] $Bytes
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+    $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+    try {
+        $rng.GetBytes($buffer)
+    } finally {
+        $rng.Dispose()
+    }
     $encoded = [Convert]::ToBase64String($buffer) -replace '[+/=]', ''
     if ($encoded.Length -gt 32) { $encoded = $encoded.Substring(0, 32) }
     return $encoded

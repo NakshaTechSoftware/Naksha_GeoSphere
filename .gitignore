@@ -91,6 +91,10 @@ infrastructure/routing/data/
 # === Alembic autogenerate scratch ===
 services/api/migrations/.autogenerate/
 
+# === Kaveri village mapping generator output (derived, regenerate via the script) ===
+services/api/scripts/.kaveri_hierarchy_cache.json
+services/api/scripts/mapping_report.csv
+
 # === Misc ===
 *.bak
 *.orig

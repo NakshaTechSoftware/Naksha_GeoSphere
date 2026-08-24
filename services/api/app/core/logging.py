@@ -31,9 +31,14 @@ class JsonFormatter(logging.Formatter):
             payload["request_id"] = request_id
 
         if record.exc_info:
-            payload["exception_type"] = (
-                str(record.exc_info[0].__name__) if record.exc_info[0] else None
-            )
+            exc_type, exc_value, _ = record.exc_info
+            payload["exception_type"] = str(exc_type.__name__) if exc_type else None
+            payload["exception_message"] = str(exc_value) if exc_value is not None else None
+            # Full traceback (file/function/line for every frame) — without
+            # this, a caught-and-logged exception is nearly as opaque as one
+            # that was swallowed silently; `logger.exception(...)` calls
+            # throughout the app rely on this actually reaching the log.
+            payload["traceback"] = self.formatException(record.exc_info)
 
         return json.dumps(payload, default=str)
 

@@ -8,6 +8,7 @@ interface UserProfileProps {
   /** Explicit overrides — when omitted, the signed-in session user is used. */
   userName?: string;
   userEmail?: string;
+  userLocationLabel?: string | null;
   /** Fired with the new open state whenever the avatar button toggles the dropdown. */
   onMenuToggle?: (open: boolean) => void;
   /** Overrides the dropdown's vertical offset class (default `"top-12"`). Use this when
@@ -23,6 +24,7 @@ interface UserProfileProps {
 export function UserProfile({
   userName,
   userEmail,
+  userLocationLabel,
   onMenuToggle,
   menuPositionClassName,
 }: UserProfileProps) {
@@ -110,7 +112,12 @@ export function UserProfile({
                   <p className="text-sm font-semibold text-gray-900 truncate">
                     {displayName}
                   </p>
-                  <p className="text-xs text-gray-600 truncate">{displayEmail}</p>
+                  <p className="text-xs text-gray-600 truncate">{userEmail}</p>
+                  {userLocationLabel && (
+                    <p className="mt-1 text-[11px] text-gray-500 truncate">
+                      Location: {userLocationLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

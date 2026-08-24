@@ -1,0 +1,35 @@
+district,taluk,hobli,village,kaveri_village_code,classification,road_code,road_name,road_confidence,road_method,rate_type,rate,rate_unit,plot_area_sqm,calculated_value,final_status
+Bangalore Rural,Devanahalli,Chanarayanapatana Hobli,Agalakote,31154,unknown,85991,Agalakote ((Residencial (Grama Tana)),0.90,locality_name_match,Residential,4500,per_sq_m,200.0,900000.00,ok
+Bangalore Rural,Devanahalli,Chanarayanapatana Hobli,Agalakote,31154,unknown,85991,Agalakote ((Residencial (Grama Tana)),0.90,locality_name_match,Residential,4500,per_sq_m,200.0,900000.00,ok
+Bangalore Rural,Devanahalli,Chanarayanapatana Hobli,Baladimmenahalli,31354,unknown,86875,Baladimmenahalli ((Residencial (Grama Tana)),0.90,locality_name_match,Residential,3000,per_sq_m,200.0,600000.00,ok
+Belgaum,Athani,Ananthapura Hobli,Abbihala,18711,ambiguous,40937,Abbihal,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Belgaum,Athani,Ananthapura Hobli,Abbihala,18711,ambiguous,40937,Abbihal,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Belgaum,Athani,Ananthapura Hobli,Agrani-Ingalgaon,18804,ambiguous,41052,Agrani-Ingalgaon,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Bellary,Bellary,Bellary Hobli,Alada Halli,19591,unknown,136923,1177 .Alada Halli,0.90,locality_name_match,Residential,3000,per_sq_m,200.0,600000.00,ok
+Bellary,Bellary,Bellary Hobli,Alada Halli,19591,unknown,136923,1177 .Alada Halli,0.90,locality_name_match,Residential,3000,per_sq_m,200.0,600000.00,ok
+Bellary,Bellary,Bellary Hobli,Andrahal,20209,unknown,206795,"1194. Andhral Village:within the Limit of Ballari. Sy.Nos:1 to 34, 40 89 90 91 95 96 98 99 100 to 114 116 to 120
+
+",0.55,village_default,Residential,3000,per_sq_m,200.0,600000.00,ok
+Kodagu,Kushalnagar,Kushalanagara Hobli,6th Hosakote,15101,ambiguous,32275,6th Hosakote,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Kodagu,Kushalnagar,Kushalanagara Hobli,Abyath Mangala,14887,ambiguous,31969,Abyath Mangala,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Kodagu,Kushalnagar,Kushalanagara Hobli,Aliluguppe,14885,ambiguous,31964,Aliluguppe,0.55,village_default,,,,200.0,,classification_unknown_multiple_rates
+Mangalore,Bantwala,Bantwala Kasaba Hobli,Ajjibettu,26917,unknown,134378,Ajjibettu     Road Side (Converted Land),0.90,locality_name_match,Residential,1200,per_sq_m,200.0,240000.00,ok
+Mangalore,Bantwala,Bantwala Kasaba Hobli,Amtadi,26903,unknown,133795,Amtadi     Road Side (Converted Land),0.90,locality_name_match,Residential,1400,per_sq_m,200.0,280000.00,ok
+Mangalore,Bantwala,Bantwala Kasaba Hobli,Arala,26900,unknown,133708,Arala  Road Side (Converted Land),0.90,locality_name_match,Residential,1200,per_sq_m,200.0,240000.00,ok
+Mysore,Bannur,Bannur  Hobli,Ankanahlli,38667,ambiguous,165015,Ankanahalli,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Mysore,Bannur,Bannur  Hobli,Aravatigekoppalu,38668,ambiguous,165017,Aravatigekoppalu,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Mysore,Bannur,Bannur  Hobli,Attahalli,38649,ambiguous,165016,Attahalli,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Raichur,ARAKERA,Arakera Hobli,Adakalagudda,24275,ambiguous,59843,Adakalagudda,0.55,village_default,,,,200.0,,classification_unknown_multiple_rates
+Raichur,ARAKERA,Arakera Hobli,Adakalagudda,24275,ambiguous,59843,Adakalagudda,0.55,village_default,,,,200.0,,classification_unknown_multiple_rates
+Raichur,ARAKERA,Arakera Hobli,Agrahara,24293,ambiguous,59868,Agrahara,0.55,village_default,,,,200.0,,classification_unknown_multiple_rates
+Shimoga,Bhadravathi,Holehonnuru Hobli 1,Agasanahalli,22236,ambiguous,52468,Agasanahalli,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Shimoga,Bhadravathi,Holehonnuru Hobli 1,Agasanahalli,22236,ambiguous,52468,Agasanahalli,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Shimoga,Bhadravathi,Holehonnuru Hobli 1,Aradotlu,22241,ambiguous,52477,Aradotlu,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Tumkur,Chikkanayakanahalli,Chikkanayakanahalli Town,Chikkanayakanahalli Town,7453,unknown,401158,Near Thathaiaynagori Chikkanayakanahalli,0.89,locality_name_match,Residential,9000,per_sq_m,200.0,1800000.00,ok
+Tumkur,Chikkanayakanahalli,Chikkanayakanahalli Town,Chikkanayakanahalli Town,7453,unknown,401158,Near Thathaiaynagori Chikkanayakanahalli,0.89,locality_name_match,Residential,9000,per_sq_m,200.0,1800000.00,ok
+Tumkur,Chikkanayakanahalli,Handanakere Hobli,Ankasandra,7153,ambiguous,13808,Ankasandra Gramathana,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Udupi,Baindur,Baindur Hobli,11 Ulloor,21919,ambiguous,51935,"11 Ulloor Village No Road Approach, Interior Property,",0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Udupi,Baindur,Baindur Hobli,Bijoor,22314,ambiguous,52649,"Bijoor Vilage P.W.D./Zilla Panchayath Road Both Side Properties. Kanchikan Road To Railway Gate  (S.No171, 187, 204,  209.)
+
+",0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates
+Udupi,Baindur,Baindur Hobli,Byndoor,22382,ambiguous,52752,Byndoor Village No Road Approach Interior Property,0.90,locality_name_match,,,,200.0,,classification_unknown_multiple_rates

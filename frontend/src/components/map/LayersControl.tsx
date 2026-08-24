@@ -17,6 +17,10 @@ interface LayersControlProps {
   autoExpand?: boolean;
   /** Whether the small stacked-layers badge icon is shown */
   showBadgeIcon?: boolean;
+  /** Controlled mode: when true, the panel is expanded; when false, collapsed.
+   *  When not provided, the panel manages its own expand/collapse state. */
+  isExpanded?: boolean;
+  onToggle?: (isExpanded: boolean) => void;
 }
 
 /**
@@ -31,8 +35,20 @@ export function LayersControl({
   onTogglePlaceLabels,
   autoExpand,
   showBadgeIcon = true,
+  isExpanded: controlledIsExpanded,
+  onToggle,
 }: LayersControlProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  // Controlled mode: use provided isExpanded; otherwise manage internally.
+  const [isExpandedLocal, setIsExpandedLocal] = controlledIsExpanded !== undefined
+    ? [controlledIsExpanded, () => {}]
+    : useState(false);
+  const setIsExpanded = (value: boolean) => {
+    if (controlledIsExpanded !== undefined) {
+      onToggle?.(value);
+    } else {
+      setIsExpandedLocal(value);
+    }
+  };
 
   useEffect(() => {
     if (autoExpand) setIsExpanded(true);
@@ -68,9 +84,11 @@ export function LayersControl({
       <div className="flex items-end gap-3 max-md:flex-col-reverse max-md:items-end">
         {/* Layer option cards & toggles */}
         <div
-          className={`relative z-10 flex flex-col gap-2 ${
-            isExpanded ? "flex" : "hidden"
-          }`}
+          className={`relative z-10 flex flex-row gap-2 max-md:flex max-md:flex-col max-md:gap-2 max-md:overflow-hidden max-md:p-1 max-md:transition-all max-md:duration-300 max-md:ease-out ${
+            isExpandedLocal
+              ? "max-md:max-h-48 max-md:opacity-100"
+              : "max-md:max-h-0 max-md:opacity-0"
+          } ${isExpandedLocal ? "" : "hidden"}`}
         >
           <div className="flex flex-row gap-2 max-md:flex-col max-md:gap-2 max-md:overflow-hidden max-md:p-1">
             {layers.map((layer) => {
@@ -156,9 +174,9 @@ export function LayersControl({
 
         {/* Collapsed anchor button */}
         <button
-          onClick={() => setIsExpanded((v) => !v)}
-          className={`relative h-20 w-20 overflow-hidden rounded-2xl shadow-lg ring-2 ring-white transition-all hover:scale-105 hover:shadow-xl max-md:h-11 max-md:w-11 max-md:rounded-lg max-md:order-first ${
-            isExpanded ? "hidden" : ""
+          onClick={() => setIsExpanded(!isExpandedLocal)}
+          className={`relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg hover:shadow-xl transition-all hover:scale-105 ring-2 ring-white max-md:w-11 max-md:h-11 max-md:rounded-lg max-md:order-first ${
+            isExpandedLocal ? "hidden" : ""
           }`}
           aria-label="Open map layers"
         >
@@ -201,8 +219,9 @@ export function LayersControl({
         {currentLayer === "terrain" && <TerrainLegend />}
       </div>
 
-      {/* Mobile backdrop for outside tap to close */}
-      {isExpanded && (
+      {/* Mobile-only backdrop: while the picker is open the anchor button (the usual
+          close affordance) is hidden, so tapping anywhere else on the map closes it. */}
+      {isExpandedLocal && (
         <div
           className="fixed inset-0 z-0 hidden max-md:block"
           onClick={() => setIsExpanded(false)}

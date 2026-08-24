@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import { Menu, X, Search, ShoppingCart, Bell, ChevronDown } from "lucide-react";
+import { clearStoredUserSession, getStoredUserSession } from "@/lib/userSession";
 
 interface NavigationItem {
   id: string;
@@ -39,6 +40,12 @@ export function DashboardHeader({
 }: DashboardHeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [resolvedUserName, setResolvedUserName] = useState(userName);
+
+  useEffect(() => {
+    const stored = getStoredUserSession();
+    setResolvedUserName(stored?.name ?? userName);
+  }, [userName]);
 
   return (
     <header className="border-[var(--color-text-on-dark)]/10 sticky top-0 z-50 w-full border-b bg-obsidian-graphite">
@@ -126,9 +133,9 @@ export function DashboardHeader({
               className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2.5 transition-colors hover:bg-white/10"
             >
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-atlas-cobalt text-xs font-bold text-white">
-                {initialsFor(userName)}
+                {initialsFor(resolvedUserName)}
               </span>
-              <span className="text-sm font-medium text-white">{userName}</span>
+              <span className="text-sm font-medium text-white">{resolvedUserName}</span>
               <ChevronDown
                 className={`h-4 w-4 text-white/60 transition-transform ${accountMenuOpen ? "rotate-180" : ""}`}
               />
@@ -153,13 +160,17 @@ export function DashboardHeader({
                 >
                   Order History
                 </a>
-                <a
-                  href="/logout"
+                <button
+                  type="button"
                   role="menuitem"
-                  className="block rounded-md px-3 py-2 text-sm text-obsidian-graphite hover:bg-[var(--color-cobalt-soft)]"
+                  onClick={() => {
+                    clearStoredUserSession();
+                    window.location.href = "/welcome-page";
+                  }}
+                  className="block w-full rounded-md px-3 py-2 text-left text-sm text-obsidian-graphite hover:bg-[var(--color-cobalt-soft)]"
                 >
                   Sign Out
-                </a>
+                </button>
               </div>
             )}
           </div>
@@ -194,9 +205,9 @@ export function DashboardHeader({
             ))}
             <div className="mt-4 flex items-center gap-4 border-t border-white/10 pt-4">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-atlas-cobalt text-xs font-bold text-white">
-                {initialsFor(userName)}
+                {initialsFor(resolvedUserName)}
               </span>
-              <span className="text-sm font-medium text-white">{userName}</span>
+              <span className="text-sm font-medium text-white">{resolvedUserName}</span>
             </div>
           </nav>
         </div>

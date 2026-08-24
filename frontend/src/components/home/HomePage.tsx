@@ -6,6 +6,7 @@ import { RecentDownloads } from "@/components/home/RecentDownloads";
 import { SavedAOIs } from "@/components/home/SavedAOIs";
 import { DataFormats } from "@/components/home/DataFormats";
 import { AccountOverview } from "@/components/home/AccountOverview";
+import { EnvironmentDashboard } from "@/components/environment/EnvironmentDashboard";
 import { Footer } from "@/components/layout/Footer";
 
 export function HomePage() {
@@ -32,6 +33,8 @@ export function HomePage() {
             <DataFormats />
             <AccountOverview />
           </div>
+
+          <EnvironmentDashboard />
         </div>
       </main>
 

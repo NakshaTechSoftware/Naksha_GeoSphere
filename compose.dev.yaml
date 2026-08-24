@@ -98,6 +98,7 @@ services:
       - ./services/api/app:/app/app
       - ./services/api/migrations:/app/migrations
       - ./services/api/tests:/app/tests
+      - ./services/api/scripts:/app/scripts
       - ./services/api/alembic.ini:/app/alembic.ini
       - ./services/api/pyproject.toml:/app/pyproject.toml
 
@@ -115,6 +116,11 @@ services:
     ports:
       - "${WEB_HOST_PORT:-3000}:3000"
     environment:
+      # Server-side proxies (e.g. /api/export, see src/lib/config.ts's internalApiUrl) run
+      # inside this container and need the Compose service hostname, not the browser-facing
+      # NEXT_PUBLIC_API_URL below (which points at "localhost" - the container itself from
+      # in here, not the api service) - without this, every such proxy 502s as unreachable.
+      API_URL: ${API_URL:-http://api:8000}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Naksha GeoSphere}
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}

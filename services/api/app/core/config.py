@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     s3_bucket_temporary_data: str = "geosphere-temporary-data"
     signed_url_expiry_seconds: int = 900
 
+    # --- KGIS administrative-boundary source data ------------------------
+    # A *separate* remote MinIO server, not the local `minio_endpoint` above -
+    # the "Administrative Boundaries/..." KGIS district/taluk/hobli/village
+    # GeoJSON this platform ships with lives here, not in the app's own
+    # object storage. Defaults match the values `frontend/src/app/api/
+    # datasets/hobli-villages/route.ts` already hardcodes (read-only source
+    # data, not a secret this app's own data depends on), kept overridable
+    # via env like every other setting here rather than hardcoded again.
+    kgis_source_minio_endpoint: str = "192.168.10.81:9010"
+    kgis_source_minio_access_key: str = "geosphere_storage"
+    kgis_source_minio_secret_key: str = "706f803f67c143c884305e7085b59210ffb29ac69e724a70"
+    kgis_source_bucket: str = "geosphere-source-data"
+
     # --- Mail --------------------------------------------------------
     mail_host: str = "mailpit"
     mail_port: int = 1025
@@ -114,6 +127,19 @@ class Settings(BaseSettings):
     # link token.
     email_otp_verify_rate_limit_per_ip: int = 10
     email_otp_verify_rate_limit_per_ip_window_seconds: int = 3600
+
+    # --- External environment/weather APIs ------------------------------
+    # data.gov.in personal API key for the CPCB real-time AQI resource.
+    # Optional: when unset, official CPCB endpoints degrade to
+    # "unavailable" rather than failing application startup — Open-Meteo
+    # weather/air-quality (no key required) keep working either way.
+    data_gov_in_api_key: str | None = None
+
+    # NASA FIRMS (Fire Information for Resource Management System) MAP_KEY,
+    # obtained from https://firms.modaps.eosdis.nasa.gov/api/area/. Optional:
+    # when unset, the fire-detections endpoint degrades to "unavailable"
+    # rather than failing application startup.
+    nasa_firms_map_key: str | None = None
 
     @field_validator("cors_origins", "trusted_hosts", mode="before")
     @classmethod

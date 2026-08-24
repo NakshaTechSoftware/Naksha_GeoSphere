@@ -19,9 +19,10 @@ RUN apk add --no-cache libc6-compat
 
 # Copy package files
 COPY package*.json ./
+COPY .npmrc ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # ---------------------------------------------------------------------------
 # builder — production build
@@ -30,6 +31,11 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Sync the maplibre worker files into public/maplibre (standalone Next build needs them).
+# Runs here (not as a postinstall) because the deps stage has no source tree, and the
+# builder stage overwrites public/ with a fresh COPY . . afterwards.
+RUN node scripts/sync-maplibre-worker.mjs
 
 # Set environment variables
 ENV NEXT_TELEMETRY_DISABLED=1

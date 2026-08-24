@@ -20,6 +20,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.database.base import Base
 from app.modules.authentication.models import EmailVerificationToken  # noqa: F401
 from app.modules.users.models import User  # noqa: F401
+from app.modules.pricing.models import (  # noqa: F401
+    KaveriRateCache,
+    KaveriVillageMapping,
+    MappingGenerationProgress,
+)
 
 # Import future ORM models here so autogenerate can see them, e.g.:
 # from app.modules.catalog.models import Dataset  # noqa: F401

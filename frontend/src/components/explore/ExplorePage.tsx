@@ -18,7 +18,12 @@ import {
   type DirectionsPoint,
 } from "./IndiaMapViewer";
 import type { RtcOwner, RtcUseCase } from "@/app/api/land-records/_bhoomi";
-import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
+import { config } from "@/lib/config";
+import { LocationEnvironmentPanel } from "@/components/environment/LocationEnvironmentPanel";
+import {
+  getStoredUserSession,
+  type StoredUserSession,
+} from "@/lib/userSession";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
 import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
@@ -42,6 +47,8 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
+import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 
 type UiTravelModeId = "driving" | "motorcycle" | "cycling" | "walking";
 const TRAVEL_MODES: { id: UiTravelModeId; mode: TravelMode; label: string; Icon: typeof Car }[] = [
@@ -215,11 +222,66 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+// Karnataka Kaveri Online Services government guideline value ("SR Rate") for a
+// cadastral parcel - see /api/v1/pricing/guideline-value (services/api/app/api/v1/pricing.py).
+// "unavailable" (no village mapping / no road / no rate) and "error" (the upstream
+// request itself failed) are kept distinct from the fetch's own perspective, but both
+// render as the backend's own `message` string - the task spec's exact wording either way.
+type GuidelineValueState =
+  | { status: "loading" }
+  | {
+      status: "ok";
+      standardRate: number;
+      rateUnit: string;
+      plotAreaSqm: number;
+      estimatedLandValue: number;
+      landType: string;
+      availableRates?: string[] | null;
+      source: string;
+      roadResolutionMethod: string;
+      roadConfidence: number;
+      classificationSource: string;
+    }
+  | {
+      status: "unavailable" | "error";
+      message: string;
+      reason?: string;
+      debugDetail?: string | null;
+    }
+  | {
+      status: "road_selection_required";
+      message: string;
+      candidates: { roadCode: string; roadName: string; rates: string[] }[];
+    }
+  | {
+      status: "classification_unknown";
+      message: string;
+      candidates: { propertyType: string; rate: number; rateUnit: string }[];
+    }
+  | {
+      status: "rate_category_selection_required";
+      message: string;
+      landType: string;
+      candidates: { propertyType: string; rate: number; rateUnit: string }[];
+    };
+
+// "village_default"/"manual_required" are best-guess road resolutions, not a
+// confirmed locality match - the popup should say so rather than imply
+// certainty (spec Part 6/16's "rate matched using…" line).
+const ROAD_RESOLUTION_LABEL: Record<string, string> = {
+  exact_road_attribute: "exact cadastral road match",
+  only_rated_candidate: "only nearby road with a Kaveri rate",
+  locality_name_match: "nearest matching locality name",
+  village_default: "village-level default (unconfirmed)",
+  manual_required: "unconfirmed (best available guess)",
+};
+
 function AttributePanelBody({
   info,
   owners,
   useCase,
   adjacentPlots,
+  guidelineValue,
   onClose,
   onExport,
   onSketchClick,
@@ -236,6 +298,7 @@ function AttributePanelBody({
     owners?: RtcOwner[];
     message?: string;
   }[];
+  guidelineValue?: GuidelineValueState;
   onClose?: () => void;
   onExport: () => void;
   onSketchClick?: (url: string) => void;
@@ -411,6 +474,120 @@ function AttributePanelBody({
                     Adjacent Plots
                   </td>
                   <td className="px-3 py-1.5 text-slate-400">None found</td>
+                </tr>
+              )}
+              {/* Government Guideline Value — Karnataka Kaveri Online Services SR Rate,
+                  see /api/v1/pricing/guideline-value. Loading/unavailable/error states
+                  keep the row present so it never looks like the fetch was skipped. */}
+              {info.parcel && guidelineValue && (
+                <tr className="border-b border-slate-100">
+                  <td className="w-1 whitespace-nowrap border-r border-slate-200 px-3 py-1.5 align-top text-slate-500">
+                    Guideline Value
+                  </td>
+                  <td className="break-words px-3 py-1.5">
+                    {guidelineValue.status === "loading" && (
+                      <span className="text-slate-400">Loading guideline value…</span>
+                    )}
+                    {(guidelineValue.status === "unavailable" || guidelineValue.status === "error") && (
+                      <div className="space-y-0.5">
+                        <span className="text-amber-600">{guidelineValue.message}</span>
+                        {guidelineValue.reason && (
+                          <p className="text-[11px] text-slate-400">Reason: {guidelineValue.reason}</p>
+                        )}
+                        {guidelineValue.debugDetail && (
+                          <p className="text-[11px] text-slate-400 break-words">
+                            Debug: {guidelineValue.debugDetail}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {guidelineValue.status === "road_selection_required" && (
+                      <div className="space-y-1">
+                        <span className="text-amber-600">{guidelineValue.message}</span>
+                        <ul className="space-y-0.5 text-[11px] text-slate-500">
+                          {guidelineValue.candidates.map((c) => (
+                            <li key={c.roadCode}>
+                              <span className="font-medium text-slate-700">{c.roadName}</span>
+                              {": "}
+                              {c.rates.join(", ")}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {guidelineValue.status === "classification_unknown" && (
+                      <div className="space-y-1">
+                        <span className="text-amber-600">{guidelineValue.message}</span>
+                        <ul className="space-y-0.5 text-[11px] text-slate-500">
+                          {guidelineValue.candidates.map((c) => (
+                            <li key={c.propertyType}>
+                              <span className="font-medium text-slate-700">{c.propertyType}</span>
+                              {": ₹"}
+                              {c.rate.toLocaleString("en-IN")} ({c.rateUnit === "per_acre" ? "/ acre" : "/ sq.m"})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {guidelineValue.status === "rate_category_selection_required" && (
+                      <div className="space-y-1">
+                        <p>
+                          <span className="text-slate-500">Land Type: </span>
+                          <span className="font-semibold text-slate-900">{guidelineValue.landType}</span>
+                        </p>
+                        <span className="text-amber-600">{guidelineValue.message}</span>
+                        <ul className="space-y-0.5 text-[11px] text-slate-500">
+                          {guidelineValue.candidates.map((c) => (
+                            <li key={c.propertyType}>
+                              <span className="font-medium text-slate-700">{c.propertyType}</span>
+                              {": ₹"}
+                              {c.rate.toLocaleString("en-IN")} ({c.rateUnit === "per_acre" ? "/ acre" : "/ sq.m"})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {guidelineValue.status === "ok" && (
+                      <div className="space-y-0.5">
+                        <p>
+                          <span className="text-slate-500">Land Type: </span>
+                          <span className="font-semibold text-slate-900">
+                            {guidelineValue.landType}
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Standard Rate: </span>
+                          <span className="font-semibold text-slate-900">
+                            ₹{guidelineValue.standardRate.toLocaleString("en-IN")}
+                            {guidelineValue.rateUnit === "per_acre" ? " / acre" : " / Sq.m"}
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Plot Area: </span>
+                          <span className="font-semibold text-slate-900">
+                            {guidelineValue.plotAreaSqm.toLocaleString("en-IN")} Sq.m
+                          </span>
+                        </p>
+                        <p>
+                          <span className="text-slate-500">Estimated Guideline Value: </span>
+                          <span className="font-semibold text-slate-900">
+                            ₹{Math.round(guidelineValue.estimatedLandValue).toLocaleString("en-IN")}
+                          </span>
+                        </p>
+                        {guidelineValue.availableRates && guidelineValue.availableRates.length > 0 && (
+                          <p className="text-[11px] text-slate-400">
+                            Available Rates: {guidelineValue.availableRates.join(", ")}
+                          </p>
+                        )}
+                        <p className="text-[11px] text-slate-400">
+                          Rate matched using:{" "}
+                          {ROAD_RESOLUTION_LABEL[guidelineValue.roadResolutionMethod] ??
+                            guidelineValue.roadResolutionMethod}
+                        </p>
+                        <p className="text-[11px] text-slate-400">Source: {guidelineValue.source}</p>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               )}
             </>
@@ -837,19 +1014,30 @@ export function ExplorePage() {
   const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
   const aoiMenuRef = useRef<HTMLDivElement>(null);
 
-  // Attribute panel
+  // Weather toolbar - appears beside search bar when weather is active.
+  const [showWeatherToolbar, setShowWeatherToolbar] = useState(false);
+  const [weatherToolbarMode, setWeatherToolbarMode] = useState<WeatherLayerKey | null>(null);
+
+  // Right-click attribute info for the side panel (boundary type + title + rows), reported
+  // by the map viewer; null when no feature is shown.
   const [attributeInfo, setAttributeInfo] = useState<AttributeInfo | null>(null);
+  // Whether the attribute panel is open. On mobile the panel starts collapsed until a
+  // feature is tapped; on desktop the panel opens immediately. Initialized from the current
+  // screen size (false on phones) so a first selection never flashes the panel open for a
+  // frame before the effect below closes it. The `typeof window` guard keeps SSR safe; the
+  // server value (false) is irrelevant because nothing renders until a feature is picked.
   const [attributePanelOpen, setAttributePanelOpen] = useState<boolean>(() =>
     typeof window !== "undefined"
       ? window.matchMedia("(min-width: 768px)").matches
       : false
   );
-
   useEffect(() => {
     if (!attributeInfo) return;
     setAttributePanelOpen(window.matchMedia("(min-width: 768px)").matches);
     setSketchUrl(null);
   }, [attributeInfo]);
+  const [storedUser, setStoredUser] = useState<StoredUserSession | null>(null);
+  const [showLocationEnvironment, setShowLocationEnvironment] = useState(false);
 
   const [sketchUrl, setSketchUrl] = useState<string | null>(null);
 
@@ -879,6 +1067,11 @@ export function ExplorePage() {
   >([]);
 
   const parcel = attributeInfo?.parcel;
+  const storedLocation = storedUser?.preferredLocation ?? null;
+
+  useEffect(() => {
+    setStoredUser(getStoredUserSession());
+  }, []);
   const adjacentParcels = attributeInfo?.adjacentParcels;
   const adjacentParcelsKey = adjacentParcels
     ?.map((p) => `${p.survey}|${p.surnoc}|${p.hissa}`)
@@ -887,6 +1080,17 @@ export function ExplorePage() {
   useEffect(() => {
     if (!parcel) return;
     const controller = new AbortController();
+    // RTC's OCR chain (Bhoomi session -> survey/hissa navigation -> preview
+    // page -> image download -> OCR) has no bound of its own and must never
+    // be allowed to leave this row spinning forever - bounded here so it
+    // always reaches a terminal state (spec: "every async code path must
+    // settle"). The guideline-value request (below) never waits on this one
+    // finishing, so this timeout only affects the Owner/Land-Use row itself.
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 60_000);
     setOwners({ status: "loading" });
     setUseCase(null);
     const parcelParams = new URLSearchParams({ ...parcel }).toString();
@@ -901,15 +1105,25 @@ export function ExplorePage() {
         setOwners({ status: "ok", rows: data.owners ?? [] });
         setUseCase(data.useCase ?? null);
       } catch (error) {
+        if (timedOut) {
+          setOwners({ status: "error", message: "Land records lookup timed out" });
+          setUseCase(null);
+          return;
+        }
         if (controller.signal.aborted) return;
         setOwners({
           status: "error",
           message: error instanceof Error ? error.message : "Lookup failed",
         });
         setUseCase(null);
+      } finally {
+        clearTimeout(timeoutId);
       }
     })();
-    return () => controller.abort();
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [
     parcel?.district,
     parcel?.taluk,
@@ -982,6 +1196,189 @@ export function ExplorePage() {
     parcel?.surnoc,
     parcel?.hissa,
     adjacentParcelsKey,
+  ]);
+
+  const [guidelineValue, setGuidelineValue] = useState<GuidelineValueState | undefined>(undefined);
+
+  // Karnataka Kaveri Online Services guideline value ("SR Rate") for the selected cadastral
+  // parcel. Reads the KGIS village code and plot area straight off the parcel's own raw
+  // properties (already carried on `attributeInfo.properties` for every cadastral feature -
+  // see IndiaMapViewer.tsx's KGISVillageCode/UniqueVillageCode/KGISVill_1 fallback chain used
+  // for the same field elsewhere), so no IndiaMapViewer changes were needed for this feature.
+  useEffect(() => {
+    if (!parcel) {
+      setGuidelineValue(undefined);
+      return;
+    }
+    const props = attributeInfo?.properties ?? {};
+    const kgisVillageCode = String(
+      props.KGISVillageCode ?? props.UniqueVillageCode ?? props.KGISVill_1 ?? "",
+    ).split("_")[0];
+    const rawArea =
+      props["SHAPE.STArea()"] ?? props.Shape_Area ?? props.shape_area ?? props.SHAPE_Area;
+    const plotAreaSqm = rawArea !== undefined ? Number(rawArea) : NaN;
+
+    if (!kgisVillageCode || !Number.isFinite(plotAreaSqm) || plotAreaSqm <= 0) {
+      setGuidelineValue(undefined);
+      return;
+    }
+
+    // Location/rate discovery and the Bhoomi/RTC lookup (owners/useCase,
+    // fetched above) run INDEPENDENTLY — RTC's OCR chain has no bound on how
+    // long it can take (or whether it ever settles) and must never be able
+    // to deadlock this request. Fire immediately with whatever evidence is
+    // already available; this effect's dependency on `useCase?.landClassification`
+    // (below) re-fires it automatically once RTC resolves, upgrading a
+    // GIS-only/unknown-classification result to an RTC-backed one. A
+    // previous version blocked here on `owners.status !== "loading"`, which
+    // left the popup stuck on "Loading guideline value…" forever whenever
+    // the RTC fetch hung (observed live for Beltangadi parcels).
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 25_000);
+    setGuidelineValue({ status: "loading" });
+    const params = new URLSearchParams({
+      kgis_village_code: kgisVillageCode,
+      plot_area_sqm: String(plotAreaSqm),
+    });
+    // Send the parcel's own KGIS district/taluk/hobli/village names so the
+    // backend can auto-resolve + persist the Kaveri mapping on first click
+    // (no pre-seeded crosswalk required).
+    if (parcel?.district) params.set("district", String(parcel.district));
+    if (parcel?.taluk) params.set("taluk", String(parcel.taluk));
+    if (parcel?.hobli) params.set("hobli", String(parcel.hobli));
+    if (parcel?.village) params.set("village", String(parcel.village));
+    // Land-use GIS attributes (if the cadastral layer carries them) drive the
+    // backend's agricultural vs vacant endpoint choice — never a hardcoded rate.
+    const gisCategory =
+      props.Category ?? props.category ?? props.LandUse ?? props.land_use ?? "";
+    const gisLandcode =
+      props.Landcode ?? props.landcode ?? props.LandCode ?? props.LANDCODE ?? "";
+    if (gisCategory) params.set("category", String(gisCategory));
+    if (gisLandcode) params.set("landcode", String(gisLandcode));
+    // Bhoomi/RTC land classification (already fetched for this parcel by the
+    // Owner/Land-Use effect above, if it's resolved by the time this runs) is
+    // the highest-priority classification evidence the backend accepts — see
+    // app.modules.pricing.classification. This effect depends on `useCase`
+    // below, so once the slow RTC/OCR fetch resolves after this first (fast)
+    // call, the request re-fires with the hint included.
+    if (useCase?.landClassification) {
+      params.set("bhoomi_land_classification", useCase.landClassification);
+    }
+    // RTC crop/irrigation evidence — used only to disambiguate WHICH
+    // agricultural Kaveri rate category applies once classification is
+    // already known to be agricultural (e.g. Bagayat Coconut vs Bagayat Dry
+    // vs Plantation). Never used to invent a classification on its own.
+    if (useCase?.crops && useCase.crops.length > 0) {
+      params.set("bhoomi_crop", useCase.crops.join(","));
+    }
+    if (useCase?.irrigationSource) {
+      params.set("bhoomi_irrigation", useCase.irrigationSource);
+    }
+    (async () => {
+      try {
+        const res = await fetch(
+          `${config.apiUrl}/api/v1/pricing/guideline-value?${params.toString()}`,
+          { signal: controller.signal },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Unable to fetch government guideline value");
+        if (data.status === "ok") {
+          setGuidelineValue({
+            status: "ok",
+            standardRate: Number(data.standard_rate),
+            rateUnit: data.rate_unit ?? "per_sq_m",
+            plotAreaSqm: Number(data.plot_area_sqm),
+            estimatedLandValue: Number(data.estimated_land_value),
+            landType: data.land_type ?? data.property_type,
+            availableRates: data.available_rates ?? null,
+            source: data.source,
+            roadResolutionMethod: data.road_resolution_method ?? "manual_required",
+            roadConfidence: Number(data.road_confidence ?? 0),
+            classificationSource: data.classification_source ?? "unknown",
+          });
+        } else if (data.status === "road_selection_required") {
+          setGuidelineValue({
+            status: "road_selection_required",
+            message: data.message ?? "Multiple Kaveri road/locality rates found.",
+            candidates: (data.candidates ?? []).map((c: { road_code: string; road_name: string; rates: string[] }) => ({
+              roadCode: c.road_code,
+              roadName: c.road_name,
+              rates: c.rates,
+            })),
+          });
+        } else if (data.status === "classification_unknown") {
+          setGuidelineValue({
+            status: "classification_unknown",
+            message: data.message ?? "Land classification could not be determined.",
+            candidates: (data.candidates ?? []).map(
+              (c: { property_type: string; rate: number; rate_unit: string }) => ({
+                propertyType: c.property_type,
+                rate: Number(c.rate),
+                rateUnit: c.rate_unit,
+              }),
+            ),
+          });
+        } else if (data.status === "rate_category_selection_required") {
+          setGuidelineValue({
+            status: "rate_category_selection_required",
+            message: data.message ?? "Multiple Kaveri rate categories may apply.",
+            landType: data.land_type ?? "Agriculture",
+            candidates: (data.candidates ?? []).map(
+              (c: { property_type: string; rate: number; rate_unit: string }) => ({
+                propertyType: c.property_type,
+                rate: Number(c.rate),
+                rateUnit: c.rate_unit,
+              }),
+            ),
+          });
+        } else {
+          setGuidelineValue({
+            status: "unavailable",
+            message: data.message ?? "Guideline value unavailable for this location",
+            reason: data.reason,
+            debugDetail: data.debug_detail ?? null,
+          });
+        }
+      } catch (error) {
+        if (timedOut) {
+          setGuidelineValue({
+            status: "error",
+            message: "Kaveri temporarily unavailable — please retry",
+            reason: "kaveri_timeout",
+          });
+          return;
+        }
+        if (controller.signal.aborted) return;
+        setGuidelineValue({
+          status: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to fetch government guideline value",
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    })();
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [
+    parcel?.district,
+    parcel?.taluk,
+    parcel?.hobli,
+    parcel?.village,
+    parcel?.survey,
+    parcel?.surnoc,
+    parcel?.hissa,
+    attributeInfo?.properties,
+    owners.status,
+    useCase?.landClassification,
+    useCase?.crops,
+    useCase?.irrigationSource,
   ]);
 
   useEffect(() => {
@@ -1579,8 +1976,53 @@ export function ExplorePage() {
           onExtraFileToggled={handleExtraFileToggledFromSearch}
           onAOIChange={setAoiInfo}
           onDrawingToolChange={setActiveAOITool}
-          onAttributeInfo={setAttributeInfo}
+          onAttributeInfo={(info) => {
+            setAttributeInfo(info);
+            // The attribute-info panel and My Environment share the same
+            // right-side anchor point - selecting a feature on the map must
+            // close My Environment so the two never render on top of each other.
+            if (info) {
+              setShowLocationEnvironment(false);
+              mapViewerRef.current?.setActiveMapPanel("none");
+            }
+          }}
           onDrillContextChange={setDrillContext}
+          hideWeatherControl={showFilters}
+          onWeatherToolbarChange={(visible) => {
+            setShowWeatherToolbar(visible);
+            if (visible) {
+              // Sync toolbar mode from map viewer
+              setWeatherToolbarMode(mapViewerRef.current?.getWeatherMode() as WeatherLayerKey | null);
+              // A left-click can't simultaneously drill into a boundary layer AND open the
+              // weather click-to-inspect popup - once any weather control is active, drop
+              // back to the plain administrative boundaries and close every other floating
+              // panel (Filters, My Environment, AOI) so the two features never fight over
+              // the same click, and no two floating panels ever render on top of each
+              // other. Also dismiss any attribute-info panel a click opened *before*
+              // weather was turned on - the map's own click handler only stops new ones
+              // from opening, it doesn't know to close one already showing.
+              setShowFilters(false);
+              setShowAOIMenu(false);
+              setShowLocationEnvironment(false);
+              setAttributeInfo(null);
+              mapViewerRef.current?.clearAttributeInfo();
+              if (selectedBoundaryLayer !== "administrative") {
+                setSelectedBoundaryLayer("administrative");
+                mapViewerRef.current?.setBoundaryLayerMode("administrative");
+                setSelectedRoadsScope("none");
+              }
+            }
+          }}
+          highlightedLocation={
+            showLocationEnvironment && storedLocation
+              ? {
+                  latitude: storedLocation.latitude,
+                  longitude: storedLocation.longitude,
+                  label: "My Environment",
+                  focusOnShow: true,
+                }
+              : null
+          }
           onLiveLocationChange={(active) => setLiveLocationState(active ? "active" : "off")}
           onNavigationUpdate={setNavigationState}
           onRequestDirections={(lat, lon, label) => {
@@ -1918,11 +2360,26 @@ export function ExplorePage() {
               <div className="relative flex items-center gap-1 overflow-hidden rounded-full bg-white py-2.5 pl-1 pr-28 shadow-md md:py-1 md:pr-2">
                 <button
                   ref={filtersToggleRef}
-                  onClick={() => setShowFilters((prev) => !prev)}
+                  onClick={() => {
+                    if (showWeatherToolbar) return;
+                    const next = !showFilters;
+                    setShowFilters(next);
+                    if (next) {
+                      // Only one floating panel is shown at a time - opening Filters
+                      // closes My Environment and Draw AOI so they never overlap.
+                      setShowAOIMenu(false);
+                      setShowLocationEnvironment(false);
+                      mapViewerRef.current?.setActiveMapPanel("none");
+                    }
+                  }}
+                  disabled={showWeatherToolbar}
+                  title={showWeatherToolbar ? "Boundary layers are disabled while Weather is active" : undefined}
                   className={`flex-shrink-0 rounded-full p-2.5 transition-colors md:p-2 ${
-                    showFilters
-                      ? "bg-gray-100 text-obsidian-graphite"
-                      : "text-gray-500 hover:bg-gray-100"
+                    showWeatherToolbar
+                      ? "cursor-not-allowed text-gray-300"
+                      : showFilters
+                        ? "bg-gray-100 text-obsidian-graphite"
+                        : "text-gray-500 hover:bg-gray-100"
                   }`}
                   aria-label="Toggle filters"
                   aria-pressed={showFilters}
@@ -2057,6 +2514,19 @@ export function ExplorePage() {
             </div>
           )}
 
+          {/* Weather layer toolbar - appears beside search bar when weather is active */}
+          {showWeatherToolbar && (
+            <WeatherLayerToolbar
+              activeLayer={weatherToolbarMode}
+              onLayerSelect={(layer) => {
+                const mode = layer ?? "none";
+                mapViewerRef.current?.setWeatherMode(mode as any);
+                setWeatherToolbarMode(layer);
+              }}
+              className="pointer-events-auto flex-shrink-0"
+            />
+          )}
+
           {/* Directions Button */}
           <button
             type="button"
@@ -2091,6 +2561,36 @@ export function ExplorePage() {
             />
           </button>
 
+          {storedLocation && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = !showLocationEnvironment;
+                setShowLocationEnvironment(next);
+                mapViewerRef.current?.setActiveMapPanel(next ? "my-environment" : "none");
+                if (next) {
+                  // Only one floating panel is shown at a time - opening My
+                  // Environment closes Filters, Draw AOI, and the attribute-info
+                  // panel (they all share the same right-side anchor point) so
+                  // none of them ever render on top of each other.
+                  setShowFilters(false);
+                  setShowAOIMenu(false);
+                  setAttributeInfo(null);
+                  mapViewerRef.current?.clearAttributeInfo();
+                }
+              }}
+              aria-label="My Environment"
+              title="My Environment"
+              className={`pointer-events-auto flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border shadow-md transition-colors ${
+                showLocationEnvironment
+                  ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <MapPin className="h-4 w-4 flex-shrink-0" />
+            </button>
+          )}
+
           {/* Desktop Draw AOI Button */}
           <div ref={aoiMenuRef} className="pointer-events-auto relative hidden md:block">
             <div
@@ -2101,8 +2601,17 @@ export function ExplorePage() {
               <button
                 type="button"
                 onClick={() => {
-                  setShowAOIMenu((prev) => !prev);
+                  const next = !showAOIMenu;
+                  setShowAOIMenu(next);
                   setAttributeInfo(null);
+                  mapViewerRef.current?.clearAttributeInfo();
+                  mapViewerRef.current?.setActiveMapPanel(next ? "draw-aoi" : "none");
+                  if (next) {
+                    // Only one floating panel is shown at a time - opening Draw AOI
+                    // closes Filters and My Environment so they never overlap.
+                    setShowFilters(false);
+                    setShowLocationEnvironment(false);
+                  }
                 }}
                 aria-haspopup="menu"
                 aria-expanded={showAOIMenu}
@@ -2243,6 +2752,7 @@ export function ExplorePage() {
               owners={owners}
               useCase={useCase}
               adjacentPlots={adjacentPlots}
+              guidelineValue={guidelineValue}
               onClose={() => {
                 setAttributeInfo(null);
                 setExportModalOpen(false);
@@ -2257,9 +2767,16 @@ export function ExplorePage() {
 
         {/* Survey Sketch panel — exactly centered on screen */}
         {sketchUrl && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setSketchUrl(null)}>
-            <div className="overflow-auto rounded-2xl border border-gray-200 bg-white shadow-2xl flex flex-col" style={{ width: "calc(100vh - 120px)", height: "calc(100vh - 120px)" }} onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 flex-shrink-0">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+            onClick={() => setSketchUrl(null)}
+          >
+            <div
+              className="flex flex-col overflow-auto rounded-2xl border border-gray-200 bg-white shadow-2xl"
+              style={{ width: "calc(100vh - 120px)", height: "calc(100vh - 120px)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-100 px-4 py-3">
                 <span className="text-sm font-semibold text-slate-700">Survey Sketch</span>
                 <button
                   type="button"
@@ -2270,11 +2787,7 @@ export function ExplorePage() {
                 </button>
               </div>
               <div className="flex-1 overflow-hidden">
-                <iframe
-                  src={sketchUrl}
-                  className="w-full h-full border-0"
-                  title="Survey Sketch"
-                />
+                <iframe src={sketchUrl} className="h-full w-full border-0" title="Survey Sketch" />
               </div>
             </div>
           </div>
@@ -2339,6 +2852,22 @@ export function ExplorePage() {
             owners={owners}
             onClose={() => setExportModalOpen(false)}
           />
+        )}
+
+        {showLocationEnvironment && storedLocation && (
+          <aside className="absolute bottom-6 right-4 top-20 z-20 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto">
+            <LocationEnvironmentPanel
+              latitude={storedLocation.latitude}
+              longitude={storedLocation.longitude}
+              locationLabel="My Environment"
+              locationMeta={{
+                accuracyMeters: storedLocation.accuracyMeters,
+                capturedAt: storedLocation.capturedAt,
+                sourceLabel: "Browser geolocation",
+              }}
+              onClose={() => setShowLocationEnvironment(false)}
+            />
+          </aside>
         )}
 
         {aoiExportOpen && aoiInfo && (

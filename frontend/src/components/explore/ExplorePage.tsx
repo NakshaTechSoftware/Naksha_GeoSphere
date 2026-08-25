@@ -2732,7 +2732,7 @@ export function ExplorePage() {
         </div>
 
         {/* Mobile Tools Button - opens the bottom sheet bundling Weather + Draw AOI */}
-        <div className="absolute right-2 top-[4.5rem] z-20 md:hidden">
+        <div className="absolute right-2 top-24 z-20 md:hidden">
           <button
             type="button"
             onClick={() => setShowMobileTools(true)}

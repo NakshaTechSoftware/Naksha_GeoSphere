@@ -80,3 +80,24 @@ export function DrawAOIIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+// Mobile "Tools" menu button icon: a 2x2 grid of rounded squares with the
+// top-right one rotated 45deg, matching the app's widgets/apps launcher glyph.
+export function ToolsGridIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <rect x="3" y="3" width="8" height="8" rx="2" />
+      <rect x="3" y="13" width="8" height="8" rx="2" />
+      <rect x="13" y="13" width="8" height="8" rx="2" />
+      <rect x="14.5" y="3.6" width="8" height="8" rx="2" transform="rotate(45 18.5 7.6)" />
+    </svg>
+  );
+}

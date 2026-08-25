@@ -26,7 +26,7 @@ import {
 } from "@/lib/userSession";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
-import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon } from "./AOIIcons";
+import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon, ToolsGridIcon } from "./AOIIcons";
 import {
   ArrowUpDown,
   Bike,
@@ -34,6 +34,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  CloudSun,
   Download,
   Footprints,
   LocateFixed,
@@ -1011,6 +1012,9 @@ export function ExplorePage() {
   // "Draw AOI" tool dropdown
   const [showAOIMenu, setShowAOIMenu] = useState(false);
   const [activeAOITool, setActiveAOITool] = useState<AOITool | null>(null);
+  // Mobile-only bottom sheet that bundles Weather and Draw AOI behind a single
+  // menu button, since the top toolbar has no room for both on narrow screens.
+  const [showMobileTools, setShowMobileTools] = useState(false);
   const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
   const aoiMenuRef = useRef<HTMLDivElement>(null);
 
@@ -2727,58 +2731,90 @@ export function ExplorePage() {
           </button>
         </div>
 
-        {/* Mobile Draw AOI Button */}
+        {/* Mobile Tools Button - opens the bottom sheet bundling Weather + Draw AOI */}
         <div className="absolute right-2 top-[4.5rem] z-20 md:hidden">
           <button
             type="button"
-            onClick={() => setShowAOIMenu((prev) => !prev)}
-            aria-haspopup="menu"
-            aria-expanded={showAOIMenu}
+            onClick={() => setShowMobileTools(true)}
+            aria-haspopup="dialog"
+            aria-expanded={showMobileTools}
+            aria-label="Tools"
             className={`flex h-11 w-11 items-center justify-center rounded-full border shadow-md transition-colors ${
               activeAOITool
                 ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                 : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
             }`}
-            aria-label="Draw area of interest"
           >
-            {activeAOITool ? (
-              (() => {
-                const ActiveIcon = AOI_TOOLS.find((t) => t.id === activeAOITool)!.Icon;
-                return <ActiveIcon className="h-5 w-5" />;
-              })()
-            ) : (
-              <DrawAOIIcon className="h-5 w-5" />
-            )}
+            <ToolsGridIcon className="h-5 w-5" />
           </button>
-
-          {showAOIMenu && (
-            <div
-              role="menu"
-              className="aoi-menu-in absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-lg"
-            >
-              {AOI_TOOLS.map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setActiveAOITool(id);
-                    setShowAOIMenu(false);
-                    mapViewerRef.current?.setDrawingTool(id);
-                  }}
-                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
-                    activeAOITool === id
-                      ? "bg-gray-100 text-obsidian-graphite"
-                      : "text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
+
+        {/* Mobile Tools bottom sheet - Weather + Draw AOI, opened from the Tools button above */}
+        {showMobileTools && (
+          <div className="pointer-events-none fixed inset-0 z-40 md:hidden">
+            <div
+              aria-hidden
+              onClick={() => setShowMobileTools(false)}
+              className="pointer-events-auto absolute inset-0 bg-black/40"
+            />
+            <div className="pointer-events-auto scrollbar-hide absolute inset-x-0 bottom-0 h-[50vh] overflow-y-auto rounded-t-2xl border-t border-gray-200 bg-white shadow-xl">
+              <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-gray-300" />
+              <div className="flex items-center justify-between px-5 pb-2 pt-3">
+                <h3 className="text-base font-semibold text-obsidian-graphite">Tools</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileTools(false)}
+                  aria-label="Close"
+                  className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="px-5 pb-6">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                  Weather
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMobileTools(false);
+                    mapViewerRef.current?.openWeatherMenu();
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl border border-gray-200 px-4 py-3 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50"
+                >
+                  <CloudSun className="h-5 w-5 flex-shrink-0 text-atlas-cobalt" />
+                  Weather layers &amp; conditions
+                </button>
+
+                <p className="mb-2 mt-5 text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
+                  Draw AOI
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  {AOI_TOOLS.map(({ id, label, Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        setActiveAOITool(id);
+                        setShowMobileTools(false);
+                        mapViewerRef.current?.setDrawingTool(id);
+                      }}
+                      className={`flex flex-col items-center gap-2 rounded-xl border px-3 py-3 text-xs transition-colors ${
+                        activeAOITool === id
+                          ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                          : "border-gray-200 text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <Icon className="h-5 w-5 flex-shrink-0" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Desktop Attribute info panel */}
         {attributeInfo && attributePanelOpen && (

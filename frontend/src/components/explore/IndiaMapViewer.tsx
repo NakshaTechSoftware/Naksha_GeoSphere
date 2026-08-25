@@ -1369,6 +1369,9 @@ export interface IndiaMapViewerHandle {
   setRoadsClickScope: (scope: "none" | "district" | "state") => void;
   /** Sets the active floating map panel, closing all others. */
   setActiveMapPanel: (panel: "none" | "layers" | "weather" | "weather-details" | "my-environment" | "draw-aoi") => void;
+  /** Opens the Weather menu exactly as if its button had been clicked - for
+   * callers (e.g. a mobile tools sheet) that trigger it from elsewhere. */
+  openWeatherMenu: () => void;
 }
 
 export interface IndiaMapViewerProps {
@@ -15780,6 +15783,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       setActiveMapPanel(panel);
       if (panel !== "weather" && panel !== "weather-details") setShowWeatherMenu(false);
     },
+    openWeatherMenu: () => {
+      // Same atomic transition as clicking the Weather button directly - see
+      // its onClick below for why every one of these states moves together.
+      setActiveMapPanel("weather");
+      setWeatherDetailsActive(true);
+      setShowWeatherMenu(true);
+      setShowImdWarnings(false);
+    },
   }));
 
     // Loads Karnataka's boundary from MinIO when the user clicks its label on the map
@@ -16991,7 +17002,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               aria-expanded={showWeatherMenu}
               aria-label="Weather"
               title="Weather"
-              className={`flex h-11 w-11 items-center justify-center rounded-full border shadow-md backdrop-blur-md transition-all duration-150 hover:scale-[1.03] active:scale-95 ${
+              className={`hidden h-11 w-11 items-center justify-center rounded-full border shadow-md backdrop-blur-md transition-all duration-150 hover:scale-[1.03] active:scale-95 md:flex ${
                 isWeatherControlActive
                   ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                   : "border-white/70 bg-white/90 text-gray-700 hover:bg-white"

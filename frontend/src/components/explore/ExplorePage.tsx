@@ -2527,13 +2527,14 @@ export function ExplorePage() {
             />
           )}
 
-          {/* Directions Button */}
+          {/* Directions Button - desktop only; on mobile it moves into the
+              bottom-left stack below so it doesn't crowd the search row. */}
           <button
             type="button"
             onClick={() => (showDirections ? closeDirections() : openDirections())}
             aria-label="Directions"
             aria-pressed={showDirections}
-            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+            className={`pointer-events-auto hidden flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors md:flex ${
               showDirections
                 ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                 : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
@@ -2544,13 +2545,13 @@ export function ExplorePage() {
 
           <div className="hidden flex-1 md:block" />
 
-          {/* My Location Button */}
+          {/* My Location Button - desktop only; see mobile stack below. */}
           <button
             type="button"
             onClick={handleToggleLiveLocation}
             aria-label={liveLocationState === "active" ? "Stop tracking my location" : "Show my location"}
             aria-pressed={liveLocationState !== "off"}
-            className={`pointer-events-auto flex flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors ${
+            className={`pointer-events-auto hidden flex-shrink-0 items-center justify-center rounded-full border p-2.5 shadow-md transition-colors md:flex ${
               liveLocationState === "active"
                 ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                 : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
@@ -2689,6 +2690,41 @@ export function ExplorePage() {
           <div className="pointer-events-auto hidden md:block">
             <UserProfile />
           </div>
+        </div>
+
+        {/* Mobile Directions/Locate stack - bottom-left corner, Directions (GPS)
+            above Show my location, so both stay reachable by thumb without
+            crowding the search row at the top. */}
+        <div className="absolute bottom-6 left-4 z-20 flex flex-col gap-3 md:hidden">
+          <button
+            type="button"
+            onClick={() => (showDirections ? closeDirections() : openDirections())}
+            aria-label="Directions"
+            aria-pressed={showDirections}
+            className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border shadow-md transition-colors ${
+              showDirections
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <Navigation className="h-5 w-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToggleLiveLocation}
+            aria-label={liveLocationState === "active" ? "Stop tracking my location" : "Show my location"}
+            aria-pressed={liveLocationState !== "off"}
+            className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border shadow-md transition-colors ${
+              liveLocationState === "active"
+                ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <LocateFixed
+              className={`h-5 w-5 ${liveLocationState === "locating" ? "animate-pulse" : ""}`}
+            />
+          </button>
         </div>
 
         {/* Mobile Draw AOI Button */}

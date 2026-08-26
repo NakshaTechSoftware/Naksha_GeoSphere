@@ -1066,9 +1066,13 @@ export function ExplorePage() {
   // (portrait:/landscape: media variants) to show it full-size and legible
   // without relying on the unreliable Screen Orientation Lock API.
   const [rtcImageUrl, setRtcImageUrl] = useState<string | null>(null);
-  // Pinch-zoom/pan state for the RTC viewer above. Reset whenever a new
-  // document is opened (or the viewer is closed) so it never reopens
-  // half-zoomed from the last time.
+  // Mobile-only Survey Sketch viewer - same rotated/zoomable treatment as the
+  // RTC viewer above, opened separately from the "Get Survey Sketch" link.
+  // Desktop keeps its existing centered iframe modal (see sketchUrl).
+  const [mobileSketchUrl, setMobileSketchUrl] = useState<string | null>(null);
+  // Pinch-zoom/pan state shared by the RTC and mobile Survey Sketch viewers
+  // above (only one is ever open at a time). Reset whenever either document
+  // opens or closes, so a viewer never reopens half-zoomed from last time.
   const [rtcZoom, setRtcZoom] = useState(1);
   const [rtcPan, setRtcPan] = useState({ x: 0, y: 0 });
   const rtcPinchRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
@@ -1078,7 +1082,7 @@ export function ExplorePage() {
   useEffect(() => {
     setRtcZoom(1);
     setRtcPan({ x: 0, y: 0 });
-  }, [rtcImageUrl]);
+  }, [rtcImageUrl, mobileSketchUrl]);
 
   const rtcTouchDistance = (touches: React.TouchList) => {
     const dx = touches[0].clientX - touches[1].clientX;
@@ -2929,10 +2933,11 @@ export function ExplorePage() {
           </aside>
         )}
 
-        {/* Survey Sketch panel — exactly centered on screen */}
+        {/* Survey Sketch panel — exactly centered on screen (desktop only; see the
+            rotated/zoomable mobile viewer below for narrow screens). */}
         {sketchUrl && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+            className="fixed inset-0 z-50 hidden items-center justify-center bg-black/30 md:flex"
             onClick={() => setSketchUrl(null)}
           >
             <div
@@ -2952,6 +2957,45 @@ export function ExplorePage() {
               </div>
               <div className="flex-1 overflow-hidden">
                 <iframe src={sketchUrl} className="h-full w-full border-0" title="Survey Sketch" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Survey Sketch viewer - same rotated/zoomable treatment as the
+            RTC viewer, since a survey sketch is also a wide landscape drawing. */}
+        {mobileSketchUrl && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-white md:hidden"
+            onClick={() => setMobileSketchUrl(null)}
+          >
+            <button
+              type="button"
+              onClick={() => setMobileSketchUrl(null)}
+              aria-label="Close"
+              className="absolute right-4 top-4 z-10 rounded-full border border-gray-200 bg-white p-2 text-gray-700 shadow-md hover:bg-gray-50"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div
+              className="flex h-full w-full shrink-0 touch-none items-center justify-center overflow-hidden"
+              style={{ transform: `translate(${rtcPan.x}px, ${rtcPan.y}px) scale(${rtcZoom})` }}
+              onClick={(e) => e.stopPropagation()}
+              onTouchStart={handleRtcTouchStart}
+              onTouchMove={handleRtcTouchMove}
+              onTouchEnd={handleRtcTouchEnd}
+            >
+              <div className="flex shrink-0 items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full">
+                <iframe
+                  src={mobileSketchUrl}
+                  title="Survey Sketch"
+                  // pointer-events-none: touches over an iframe never bubble to the
+                  // parent document's touch handlers (cross-document boundary), so
+                  // pinch/pan on the wrapper above wouldn't work otherwise. The
+                  // sketch is a static drawing, not interactive, so this is safe.
+                  className="pointer-events-none h-full w-full border-0"
+                />
               </div>
             </div>
           </div>
@@ -2990,6 +3034,7 @@ export function ExplorePage() {
                 adjacentPlots={adjacentPlots}
                 onExport={() => setExportModalOpen(true)}
                 onViewRtc={(url) => setRtcImageUrl(url)}
+                onSketchClick={(url) => setMobileSketchUrl(url)}
               />
             </div>
           </div>

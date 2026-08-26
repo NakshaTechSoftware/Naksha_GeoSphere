@@ -3034,7 +3034,13 @@ export function ExplorePage() {
                 adjacentPlots={adjacentPlots}
                 onExport={() => setExportModalOpen(true)}
                 onViewRtc={(url) => setRtcImageUrl(url)}
-                onSketchClick={(url) => setMobileSketchUrl(url)}
+                onSketchClick={(url) =>
+                  // recenter=1: the mobile viewer has no room to spare for the
+                  // upstream sketch's off-center viewBox padding - see
+                  // survey-sketch/page.tsx for why. Desktop's setSketchUrl
+                  // below doesn't set this, so its viewBox is untouched.
+                  setMobileSketchUrl(`${url}${url.includes("?") ? "&" : "?"}recenter=1`)
+                }
               />
             </div>
           </div>

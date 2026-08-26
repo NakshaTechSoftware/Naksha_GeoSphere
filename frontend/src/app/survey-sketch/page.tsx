@@ -41,13 +41,42 @@ function SketchContent() {
           // Remove fixed width/height so the SVG scales to fill
           svg = svg.replace(/\swidth="[^"]*"/g, "");
           svg = svg.replace(/\sheight="[^"]*"/g, "");
-          // Expand viewBox by 12% on each side to give room for labels
-          const vbMatch = svg.match(/viewBox="([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)"/);
-          if (vbMatch) {
-            const [, x, y, w, h] = vbMatch;
-            const px = parseFloat(w!) * 0.12;
-            const py = parseFloat(h!) * 0.12;
-            svg = svg.replace(/viewBox="[^"]*"/, `viewBox="${parseFloat(x!) - px} ${parseFloat(y!) - py} ${parseFloat(w!) + px * 2} ${parseFloat(h!) + py * 2}"`);
+          if (params.get("recenter") === "1") {
+            // The upstream sketch's own viewBox isn't centered on the plot -
+            // it carries extra room below the drawing (space meant for other
+            // elements on the original government page that this fetch never
+            // includes), which pushes the plot toward the top when displayed
+            // on its own. Recompute a tight viewBox from the actual vertex
+            // markers (the corner circles) instead of trusting the source
+            // viewBox, so the plot renders centered. Used by the mobile
+            // viewer, which has no room to spare for that dead space;
+            // desktop keeps the original viewBox untouched below.
+            const vertices = [...svg.matchAll(/<circle\s+cx="(-?[\d.]+)"\s+cy="(-?[\d.]+)"/g)];
+            if (vertices.length > 0) {
+              const xs = vertices.map((m) => parseFloat(m[1]!));
+              const ys = vertices.map((m) => parseFloat(m[2]!));
+              const minX = Math.min(...xs);
+              const maxX = Math.max(...xs);
+              const minY = Math.min(...ys);
+              const maxY = Math.max(...ys);
+              const w = maxX - minX || 1;
+              const h = maxY - minY || 1;
+              const px = w * 0.12;
+              const py = h * 0.12;
+              svg = svg.replace(
+                /viewBox="[^"]*"/,
+                `viewBox="${minX - px} ${minY - py} ${w + px * 2} ${h + py * 2}"`,
+              );
+            }
+          } else {
+            // Expand viewBox by 12% on each side to give room for labels
+            const vbMatch = svg.match(/viewBox="([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)"/);
+            if (vbMatch) {
+              const [, x, y, w, h] = vbMatch;
+              const px = parseFloat(w!) * 0.12;
+              const py = parseFloat(h!) * 0.12;
+              svg = svg.replace(/viewBox="[^"]*"/, `viewBox="${parseFloat(x!) - px} ${parseFloat(y!) - py} ${parseFloat(w!) + px * 2} ${parseFloat(h!) + py * 2}"`);
+            }
           }
           svg = svg.replace(/<svg/, '<svg style="width:100%;height:100%;display:block" preserveAspectRatio="xMidYMid meet"');
           setHtml(svg);

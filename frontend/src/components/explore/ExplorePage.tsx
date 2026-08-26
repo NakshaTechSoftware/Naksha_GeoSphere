@@ -2943,13 +2943,13 @@ export function ExplorePage() {
               <X className="h-5 w-5" />
             </button>
             <div
-              className="flex items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full"
+              className="flex shrink-0 items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full"
               onClick={(e) => e.stopPropagation()}
             >
               <img
                 src={rtcImageUrl}
                 alt="RTC document"
-                className="max-h-full max-w-full object-contain"
+                className="h-full w-full object-contain"
               />
             </div>
           </div>

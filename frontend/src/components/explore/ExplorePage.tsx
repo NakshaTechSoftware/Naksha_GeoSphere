@@ -286,6 +286,7 @@ function AttributePanelBody({
   onClose,
   onExport,
   onSketchClick,
+  onViewRtc,
 }: {
   info: AttributeInfo;
   owners:
@@ -303,6 +304,7 @@ function AttributePanelBody({
   onClose?: () => void;
   onExport: () => void;
   onSketchClick?: (url: string) => void;
+  onViewRtc?: (url: string) => void;
 }) {
   const handlePanelClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -412,9 +414,24 @@ function AttributePanelBody({
                     )}
                     {useCase.imageUrl && (
                       <span className="ml-1">
-                        <a href={useCase.imageUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline hover:text-blue-800">
+                        {/* Desktop: unchanged, opens the raw image in a new tab. */}
+                        <a
+                          href={useCase.imageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hidden text-xs text-blue-600 underline hover:text-blue-800 md:inline"
+                        >
                           View RTC
                         </a>
+                        {/* Mobile: opens the rotated-landscape viewer instead, since RTC
+                            scans are wide tables that are illegible in a portrait tab. */}
+                        <button
+                          type="button"
+                          onClick={() => onViewRtc?.(useCase.imageUrl!)}
+                          className="text-xs text-blue-600 underline hover:text-blue-800 md:hidden"
+                        >
+                          View RTC
+                        </button>
                       </span>
                     )}
                   </td>
@@ -1044,6 +1061,11 @@ export function ExplorePage() {
   const [showLocationEnvironment, setShowLocationEnvironment] = useState(false);
 
   const [sketchUrl, setSketchUrl] = useState<string | null>(null);
+  // RTC document viewer - opened from "View RTC". RTC scans are wide/landscape
+  // tables, so on a portrait phone the modal rotates the image 90deg via CSS
+  // (portrait:/landscape: media variants) to show it full-size and legible
+  // without relying on the unreliable Screen Orientation Lock API.
+  const [rtcImageUrl, setRtcImageUrl] = useState<string | null>(null);
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [aoiExportOpen, setAoiExportOpen] = useState(false);
@@ -2897,6 +2919,37 @@ export function ExplorePage() {
                 useCase={useCase}
                 adjacentPlots={adjacentPlots}
                 onExport={() => setExportModalOpen(true)}
+                onViewRtc={(url) => setRtcImageUrl(url)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* RTC document viewer (mobile only) - opened from "View RTC" in the mobile
+            attribute sheet above. Rotates the image 90deg on a portrait phone so the
+            wide RTC table renders full-size and legible, matching how it reads on a
+            desktop tab (which opens the raw image directly instead of this modal). */}
+        {rtcImageUrl && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/90 md:hidden"
+            onClick={() => setRtcImageUrl(null)}
+          >
+            <button
+              type="button"
+              onClick={() => setRtcImageUrl(null)}
+              aria-label="Close"
+              className="absolute right-4 top-4 z-10 rounded-full bg-white/90 p-2 text-gray-700 shadow-md hover:bg-white"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div
+              className="flex items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={rtcImageUrl}
+                alt="RTC document"
+                className="max-h-full max-w-full object-contain"
               />
             </div>
           </div>

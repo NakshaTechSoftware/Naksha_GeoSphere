@@ -1066,6 +1066,76 @@ export function ExplorePage() {
   // (portrait:/landscape: media variants) to show it full-size and legible
   // without relying on the unreliable Screen Orientation Lock API.
   const [rtcImageUrl, setRtcImageUrl] = useState<string | null>(null);
+  // Pinch-zoom/pan state for the RTC viewer above. Reset whenever a new
+  // document is opened (or the viewer is closed) so it never reopens
+  // half-zoomed from the last time.
+  const [rtcZoom, setRtcZoom] = useState(1);
+  const [rtcPan, setRtcPan] = useState({ x: 0, y: 0 });
+  const rtcPinchRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
+  const rtcPanRef = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
+  const rtcLastTapRef = useRef(0);
+
+  useEffect(() => {
+    setRtcZoom(1);
+    setRtcPan({ x: 0, y: 0 });
+  }, [rtcImageUrl]);
+
+  const rtcTouchDistance = (touches: React.TouchList) => {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  };
+
+  const handleRtcTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      rtcPinchRef.current = { startDistance: rtcTouchDistance(e.touches), startZoom: rtcZoom };
+      rtcPanRef.current = null;
+    } else if (e.touches.length === 1) {
+      const now = Date.now();
+      if (now - rtcLastTapRef.current < 300) {
+        rtcLastTapRef.current = 0;
+        if (rtcZoom > 1) {
+          setRtcZoom(1);
+          setRtcPan({ x: 0, y: 0 });
+        } else {
+          setRtcZoom(2.5);
+        }
+      } else {
+        rtcLastTapRef.current = now;
+      }
+      if (rtcZoom > 1) {
+        rtcPanRef.current = {
+          startX: e.touches[0].clientX,
+          startY: e.touches[0].clientY,
+          startPanX: rtcPan.x,
+          startPanY: rtcPan.y,
+        };
+      }
+    }
+  };
+
+  const handleRtcTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && rtcPinchRef.current) {
+      const distance = rtcTouchDistance(e.touches);
+      const ratio = distance / rtcPinchRef.current.startDistance;
+      setRtcZoom(Math.min(4, Math.max(1, rtcPinchRef.current.startZoom * ratio)));
+    } else if (e.touches.length === 1 && rtcPanRef.current) {
+      // Pan is applied in screen space (translate comes after scale in the
+      // transform below), so raw screen-pixel deltas are used directly -
+      // no need to compensate for the current zoom level.
+      const dx = e.touches[0].clientX - rtcPanRef.current.startX;
+      const dy = e.touches[0].clientY - rtcPanRef.current.startY;
+      setRtcPan({
+        x: rtcPanRef.current.startPanX + dx,
+        y: rtcPanRef.current.startPanY + dy,
+      });
+    }
+  };
+
+  const handleRtcTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) rtcPinchRef.current = null;
+    if (e.touches.length < 1) rtcPanRef.current = null;
+  };
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [aoiExportOpen, setAoiExportOpen] = useState(false);
@@ -2928,29 +2998,64 @@ export function ExplorePage() {
         {/* RTC document viewer (mobile only) - opened from "View RTC" in the mobile
             attribute sheet above. Rotates the image 90deg on a portrait phone so the
             wide RTC table renders full-size and legible, matching how it reads on a
-            desktop tab (which opens the raw image directly instead of this modal). */}
+            desktop tab (which opens the raw image directly instead of this modal).
+            Supports pinch-to-zoom, one-finger pan once zoomed, and double-tap to
+            toggle zoom - the pan/zoom transform lives on a wrapper OUTSIDE the
+            rotated container so drag deltas stay in plain screen pixels instead of
+            needing to be re-projected into the rotated content's local axes. */}
         {rtcImageUrl && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/90 md:hidden"
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-white md:hidden"
             onClick={() => setRtcImageUrl(null)}
           >
             <button
               type="button"
               onClick={() => setRtcImageUrl(null)}
               aria-label="Close"
-              className="absolute right-4 top-4 z-10 rounded-full bg-white/90 p-2 text-gray-700 shadow-md hover:bg-white"
+              className="absolute right-4 top-4 z-10 rounded-full border border-gray-200 bg-white p-2 text-gray-700 shadow-md hover:bg-gray-50"
             >
               <X className="h-5 w-5" />
             </button>
+
             <div
-              className="flex shrink-0 items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full"
+              className="flex h-full w-full shrink-0 touch-none items-center justify-center overflow-hidden"
+              style={{ transform: `translate(${rtcPan.x}px, ${rtcPan.y}px) scale(${rtcZoom})` }}
               onClick={(e) => e.stopPropagation()}
+              onTouchStart={handleRtcTouchStart}
+              onTouchMove={handleRtcTouchMove}
+              onTouchEnd={handleRtcTouchEnd}
             >
-              <img
-                src={rtcImageUrl}
-                alt="RTC document"
-                className="h-full w-full object-contain"
-              />
+              <div className="flex shrink-0 items-center justify-center portrait:h-[100vw] portrait:w-[100vh] portrait:rotate-90 landscape:h-full landscape:w-full">
+                <img
+                  src={rtcImageUrl}
+                  alt="RTC document"
+                  draggable={false}
+                  className="h-full w-full select-none object-contain"
+                />
+              </div>
+            </div>
+
+            {/* Zoom controls - also usable without touch (mouse/trackpad testing). */}
+            <div className="absolute bottom-6 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-gray-200 bg-white px-2 py-1.5 shadow-md">
+              <button
+                type="button"
+                onClick={() => setRtcZoom((z) => Math.max(1, z - 0.5))}
+                aria-label="Zoom out"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100"
+              >
+                <span className="text-lg font-semibold leading-none">−</span>
+              </button>
+              <span className="min-w-[3rem] text-center text-xs font-medium text-gray-500">
+                {Math.round(rtcZoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setRtcZoom((z) => Math.min(4, z + 0.5))}
+                aria-label="Zoom in"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100"
+              >
+                <span className="text-lg font-semibold leading-none">+</span>
+              </button>
             </div>
           </div>
         )}

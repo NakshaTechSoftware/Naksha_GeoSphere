@@ -1118,7 +1118,7 @@ export function ExplorePage() {
     if (e.touches.length === 2 && rtcPinchRef.current) {
       const distance = rtcTouchDistance(e.touches);
       const ratio = distance / rtcPinchRef.current.startDistance;
-      setRtcZoom(Math.min(4, Math.max(1, rtcPinchRef.current.startZoom * ratio)));
+      setRtcZoom(Math.min(5, Math.max(1, rtcPinchRef.current.startZoom * ratio)));
     } else if (e.touches.length === 1 && rtcPanRef.current) {
       // Pan is applied in screen space (translate comes after scale in the
       // transform below), so raw screen-pixel deltas are used directly -
@@ -3035,28 +3035,6 @@ export function ExplorePage() {
               </div>
             </div>
 
-            {/* Zoom controls - also usable without touch (mouse/trackpad testing). */}
-            <div className="absolute bottom-6 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-gray-200 bg-white px-2 py-1.5 shadow-md">
-              <button
-                type="button"
-                onClick={() => setRtcZoom((z) => Math.max(1, z - 0.5))}
-                aria-label="Zoom out"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100"
-              >
-                <span className="text-lg font-semibold leading-none">−</span>
-              </button>
-              <span className="min-w-[3rem] text-center text-xs font-medium text-gray-500">
-                {Math.round(rtcZoom * 100)}%
-              </span>
-              <button
-                type="button"
-                onClick={() => setRtcZoom((z) => Math.min(4, z + 0.5))}
-                aria-label="Zoom in"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-gray-700 hover:bg-gray-100"
-              >
-                <span className="text-lg font-semibold leading-none">+</span>
-              </button>
-            </div>
           </div>
         )}
 

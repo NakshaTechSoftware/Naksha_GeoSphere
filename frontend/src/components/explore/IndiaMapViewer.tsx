@@ -15397,7 +15397,11 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Live location error:", describeGeolocationError(error));
+          // A denied/unavailable/timed-out location is a normal, expected user
+          // outcome (not a bug) and is already handled gracefully below by
+          // resetting state - console.warn instead of .error so Next.js dev
+          // mode doesn't block the screen with its full-page error overlay.
+          console.warn("Live location error:", describeGeolocationError(error));
           liveLocationWatchIdRef.current = null;
           onLiveLocationChangeRef.current?.(false);
         },
@@ -15556,7 +15560,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Navigation location error:", describeGeolocationError(error));
+          // Same reasoning as the live-location watch above: a denied/
+          // unavailable/timed-out fix here is an expected user outcome, not
+          // a bug - console.warn avoids Next.js dev mode's blocking overlay.
+          console.warn("Navigation location error:", describeGeolocationError(error));
         },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
       );

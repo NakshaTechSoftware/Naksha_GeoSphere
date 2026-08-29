@@ -885,8 +885,12 @@ export function WeatherDetailsPanel({
 
   const title = location?.locationLabel ?? "Selected point";
   const station = officialAqi?.station ?? null;
-  const subtitle = station ? `Near ${station}` : "Exact clicked point";
   const coords = location ? `${location.latitude.toFixed(3)}°N, ${location.longitude.toFixed(3)}°E` : "";
+  // "Near <station>" still wins when there's an official AQI station (a genuinely
+  // different, useful fact); otherwise show the exact clicked coordinates instead of
+  // the vague "Exact clicked point" label - the footer's own coords line stays too,
+  // for anyone scanning down there instead.
+  const subtitle = station ? `Near ${station}` : coords || "Exact clicked point";
   const officialDistanceKm = aqiPipeline?.distanceKm ?? null;
   const updatedLabel = current ? formatIstTime(current.observedAt) : null;
 
@@ -916,10 +920,16 @@ export function WeatherDetailsPanel({
 
   return (
     <aside
-      className="weather-panel-in pointer-events-auto absolute right-4 top-20 z-20 flex w-[min(420px,calc(100%-2rem))] flex-col max-md:inset-x-0 max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:top-auto max-md:w-full max-md:rounded-b-none"
+      className={`weather-panel-in pointer-events-auto absolute right-4 top-20 z-20 flex w-[min(420px,calc(100%-2rem))] flex-col max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:top-auto max-md:z-30 max-md:w-full max-md:rounded-t-2xl max-md:border-t max-md:border-gray-200 max-md:bg-white max-md:shadow-xl ${
+        // On mobile the idle "click anywhere" hint is hidden - the View Details
+        // button below the map communicates the same thing in less space.
+        weatherPanel.status === "idle" ? "max-md:hidden" : ""
+      }`}
       aria-label="Weather details"
     >
-      <div className="flex h-full max-h-[calc(100vh-6.5rem)] flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.14)] backdrop-blur-[16px] max-md:max-h-[80vh]">
+      {/* Mobile drag handle */}
+      <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-gray-300 md:hidden" />
+      <div className="flex h-full max-h-[calc(100vh-6.5rem)] flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.14)] backdrop-blur-[16px] max-md:max-h-[50vh] max-md:rounded-none max-md:border-0 max-md:bg-white">
         {weatherPanel.status === "idle" && (
           <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-slate-500">
             Click anywhere on the map to load a compact weather summary for that point.
@@ -994,6 +1004,10 @@ export function WeatherDetailsPanel({
               </div>
             )}
 
+            {/* Mobile: one single scroll region (hero + tabs + content together) so the
+                whole summary is reachable by scrolling; Desktop: `contents` keeps the
+                original layout - fixed hero/tabs with only the tab card scrolling. */}
+            <div className="min-h-0 flex-1 flex-col max-md:flex max-md:overflow-y-auto max-md:overscroll-contain md:contents">
             {/* Scroll-free fixed top: hero + next hour */}
             <div className="space-y-3 px-5 pt-4">
               <section
@@ -1058,10 +1072,11 @@ export function WeatherDetailsPanel({
               </div>
             </div>
 
-            {/* Active card (single scroll region) */}
+            {/* Active card (single scroll region) - on mobile the outer wrapper
+                above owns the scrolling, so this grows to its natural height. */}
             <div
               key={tab}
-              className="weather-fade scrollbar-hide min-h-0 flex-1 overflow-y-auto px-5 py-4"
+              className="weather-fade scrollbar-hide min-h-0 flex-1 overflow-y-auto px-5 py-4 max-md:flex-none max-md:overflow-visible"
             >
               {tab === "overview" && (
                 <div className="space-y-4">
@@ -1192,6 +1207,7 @@ export function WeatherDetailsPanel({
                     })()}
                 </div>
               )}
+            </div>
             </div>
 
             {/* Footer */}

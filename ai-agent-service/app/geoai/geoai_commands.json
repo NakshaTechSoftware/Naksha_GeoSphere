@@ -1,0 +1,115 @@
+{
+  "version": "1.0.0",
+  "description": "GeoAI Command Registry — maps natural language phrases to GIS tool operations.",
+  "commands": [
+    {
+      "name": "nearest_search",
+      "description": "Find nearest points of interest by category",
+      "phrases": [
+        "find nearest", "near me", "nearby", "closest", "around here",
+        "find police station", "find hospital", "find school",
+        "find atm", "find pharmacy", "nearest police", "nearest hospital"
+      ],
+      "tool": "find_nearest_place",
+      "required_params": ["category", "latitude", "longitude"],
+      "optional_params": ["radius"]
+    },
+    {
+      "name": "boundary_query",
+      "description": "Query which administrative boundary contains a point",
+      "phrases": [
+        "which district", "which village", "which taluk", "which ward",
+        "which hobli", "what district", "what taluk", "administrative area",
+        "which jurisdiction", "which police jurisdiction"
+      ],
+      "tool": "query_spatial_layer",
+      "required_params": ["layer", "geometry"],
+      "optional_params": ["operation"]
+    },
+    {
+      "name": "routing",
+      "description": "Get directions between two points",
+      "phrases": [
+        "navigate", "route", "directions", "how to get",
+        "how do I reach", "drive to", "walk to", "cycle to",
+        "path from", "way to"
+      ],
+      "tool": "get_route",
+      "required_params": ["origin", "destination"],
+      "optional_params": ["mode"]
+    },
+    {
+      "name": "geocoding",
+      "description": "Convert coordinates to address or vice versa",
+      "phrases": [
+        "what is this address", "where am i", "what location",
+        "convert coordinates", "address for", "location name"
+      ],
+      "tool": "reverse_geocode",
+      "required_params": ["lat", "lon"]
+    },
+    {
+      "name": "place_search",
+      "description": "Search for a place by name",
+      "phrases": [
+        "find", "search", "location of", "where is",
+        "show me", "go to", "find on map"
+      ],
+      "tool": "search_place",
+      "required_params": ["query"]
+    },
+    {
+      "name": "land_query",
+      "description": "Query land/parcel ownership information",
+      "phrases": [
+        "who owns", "land record", "parcel", "property",
+        "ownership", "land details", "survey number"
+      ],
+      "tool": "get_land_record",
+      "required_params": ["parcel_id"],
+      "optional_params": ["layer"]
+    },
+    {
+      "name": "buffer_analysis",
+      "description": "Find features within a distance buffer",
+      "phrases": [
+        "within", "buffer", "radius", "distance from",
+        "within km", "within meters"
+      ],
+      "tool": "buffer_analysis",
+      "required_params": ["geometry", "distance"],
+      "optional_params": ["layer"]
+    },
+    {
+      "name": "layer_analysis",
+      "description": "Analyze intersections between GIS layers",
+      "phrases": [
+        "intersection", "overlap", "inside", "contains",
+        "which buildings", "which features", "layer comparison"
+      ],
+      "tool": "intersect_layers",
+      "required_params": ["layer_a", "layer_b"]
+    },
+    {
+      "name": "elevation_query",
+      "description": "Get terrain/elevation data for a point",
+      "phrases": [
+        "elevation", "height", "terrain", "altitude",
+        "how high", "sea level"
+      ],
+      "tool": "get_elevation",
+      "required_params": ["lat", "lon"]
+    },
+    {
+      "name": "distance_measurement",
+      "description": "Measure distance between two points",
+      "phrases": [
+        "measure distance", "how far", "distance between",
+        "distance from here to"
+      ],
+      "tool": "measure_distance",
+      "required_params": ["origin", "destination"],
+      "optional_params": ["mode"]
+    }
+  ]
+}

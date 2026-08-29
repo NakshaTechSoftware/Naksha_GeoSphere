@@ -1,0 +1,269 @@
+{
+  "version": "1.0",
+  "intents": [
+    {
+      "intent_id": "police_jurisdiction",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "police_jurisdiction"},
+      "description": "User wants to know which police station jurisdiction they fall under",
+      "example_queries": [
+        "my police station",
+        "which police station do I come under",
+        "to which police station I come under",
+        "which is the nearest police station",
+        "what is my police jurisdiction",
+        "which police station covers this area",
+        "police station for my location",
+        "am I under Jayanagar police or Koramangala police",
+        "which police station's area is this",
+        "tell me my police station",
+        "find my police station",
+        "what police station am I in",
+        "which police station has jurisdiction here",
+        "police jurisdiction for this location",
+        "which police station should I go to"
+      ]
+    },
+    {
+      "intent_id": "find_nearest_police",
+      "tool": "find_nearest_place",
+      "tool_args": {"place_type": "police_station"},
+      "description": "User wants to find the physically nearest police station by distance",
+      "example_queries": [
+        "nearest police station to me",
+        "police station near me",
+        "find police stations close by",
+        "how far is the nearest police station",
+        "police station within 2 km",
+        "closest police station",
+        "where is the police station",
+        "directions to police station"
+      ]
+    },
+    {
+      "intent_id": "district",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "district"},
+      "description": "User wants to know which district they are in",
+      "example_queries": [
+        "which district am I in",
+        "my district",
+        "what district is this",
+        "name of this district",
+        "which district does this area belong to",
+        "tell me my district name",
+        "district for this location",
+        "am I in Bengaluru Urban or Rural"
+      ]
+    },
+    {
+      "intent_id": "taluk",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "taluk"},
+      "description": "User wants to know which taluk they are in",
+      "example_queries": [
+        "which taluk am I in",
+        "my taluk",
+        "what taluk is this",
+        "name of this taluk",
+        "which taluk does this area belong to",
+        "tell me my taluk name",
+        "taluk for this location",
+        "sub-district for this area"
+      ]
+    },
+    {
+      "intent_id": "hobli",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "hobli"},
+      "description": "User wants to know which hobli they are in",
+      "example_queries": [
+        "which hobli am I in",
+        "my hobli",
+        "what hobli is this",
+        "name of this hobli",
+        "which hobli does this area belong to",
+        "tell me my hobli name",
+        "hobli for this location"
+      ]
+    },
+    {
+      "intent_id": "village",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "village"},
+      "description": "User wants to know which village they are in",
+      "example_queries": [
+        "which village am I in",
+        "my village",
+        "what village is this",
+        "name of this village",
+        "which village does this area belong to",
+        "tell me my village name",
+        "village for this location",
+        "grama name"
+      ]
+    },
+    {
+      "intent_id": "gram_panchayat",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "gram_panchayat"},
+      "description": "User wants to know which gram panchayat they are in",
+      "example_queries": [
+        "my gram panchayat",
+        "which GP am I in",
+        "which gram panchayat does this area belong to",
+        "what is my gram panchayat name",
+        "gram panchayat for this location",
+        "tell me my GP name",
+        "panchayat for this area",
+        "which panchayat covers this village"
+      ]
+    },
+    {
+      "intent_id": "assembly_constituency",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "assembly_constituency"},
+      "description": "User wants to know which assembly constituency (MLA) they are in",
+      "example_queries": [
+        "my assembly constituency",
+        "which MLA constituency am I in",
+        "my MLA",
+        "which assembly does this area belong to",
+        "assembly for this location",
+        "tell me my assembly name",
+        "vidhan sabha constituency",
+        "which constituency should I vote in"
+      ]
+    },
+    {
+      "intent_id": "parliamentary_constituency",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "parliamentary_constituency"},
+      "description": "User wants to know which parliamentary constituency (MP) they are in",
+      "example_queries": [
+        "my parliamentary constituency",
+        "which MP constituency am I in",
+        "my MP",
+        "lok sabha seat for this area",
+        "parliamentary for this location",
+        "tell me my parliament name",
+        "which lok sabha constituency",
+        "lok sabha for this area"
+      ]
+    },
+    {
+      "intent_id": "postal_code",
+      "tool": "query_spatial_layer",
+      "tool_args": {"layer": "postal_code"},
+      "description": "User wants to know their postal/PIN code",
+      "example_queries": [
+        "my postal code",
+        "my pin code",
+        "what is my pincode",
+        "pin code for this area",
+        "postal code for this location",
+        "tell me my PIN",
+        "which pincode does this address fall under",
+        "zip code for this area"
+      ]
+    },
+    {
+      "intent_id": "hospital_nearby",
+      "tool": "find_nearest_place",
+      "tool_args": {"place_type": "hospital"},
+      "description": "User wants to find nearby hospitals",
+      "example_queries": [
+        "nearest hospital",
+        "hospital near me",
+        "find hospitals close by",
+        "how far is the nearest hospital",
+        "hospital within 5 km",
+        "closest hospital",
+        "where is the hospital",
+        "directions to hospital",
+        "find me a hospital nearby",
+        "any hospital close to here"
+      ]
+    },
+    {
+      "intent_id": "school_nearby",
+      "tool": "find_nearest_place",
+      "tool_args": {"place_type": "school"},
+      "description": "User wants to find nearby schools",
+      "example_queries": [
+        "nearest school",
+        "school near me",
+        "find schools close by",
+        "how far is the nearest school",
+        "school within 2 km",
+        "closest school",
+        "where is the school",
+        "find me a school nearby"
+      ]
+    },
+    {
+      "intent_id": "atm_nearby",
+      "tool": "find_nearest_place",
+      "tool_args": {"place_type": "atm"},
+      "description": "User wants to find nearby ATMs",
+      "example_queries": [
+        "nearest ATM",
+        "ATM near me",
+        "find ATMs close by",
+        "how far is the nearest ATM",
+        "ATM within 1 km",
+        "closest ATM",
+        "where is an ATM",
+        "find me an ATM nearby"
+      ]
+    },
+    {
+      "intent_id": "pharmacy_nearby",
+      "tool": "find_nearest_place",
+      "tool_args": {"place_type": "pharmacy"},
+      "description": "User wants to find nearby pharmacies",
+      "example_queries": [
+        "nearest pharmacy",
+        "pharmacy near me",
+        "find pharmacies close by",
+        "how far is the nearest pharmacy",
+        "pharmacy within 1 km",
+        "closest pharmacy",
+        "where is a pharmacy",
+        "find me a pharmacy nearby",
+        "medical store near me"
+      ]
+    },
+    {
+      "intent_id": "route",
+      "tool": "get_route",
+      "tool_args": {},
+      "description": "User wants navigation or directions to a place",
+      "example_queries": [
+        "route to MG Road",
+        "how do I get to the airport",
+        "navigate to Koramangala",
+        "directions to Bangalore Palace",
+        "show me the way to Cubbon Park",
+        "how far is it to Majestic",
+        "driving directions to Electronic City",
+        "walking route to Lalbagh"
+      ]
+    },
+    {
+      "intent_id": "reverse_geocode",
+      "tool": "reverse_geocode",
+      "tool_args": {},
+      "description": "User wants to know their current address or location details",
+      "example_queries": [
+        "what is my address",
+        "where am I",
+        "what location is this",
+        "tell me my current location",
+        "what place is this",
+        "name this location",
+        "address for these coordinates"
+      ]
+    }
+  ]
+}

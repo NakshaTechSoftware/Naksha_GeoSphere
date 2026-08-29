@@ -1,0 +1,37 @@
+# GeoAI Tool Adapter Service — joins the main GeoSphere stack's network.
+#
+# Run the main stack first (from the repo root):
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d
+#
+# Then, from this directory:
+#   docker compose up --build -d
+#
+# This intentionally does NOT define its own postgres/redis/minio — it
+# reuses the ones the main stack already runs, via the external
+# `naksha-network` network, exactly like services/api and services/worker
+# do in the root compose.yaml. That is the whole point of this being an
+# *adapter* service: one PostGIS instance, one source of truth.
+
+networks:
+  naksha-network:
+    external: true
+    name: naksha_geosphere_naksha-network
+
+services:
+  geoai-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${GEOAI_HOST_PORT:-8100}:8000"
+    networks:
+      - naksha-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

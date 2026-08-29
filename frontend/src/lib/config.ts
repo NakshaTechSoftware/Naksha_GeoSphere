@@ -4,9 +4,17 @@
  * defaults and validation live in one place.
  */
 export const config = {
-  // Browser-facing — must be reachable from the user's machine (e.g. host
-  // port mapping like http://localhost:8000, or a public API domain).
-  apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
+  // Browser-facing API base URL. Empty string means "same origin" — the
+  // request is sent to wherever the page was loaded from (the dev server,
+  // the cloudflare tunnel, etc.) and a Next.js rewrite in next.config.ts
+  // forwards /api/v1/* to the actual backend. This lets the mobile APK reach
+  // the backend through the tunnel without hard-coding a LAN IP.
+  // Always use relative URLs so the browser sends API requests to the same
+  // origin (the dev server / cloudflare tunnel). A Next.js rewrite in
+  // next.config.ts forwards /api/v1/* to the real backend. The old env-var
+  // NEXT_PUBLIC_API_URL=http://localhost:8000 only worked when the browser
+  // ran on the dev machine itself — it broke inside the Android WebView.
+  apiUrl: "",
   // Server-only — used by Next.js route handlers, which run inside this
   // container. In Docker, "localhost" there is the container itself, not
   // the api service, so this must resolve on the container network (e.g.

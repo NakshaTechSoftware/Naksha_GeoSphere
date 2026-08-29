@@ -1,0 +1,1458 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "GeoAI Tool Adapter Service",
+    "description": "Controlled, typed tool surface between an AI agent and the GeoSphere platform's PostGIS database, MinIO object storage, and internal APIs. The agent never receives credentials or internal URLs \u2014 every call here is validated, rate-limited, cached, and logged.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/geoai/nearby": {
+      "post": {
+        "tags": [
+          "nearby"
+        ],
+        "summary": "Nearby",
+        "operationId": "nearby_geoai_nearby_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NearbyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NearbyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/query-layer": {
+      "post": {
+        "tags": [
+          "spatial-query"
+        ],
+        "summary": "Query Layer Endpoint",
+        "operationId": "query_layer_endpoint_geoai_query_layer_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpatialQueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpatialQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/geocode/reverse": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Reverse Geocode",
+        "operationId": "reverse_geocode_geoai_geocode_reverse_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReverseGeocodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReverseGeocodeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/geocode/search": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Search Place",
+        "operationId": "search_place_geoai_geocode_search_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchPlaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPlaceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/route": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Get Route",
+        "operationId": "get_route_geoai_route_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/land-record": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Land Record",
+        "operationId": "land_record_geoai_land_record_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LandRecordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LandRecordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/environment": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Environment Snapshot",
+        "operationId": "environment_snapshot_geoai_environment_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvironmentSnapshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/dataset-layer": {
+      "post": {
+        "tags": [
+          "geosphere-adapters"
+        ],
+        "summary": "Dataset Layer",
+        "operationId": "dataset_layer_geoai_dataset_layer_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetLayerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetLayerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/tools/definitions": {
+      "get": {
+        "tags": [
+          "ai-tools"
+        ],
+        "summary": "Tool Definitions",
+        "operationId": "tool_definitions_geoai_tools_definitions_get",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Tool Definitions Geoai Tools Definitions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/geoai/tools/execute": {
+      "post": {
+        "tags": [
+          "ai-tools"
+        ],
+        "summary": "Execute Tool",
+        "operationId": "execute_tool_geoai_tools_execute_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExecuteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DatasetLayerRequest": {
+        "properties": {
+          "layer": {
+            "type": "string",
+            "title": "Layer"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layer"
+        ],
+        "title": "DatasetLayerRequest"
+      },
+      "DatasetLayerResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "feature_collection": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature Collection"
+          }
+        },
+        "type": "object",
+        "title": "DatasetLayerResponse"
+      },
+      "EnvironmentSnapshotRequest": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "EnvironmentSnapshotRequest"
+      },
+      "EnvironmentSnapshotResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "weather": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weather"
+          },
+          "air_quality": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Air Quality"
+          }
+        },
+        "type": "object",
+        "title": "EnvironmentSnapshotResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LandRecordRequest": {
+        "properties": {
+          "district": {
+            "type": "string",
+            "title": "District"
+          },
+          "taluk": {
+            "type": "string",
+            "title": "Taluk"
+          },
+          "hobli": {
+            "type": "string",
+            "title": "Hobli"
+          },
+          "village": {
+            "type": "string",
+            "title": "Village"
+          },
+          "survey": {
+            "type": "string",
+            "title": "Survey"
+          },
+          "surnoc": {
+            "type": "string",
+            "title": "Surnoc",
+            "default": "*"
+          },
+          "hissa": {
+            "type": "string",
+            "title": "Hissa",
+            "default": "*"
+          }
+        },
+        "type": "object",
+        "required": [
+          "district",
+          "taluk",
+          "hobli",
+          "village",
+          "survey"
+        ],
+        "title": "LandRecordRequest"
+      },
+      "LandRecordResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "owners": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Owners"
+          },
+          "use_case": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Case"
+          }
+        },
+        "type": "object",
+        "title": "LandRecordResponse"
+      },
+      "LatLon": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "LatLon"
+      },
+      "NearbyRequest": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "police_station",
+              "hospital",
+              "school",
+              "atm",
+              "pharmacy"
+            ],
+            "title": "Type"
+          },
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          },
+          "radius": {
+            "type": "integer",
+            "maximum": 50000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Radius",
+            "description": "Search radius in meters.",
+            "default": 2000
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 50.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Limit",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "lat",
+          "lon"
+        ],
+        "title": "NearbyRequest"
+      },
+      "NearbyResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/NearbyResultItem"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "NearbyResponse"
+      },
+      "NearbyResultItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "police_station",
+              "hospital",
+              "school",
+              "atm",
+              "pharmacy"
+            ],
+            "title": "Type"
+          },
+          "distance_meters": {
+            "type": "number",
+            "title": "Distance Meters"
+          },
+          "location": {
+            "$ref": "#/components/schemas/LatLon"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "postgis",
+              "minio_geojson"
+            ],
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "distance_meters",
+          "location",
+          "source"
+        ],
+        "title": "NearbyResultItem"
+      },
+      "PlaceResult": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "title": "Lon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "lat",
+          "lon"
+        ],
+        "title": "PlaceResult"
+      },
+      "ReverseGeocodeRequest": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "ReverseGeocodeRequest"
+      },
+      "ReverseGeocodeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "place_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place Name"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReverseGeocodeResponse"
+      },
+      "RouteRequest": {
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/LatLon"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/LatLon"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "driving",
+              "walking",
+              "cycling"
+            ],
+            "title": "Mode",
+            "default": "driving"
+          }
+        },
+        "type": "object",
+        "required": [
+          "origin",
+          "destination"
+        ],
+        "title": "RouteRequest"
+      },
+      "RouteResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "distance_meters": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Meters"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "geometry": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry",
+            "description": "GeoJSON LineString"
+          }
+        },
+        "type": "object",
+        "title": "RouteResponse"
+      },
+      "SearchPlaceRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 2,
+            "title": "Query"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchPlaceRequest"
+      },
+      "SearchPlaceResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/PlaceResult"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "SearchPlaceResponse"
+      },
+      "SpatialFeature": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "title": "SpatialFeature"
+      },
+      "SpatialQueryRequest": {
+        "properties": {
+          "layer": {
+            "type": "string",
+            "title": "Layer",
+            "description": "e.g. \"district\", \"taluk\", \"hobli\", \"village\", \"ward\""
+          },
+          "point": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Point",
+            "description": "[lon, lat], matches GeoJSON coordinate order"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "point_in_polygon",
+              "intersects",
+              "contains",
+              "within"
+            ],
+            "title": "Operation",
+            "default": "point_in_polygon"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layer",
+          "point"
+        ],
+        "title": "SpatialQueryRequest"
+      },
+      "SpatialQueryResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "layer": {
+            "type": "string",
+            "title": "Layer"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "point_in_polygon",
+              "intersects",
+              "contains",
+              "within"
+            ],
+            "title": "Operation"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpatialFeature"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "postgis",
+                  "minio_geojson"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "layer",
+          "operation"
+        ],
+        "title": "SpatialQueryResponse"
+      },
+      "ToolExecuteRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "reverse_geocode",
+              "search_place",
+              "find_nearest_place",
+              "query_spatial_layer",
+              "get_route"
+            ],
+            "title": "Name"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Arguments"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Caller-supplied conversation/session id, for audit logging."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ToolExecuteRequest"
+      },
+      "ToolExecuteResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ],
+            "title": "Status",
+            "default": "success"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "reverse_geocode",
+              "search_place",
+              "find_nearest_place",
+              "query_spatial_layer",
+              "get_route"
+            ],
+            "title": "Tool"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "title": "ToolExecuteResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

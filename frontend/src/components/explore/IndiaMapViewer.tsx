@@ -30,16 +30,7 @@ import {
 // Configures maplibre's GeoJSON worker for Next.js (must run before any map is created).
 import { configureMaplibreWorker } from "../../lib/maplibreWorker";
 import { addIndiaTerrain, removeIndiaTerrain } from "../../lib/indiaTerrain";
-import {
-  WEATHER_TERRAIN_DEM_SOURCE_ID,
-  WEATHER_TERRAIN_LAYER_IDS,
-  applyWeatherTerrainWeatherMode,
-  ensureWeatherTerrain,
-  isWeatherTerrainReady,
-  resolveWeatherTerrainProvider,
-  setWeatherTerrainVisible,
-  type WeatherTerrainProvider,
-} from "../../lib/weather/weatherTerrain";
+import { applyWeatherTerrainWeatherMode } from "../../lib/weather/weatherTerrain";
 import { LayersControl, type MapLayer } from "../map/LayersControl";
 import { STATE_FACTS } from "../../data/state-facts";
 import { WeatherDetailsPanel } from "./WeatherDetailsPanel";
@@ -167,6 +158,8 @@ import {
   RAINVIEWER_REFRESH_INTERVAL_MS,
   type RainViewerRadarFrame,
 } from "@/lib/weather/rainViewerProvider";
+import { fetchNearbyPOIs, formatCategory, haversineDistance, type OverpassPOI } from "@/lib/overpass";
+import { createPOIOverlay, type POI } from "@/lib/poiOverlay";
 
 import type {
   AqiGridResponse,
@@ -1238,7 +1231,12 @@ export type DirectionsPoint =
 export type RoutePreviewFailureReason =
   | "geolocation-denied"
   | "geolocation-unavailable"
-  | "no-route";
+  | "no-route"
+  // The OSRM routing backend itself is unreachable (containers down / never started) -
+  // distinct from "no-route" because the fix is completely different: start the service
+  // vs pick different endpoints. Collapsing both into one message blamed the user's
+  // destination for what was a dead local service.
+  | "service-unavailable";
 
 export type RoutePreviewResult =
   | { ok: true; preview: RoutePreview }
@@ -1286,6 +1284,8 @@ export interface NavigationState {
 }
 
 export interface IndiaMapViewerHandle {
+  /** Returns the raw MapLibre GL map instance for context capture / action execution. */
+  getMap: () => import("maplibre-gl").Map | null;
   setBoundaryLayerMode: (mode: BoundaryLayerMode) => void;
   /** Google-Earth-style independent layer toggle for the base map's own place-name labels
    * (city/town/village names baked into whichever base layer - default/satellite/terrain -
@@ -1369,6 +1369,12 @@ export interface IndiaMapViewerHandle {
   setRoadsClickScope: (scope: "none" | "district" | "state") => void;
   /** Sets the active floating map panel, closing all others. */
   setActiveMapPanel: (panel: "none" | "layers" | "weather" | "weather-details" | "my-environment" | "draw-aoi") => void;
+  /** Opens the Weather menu exactly as if its button had been clicked - for
+   * callers (e.g. a mobile tools sheet) that trigger it from elsewhere. */
+  openWeatherMenu: () => void;
+  /** Enables radar + IMD warnings together (mobile shortcut - the weather panel is
+   *  hidden on mobile, so there's no UI to toggle them individually). */
+  enableWeatherDefaults: () => void;
 }
 
 export interface IndiaMapViewerProps {
@@ -1408,14 +1414,28 @@ export interface IndiaMapViewerProps {
    * top-left anchor point (the Explore page's Filters panel) is open, so the two never
    * render on top of each other. */
   hideWeatherControl?: boolean;
+  /** Hides the layers control (top-right grid button) - used while the caller's directions
+   * panel is open, since the two overlap on narrow/mobile viewports. */
+  hideLayersControl?: boolean;
   /** Called whenever live-location tracking actually starts or stops - including when it
    * stops itself on a geolocation error/permission-denial - so callers can keep their own
    * "My Location" button state in sync rather than assuming their click always succeeds. */
   onLiveLocationChange?: (active: boolean) => void;
+  /** Called with a human-readable reason whenever a "My Location" attempt fails (denied
+   * permission, unavailable fix, or timeout) - console.warn alone gives no in-app feedback,
+   * so without this a failed attempt looks identical to a silently ignored click. */
+  onLiveLocationError?: (message: string) => void;
   /** Called continuously while turn-by-turn navigation is active with the current
    * instruction/progress (for the caller's on-screen banner), and once with null when
    * navigation stops for any reason (user stop, arrival, or an unrecoverable error). */
   onNavigationUpdate?: (state: NavigationState | null) => void;
+  /** Called when the weather details panel is closed from inside the viewer (its X
+   * button) so the caller can sync any mobile UI that depends on the panel state. */
+  onWeatherPanelClose?: () => void;
+  /** Called when a map click selects a new weather point (click-to-inspect armed
+   * and data fetch started) so the caller can sync mobile UI like the View
+   * Details button. */
+  onWeatherPointSelected?: () => void;
   /** Called when the user taps "Directions" in a searched place's info popup (see
    * flyToPlace) - the caller is expected to open its own directions UI for this
    * destination, same as tapping "Directions" on a place card in Google Maps. */
@@ -2161,38 +2181,28 @@ const OSM_LABELED_TILES = [
   "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
   "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
 ];
-// CARTO Voyager, no-labels variant: closest colorful match to the default OSM style
-// that ships without any place-name text baked into the tile images.
-const OSM_NOLABELS_TILES = [
-  "https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png",
-  "https://b.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png",
-  "https://c.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png",
-  "https://d.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png",
-];
+// Used to be CARTO Voyager's no-labels variant, but CARTO's anonymous (no API key)
+// basemap tiles now return a baked-in "API KEY REQUIRED" watermark instead of real
+// map imagery (verified against the live endpoint - it's a permanent policy change,
+// not an outage). Plain OpenStreetMap raster tiles have their own place names baked
+// in - the zoom-banded swap with OSM_LABELED_LAYER_ID below exists to avoid piling
+// baked-in labels on top of this app's own custom district/state label layers, which
+// is now a minor cosmetic overlap at some zooms rather than a functional need, so the
+// same free/keyless OSM source is reused for both variants.
+const OSM_NOLABELS_TILES = OSM_LABELED_TILES;
 
 // Google satellite imagery tiles, shared by the initial style (when the map starts in
 // satellite mode) and the LayersControl "satellite" switch.
 //
-// lyrs=y (hybrid), not lyrs=s (bare imagery) - Google's own "Satellite" view isn't actually
-// unlabeled; it's imagery with roads and place names baked in by default, which is what a
-// bare "s" layer was missing (no city/town names at all, unlike real Google Maps).
-//
-// How deep real imagery goes varies enormously by location - dense areas hold detail past
-// z20, farmland or forest can run dry as early as z16 - and Google's tile endpoint signals
-// "no imagery here" with a genuine HTTP 404, not a blank 200 image. So instead of guessing
-// one fixed zoom limit, tiles are routed through the "gsat://" protocol registered by
-// registerSatelliteProtocol below, which fetches the real tile itself and, the moment it
-// sees a 404, clamps the map's maxZoom to one level below the failure and eases the camera
-// back if the user had already scrolled past - so the blank tile is never left on screen.
+// lyrs=y (hybrid) - Google's satellite view with roads and place names baked in.
+// The interactive POI overlay from Overpass API layers on top to provide hoverable/clickable
+// labels that turn blue on hover, while the original labels remain as static background.
 const SATELLITE_PROTOCOL = "gsat";
 const SATELLITE_TILES = [
   `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}`,
   `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=y&hl=en&x={x}&y={y}&z={z}`,
 ];
 // Bare imagery, no roads/labels - used when the Layers panel's "Place names" toggle is off
-// (see setPlaceLabelsVisible). Swapping to this instead of just hiding a layer is necessary
-// because Google's tile server bakes roads+labels into the hybrid image itself; there's no
-// separate "labels only" layer to hide independently of the imagery underneath it.
 const SATELLITE_NOLABELS_TILES = [
   `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}`,
   `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}`,
@@ -2299,17 +2309,6 @@ function registerViirsNoDataProtocol(maplibregl: typeof import("maplibre-gl")) {
     }
   });
 }
-
-// Terrain mode (see addIndiaTerrain) is pure elevation shading with no basemap underneath,
-// so unlike satellite/default it had no place names at all. lyrs=h is Google's "hybrid
-// overlay" - roads and labels only, transparent background - designed to sit on top of
-// another layer rather than replace it, so it adds names without covering the hillshade.
-const TERRAIN_LABELS_SOURCE_ID = "terrain-labels-base";
-const TERRAIN_LABELS_LAYER_ID = "terrain-labels-base-layer";
-const TERRAIN_LABELS_TILES = [
-  `${SATELLITE_PROTOCOL}://mt0.google.com/vt/lyrs=h&hl=en&x={x}&y={y}&z={z}`,
-  `${SATELLITE_PROTOCOL}://mt1.google.com/vt/lyrs=h&hl=en&x={x}&y={y}&z={z}`,
-];
 
 let satelliteProtocolRegistered = false;
 
@@ -2453,6 +2452,22 @@ function describeGeolocationError(error: GeolocationPositionError): string {
   return `${codeName}${error.message ? `: ${error.message}` : ""}`;
 }
 
+// User-facing counterpart to describeGeolocationError above - a failed "My Location" click
+// otherwise looks identical to one that was silently ignored, with the real reason visible
+// only in the console (which most users never open).
+function friendlyGeolocationError(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission was denied. Allow location access for this site in your browser settings to use this feature.";
+    case error.POSITION_UNAVAILABLE:
+      return "Your location is currently unavailable. Please try again.";
+    case error.TIMEOUT:
+      return "Getting your location took too long. Please try again.";
+    default:
+      return "We couldn't get your location. Please try again.";
+  }
+}
+
 // Gets a one-off GPS fix via watchPosition rather than getCurrentPosition. Deliberately NOT
 // getCurrentPosition: it's demonstrably unreliable in at least one real environment this app
 // runs in (consistently times out/fails there while "My Location" - built on watchPosition -
@@ -2543,6 +2558,12 @@ function toFetchedRoute(route: {
   };
 }
 
+// Outcome of fetchRoutes - success carries the reshaped routes; the two failure modes are
+// kept apart because their fixes differ (routing backend down vs genuinely no route).
+type FetchedRoutesResult =
+  | { ok: true; routes: FetchedRoute[] }
+  | { ok: false; reason: "no-route" | "service-unavailable" };
+
 // Fetches every route alternative OSRM offers via the /api/routing proxy (see that route for
 // why it's proxied rather than called directly) and reshapes each into the form both
 // getRoutePreview and the live navigation loop need - a drawable line plus per-step
@@ -2552,7 +2573,7 @@ async function fetchRoutes(
   start: [number, number],
   end: [number, number],
   mode: TravelMode
-): Promise<FetchedRoute[] | null> {
+): Promise<FetchedRoutesResult> {
   try {
     const params = new URLSearchParams({
       start: `${start[0]},${start[1]}`,
@@ -2560,14 +2581,18 @@ async function fetchRoutes(
       mode,
     });
     const response = await fetch(`/api/routing?${params.toString()}`);
-    if (!response.ok) return null;
+    // 502 from the proxy means the OSRM backend is unreachable - the routing service
+    // isn't running at all, a very different problem from OSRM answering "no route
+    // here" (404) or the two points being genuinely unroutable.
+    if (response.status === 502) return { ok: false, reason: "service-unavailable" };
+    if (!response.ok) return { ok: false, reason: "no-route" };
     const data = await response.json();
     const routes = data.routes;
-    if (!Array.isArray(routes) || routes.length === 0) return null;
-    return routes.map(toFetchedRoute);
+    if (!Array.isArray(routes) || routes.length === 0) return { ok: false, reason: "no-route" };
+    return { ok: true, routes: routes.map(toFetchedRoute) };
   } catch (error) {
     console.error("Failed to fetch routes:", error);
-    return null;
+    return { ok: false, reason: "service-unavailable" };
   }
 }
 
@@ -3073,8 +3098,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       onWeatherToolbarChange,
       highlightedLocation = null,
       hideWeatherControl = false,
+      hideLayersControl = false,
       onLiveLocationChange,
+      onLiveLocationError,
       onNavigationUpdate,
+      onWeatherPanelClose,
+      onWeatherPointSelected,
       onRequestDirections,
       onRouteAlternativeSelected,
       findMyWayActive,
@@ -3092,6 +3121,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // The pin dropped by a "Find My Way" place click (see the map's general click handler
   // below) - a fresh click replaces it, same single-pin behavior as a search result.
   const placeClickMarkerRef = useRef<import("maplibre-gl").Marker | null>(null);
+  // Interactive POI overlay (see poiOverlay.ts) - fetches nearby places from Overpass API
+  // and renders them as hoverable/clickable text labels on the map.
+  const poiOverlayCleanupRef = useRef<(() => void) | null>(null);
   // Origin (blue dot) and destination (red pin) markers for a previewed/active route (see
   // getRoutePreview) - Google always shows both ends of a route on the map, not just the
   // line between them.
@@ -3108,6 +3140,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   useEffect(() => {
     onLiveLocationChangeRef.current = onLiveLocationChange;
   }, [onLiveLocationChange]);
+  const onLiveLocationErrorRef = useRef(onLiveLocationError);
+  useEffect(() => {
+    onLiveLocationErrorRef.current = onLiveLocationError;
+  }, [onLiveLocationError]);
   // Turn-by-turn navigation (see getRoutePreview/selectRouteAlternative/startNavigation/
   // stopNavigation) - every route alternative OSRM offered (steps + cumulative distances per
   // alternative, so a live GPS fix can be placed along whichever one is selected) plus which
@@ -3129,11 +3165,52 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   // Fake-movement testing loop (see startSimulatedNavigation) - a separate timer from
   // navigationWatchIdRef so stopNavigation/starting the other kind can tell which (if either)
   // is currently running and clear only that one.
-  const simulationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const onNavigationUpdateRef = useRef(onNavigationUpdate);
-  useEffect(() => {
-    onNavigationUpdateRef.current = onNavigationUpdate;
-  }, [onNavigationUpdate]);
+  const simulationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);    const onNavigationUpdateRef = useRef(onNavigationUpdate);
+    useEffect(() => {
+      onNavigationUpdateRef.current = onNavigationUpdate;
+    }, [onNavigationUpdate]);
+    const onWeatherPanelCloseRef = useRef(onWeatherPanelClose);
+    useEffect(() => {
+      onWeatherPanelCloseRef.current = onWeatherPanelClose;
+    }, [onWeatherPanelClose]);
+    const onWeatherPointSelectedRef = useRef(onWeatherPointSelected);
+    useEffect(() => {
+      onWeatherPointSelectedRef.current = onWeatherPointSelected;
+    }, [onWeatherPointSelected]);
+    // Whether the caller's turn-by-turn banner is currently on screen (they render it from
+    // onNavigationUpdate). The reset-view compass button tucks itself right below that
+    // banner on mobile - its bottom-right spot sits under the user's thumb mid-navigation.
+    const [navBannerVisible, setNavBannerVisible] = useState(false);
+    // The banner's height varies with instruction text wrapping, which differs per device -
+    // so "right below it" is measured off the live DOM (the caller tags its panel with
+    // data-directions-panel) rather than approximated with a fixed offset.
+    const [navBannerBottom, setNavBannerBottom] = useState<number | null>(null);
+    useEffect(() => {
+      if (!navBannerVisible) {
+        setNavBannerBottom(null);
+        return;
+      }
+      const panel = document.querySelector<HTMLElement>("[data-directions-panel]");
+      if (!panel) {
+        setNavBannerBottom(null);
+        return;
+      }
+      const update = () => {
+        // Viewport coords -> map-container coords (the compass button is absolutely
+        // positioned inside this component, not the viewport).
+        const containerTop = containerRef.current?.getBoundingClientRect().top ?? 0;
+        const bottom = panel.getBoundingClientRect().bottom - containerTop;
+        setNavBannerBottom(bottom > 0 ? bottom : null);
+      };
+      update();
+      const observer = new ResizeObserver(update);
+      observer.observe(panel);
+      window.addEventListener("resize", update);
+      return () => {
+        observer.disconnect();
+        window.removeEventListener("resize", update);
+      };
+    }, [navBannerVisible]);
   const onRequestDirectionsRef = useRef(onRequestDirections);
   useEffect(() => {
     onRequestDirectionsRef.current = onRequestDirections;
@@ -3148,25 +3225,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   }, [onPlaceLabelsVisibleChange]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  // Shown briefly when the user picks the Terrain base layer but the India DEM file
-  // isn't on this server (dev machines without DEM_Terrain/). Prevents a flood of 500
-  // tile errors that would otherwise break the map style.
-  const [terrainUnavailable, setTerrainUnavailable] = useState(false);
-  useEffect(() => {
-    if (!terrainUnavailable) return;
-    const timer = setTimeout(() => setTerrainUnavailable(false), 5000);
-    return () => clearTimeout(timer);
-  }, [terrainUnavailable]);
-  const isTerrainDataAvailable = async (): Promise<boolean> => {
-    try {
-      const res = await fetch("/api/terrain/status");
-      if (!res.ok) return false;
-      const data = (await res.json()) as { available?: boolean };
-      return data.available === true;
-    } catch {
-      return false;
-    }
-  };
 
   // True while any GeoJSON / dataset fetch is in flight, so a loading indicator can be
   // shown during slow boundary loads. Wired to the shared counter below - see
@@ -3492,6 +3550,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // control is active, since a left-click can't open both at once.
     const isWeatherControlActiveRef = useRef(false);
     const weatherDetailsActiveRef = useRef(weatherDetailsActive);
+    // Bumped to re-run the weather-terrain activation effect below once the
+    // map's style finishes loading, when it wasn't ready the first time.
+    const [weatherStyleReadyTick, setWeatherStyleReadyTick] = useState(0);
     // Bumped on every new location selection (see WeatherPanelState.generation).
     // Neither Open-Meteo call below takes an AbortSignal from a shared
     // controller - a superseded fetch is left to finish, but this guard means
@@ -3509,6 +3570,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       (lat: number, lng: number, locationLabel: string | null) => {
         const generation = ++weatherGenerationRef.current;
         const location = { latitude: lat, longitude: lng, locationLabel };
+        onWeatherPointSelectedRef.current?.();
         setWeatherPanel({
           status: "active",
           generation,
@@ -3519,15 +3581,18 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         });
 
         openMeteoCurrentProvider.getCurrent(lat, lng).then(
-          ({ current, aqi, resolvedCityLabel }) => {
+          ({ current, aqi }) => {
             if (weatherGenerationRef.current !== generation) return; // superseded
+            // Deliberately NOT using resolvedCityLabel (the nearest AQI monitoring
+            // station's city) as a location-label fallback here - it's coarse and often
+            // wrong for the actual clicked point (e.g. "Bengaluru" for a click in
+            // Chamarajpet, several km from that station). The reverse-geocode fallback
+            // below is the correct source for "where the user actually clicked"; the
+            // station's own city stays scoped to the AQI section's "Near <station>" line.
             setWeatherPanel((prev) => {
               if (prev.status !== "active" || prev.generation !== generation) return prev;
               return {
                 ...prev,
-                location: resolvedCityLabel && !prev.location.locationLabel
-                  ? { ...prev.location, locationLabel: resolvedCityLabel }
-                  : prev.location,
                 current: { status: current ? "success" : "error", data: current },
                 aqi: { status: aqi.official || aqi.modeled ? "success" : "error", ...aqi },
               };
@@ -3565,6 +3630,31 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             );
           },
         );
+
+        // The click didn't land on any of this app's own boundary layers (village/hobli/
+        // taluk/district/state - see inferWeatherLocationLabel), which only cover the
+        // states whose granular boundary data happens to be loaded. Fall back to the same
+        // free Nominatim reverse-geocode route "Find My Way" uses, so the panel still
+        // shows a real place name (falling back to the AQI station's city, then "Selected
+        // point") instead of never resolving one anywhere outside that coverage.
+        if (!locationLabel) {
+          fetch(`/api/geocode?lat=${lat}&lon=${lng}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { shortName?: string | null } | null) => {
+              if (weatherGenerationRef.current !== generation) return;
+              const shortName = typeof data?.shortName === "string" ? data.shortName : null;
+              if (!shortName) return;
+              setWeatherPanel((prev) =>
+                prev.status !== "active" || prev.generation !== generation || prev.location.locationLabel
+                  ? prev
+                  : { ...prev, location: { ...prev.location, locationLabel: shortName } },
+              );
+            })
+            .catch(() => {
+              /* reverse-geocode unavailable - AQI's resolvedCityLabel (above) or the
+                 "Selected point" fallback in WeatherDetailsPanel still cover this. */
+            });
+        }
       },
       [],
     );
@@ -3574,6 +3664,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       setShowWeatherMenu(false);
       weatherGenerationRef.current++; // discard any still-in-flight fetches
       setWeatherPanel({ status: "idle" });
+      onWeatherPanelCloseRef.current?.();
     }, []);
     const handleWeatherRetry = useCallback(() => {
       const wp = weatherPanel;
@@ -3665,9 +3756,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     useEffect(() => {
       onWeatherToolbarChangeRef.current = onWeatherToolbarChange;
     }, [onWeatherToolbarChange]);
-    // Resolved Weather workspace terrain DEM provider (Mapterhorn or the Re:Earth
-    // fallback), cached once per session by resolveWeatherTerrainProvider().
-    const weatherTerrainProviderRef = useRef<WeatherTerrainProvider | null | undefined>(undefined);
     // Original india-boundary-line paint, captured the first time the Weather
     // workspace de-emphasizes it, so it can be restored exactly on exit.
     const originalIndiaBoundaryPaintRef = useRef<{
@@ -6122,7 +6210,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           source: STATE_POLICE_SOURCE_ID,
           filter: ["==", ["get", "feature_role"], "JURISDICTION"],
           paint: {
-            "fill-color": "#8b5cf6",
+            "fill-color": "#ef4444",
             "fill-opacity": [
               "case",
               ["boolean", ["feature-state", "selected"], false],
@@ -6139,7 +6227,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           source: STATE_POLICE_SOURCE_ID,
           filter: ["==", ["get", "feature_role"], "JURISDICTION"],
           paint: {
-            "line-color": "#7c3aed",
+            "line-color": "#dc2626",
             "line-width": [
               "case",
               ["boolean", ["feature-state", "selected"], false],
@@ -6168,7 +6256,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             "text-ignore-placement": false,
           },
           paint: {
-            "text-color": "#32105f",
+            "text-color": "#7f1d1d",
             "text-halo-color": "rgba(255, 255, 255, 0.96)",
             "text-halo-width": 2,
             "text-halo-blur": 0.4,
@@ -8899,6 +8987,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         return;
       }
 
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the app) if the style isn't ready yet - see the identical
+      // guard on the weather-terrain effect for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       const lineGeojson = {
         type: "FeatureCollection" as const,
         features: pressureIsobars.map((line) => ({
@@ -9015,7 +9111,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         if (map.getLayer(PRESSURE_EXTREMA_LAYER_ID)) map.removeLayer(PRESSURE_EXTREMA_LAYER_ID);
         if (map.getSource(PRESSURE_EXTREMA_SOURCE_ID)) map.removeSource(PRESSURE_EXTREMA_SOURCE_ID);
       }
-    }, [weatherMode, pressureIsobars, pressureExtrema, showPressureExtrema]);
+    }, [weatherMode, pressureIsobars, pressureExtrema, showPressureExtrema, weatherStyleReadyTick]);
 
     // ── Authoritative Weather-Mode Terrain Synchronization (section 15)
     // Controls terrain styling solely based on weatherMode, independent of
@@ -9097,6 +9193,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       if (!satelliteResolved || !satelliteDate) return;
 
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the app) if the style isn't ready yet - see the identical
+      // guard on the weather-terrain effect for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       // Always use the resolved explicit date (see resolveGibsSatellite's
       // docstring: it deliberately resolves to the most recent *complete*
       // day, never "today" mid-progress) rather than GIBS's own "default"
@@ -9155,7 +9259,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.setLayoutProperty(GIBS_SATELLITE_LAYER_ID, "visibility", "visible");
       }
       setSatelliteStatus("ready");
-    }, [weatherMode, satelliteResolved, satelliteDate]);
+    }, [weatherMode, satelliteResolved, satelliteDate, weatherStyleReadyTick]);
 
     // Play/pause steps through the verified recent-dates list.
     useEffect(() => {
@@ -9308,6 +9412,15 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         return;
       }
 
+      // addGeoCloudLayer below calls map.addSource, which throws "Style is
+      // not done loading" (uncaught, crashing the app) if the style isn't
+      // ready yet - see the identical guard on the weather-terrain effect
+      // for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       // Himawari covers Asia-Pacific
       const hUrl = himawariTileUrlTemplate(hFrame);
       addGeoCloudLayer(
@@ -9357,6 +9470,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       goesEastFrames,
       goesWestStatus,
       goesEastStatus,
+      weatherStyleReadyTick,
     ]);
 
     // Satellite/terrain's place-name overlay is Google-sourced and only permitted while "Find
@@ -9541,6 +9655,21 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         return;
       }
 
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the whole app) if the style isn't ready yet - this is the
+      // actual reason selecting "Rain" (observed is the default product)
+      // appeared to do nothing on mobile: the app died before the IMERG
+      // layer, or anything after it, could render. Reuses the same
+      // weatherStyleReadyTick as the weather-terrain effect above - "idle"
+      // (not "load", which is strictly one-time) fires reliably whenever the
+      // style finishes loading/settling, and bumping the shared tick re-runs
+      // every effect that depends on it once it's actually safe to add
+      // sources.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       const tileUrl = imergTileUrlTemplate(frame);
 
       if (!map.getSource(IMERG_SOURCE_ID)) {
@@ -9571,7 +9700,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         ]);
         map.setLayoutProperty(IMERG_LAYER_ID, "visibility", "visible");
       }
-    }, [weatherMode, rainProduct, imergFrames, imergFrameIndex]);
+    }, [weatherMode, rainProduct, imergFrames, imergFrameIndex, weatherStyleReadyTick]);
 
     useEffect(() => {
       if (!isImergPlaying || imergFrames.length < 2) return;
@@ -9620,6 +9749,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       if (!ndviResolved) return;
 
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the app) if the style isn't ready yet - see the identical
+      // guard on the weather-terrain effect for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       const tileUrl = ndviTileUrlTemplate(ndviResolved.date);
 
       if (!map.getSource(NDVI_SOURCE_ID)) {
@@ -9651,7 +9788,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.setLayoutProperty(NDVI_LAYER_ID, "visibility", "visible");
       }
       setNdviStatus("ready");
-    }, [weatherMode, ndviResolved]);
+    }, [weatherMode, ndviResolved, weatherStyleReadyTick]);
 
     // ── Fire mode: NASA FIRMS active-fire detections ────────────────────────────
     // Fetches detections in a bounding box around the map's current center
@@ -9736,6 +9873,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       if (weatherMode !== "fire" || fireDetections.length === 0) {
         removeAll();
+        return;
+      }
+
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the app) if the style isn't ready yet - see the identical
+      // guard on the weather-terrain effect for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
         return;
       }
 
@@ -9857,7 +10002,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       } else {
         (map.getSource(FIRE_SOURCE_ID) as GeoJSONSource).setData(geojson as any);
       }
-    }, [weatherMode, fireDetections, fireHours]);
+    }, [weatherMode, fireDetections, fireHours, weatherStyleReadyTick]);
 
     // Slow, bounded pulse animation for newest detections - a single interval,
     // cleared whenever Fire mode is off or the pulse layer doesn't exist, never
@@ -10212,6 +10357,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       }
       if (!lstResolved || !lstDate) return;
 
+      // map.addSource below throws "Style is not done loading" (uncaught,
+      // crashing the app) if the style isn't ready yet - see the identical
+      // guard on the weather-terrain effect for the full explanation.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       const tileUrl = viirsLstTileUrlTemplate(lstResolved.layer, lstDate);
 
       if (!map.getSource(VIIRS_LST_SOURCE_ID)) {
@@ -10248,7 +10401,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         map.setLayoutProperty(VIIRS_LST_LAYER_ID, "visibility", "visible");
       }
       setLstStatus("ready");
-    }, [weatherMode, temperatureProduct, lstResolved, lstDate]);
+    }, [weatherMode, temperatureProduct, lstResolved, lstDate, weatherStyleReadyTick]);
 
     // Play/pause steps through the verified recent-dates list.
     useEffect(() => {
@@ -11185,19 +11338,58 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               // already appears on the map — instead of the click point.
               const centroid = featureCentroid(boundaryFeature.geometry);
               if (centroid) placeClickMarkerRef.current?.setLngLat(centroid as [number, number]);
-              // The "Address" row still needs an actual address though - report(..., null)
-              // above leaves it permanently stuck on "Looking up…" otherwise, since nothing
-              // else ever resolves it. Fetch it now and fill it in once it's back.
-              try {
-                const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
-                const data = res.ok ? await res.json() : null;
-                const address: string | null =
-                  typeof data?.label === "string" ? data.label : null;
-                report(boundaryName, address ?? "Address not found");
-              } catch (error) {
-                console.error("Reverse geocode lookup failed:", error);
-                report(boundaryName, "Address lookup failed");
+              // Fetch address and POIs in parallel for efficiency
+              const [geoRes, poiRes] = await Promise.allSettled([
+                fetch(`/api/geocode?lat=${lat}&lon=${lng}`).then(r => r.ok ? r.json() : null),
+                fetch(`/api/overpass?lat=${lat}&lon=${lng}&radius=100&limit=5`).then(r => r.ok ? r.json() : null)
+              ]);
+
+              const address = geoRes.status === "fulfilled" && geoRes.value?.label
+                ? geoRes.value.label
+                : "Address not found";
+              const nearbyPOIs: OverpassPOI[] = poiRes.status === "fulfilled" && poiRes.value?.places
+                ? poiRes.value.places
+                : [];
+
+              // Build enhanced rows with POI data
+              const rows: { label: string; value: string }[] = [
+                { label: "Address", value: address }
+              ];
+
+              // Add closest POI details if it matches the clicked location
+              const closestPOI = nearbyPOIs[0];
+              if (closestPOI) {
+                const dist = Math.round(haversineDistance(lat, lng, closestPOI.lat, closestPOI.lon));
+                if (dist < 50) {
+                  rows.push({
+                    label: "Place",
+                    value: `${closestPOI.name} (${formatCategory(closestPOI.type, closestPOI.category)})`
+                  });
+                  // Add contact info from the closest POI
+                  if (closestPOI.tags.phone || closestPOI.tags["contact:phone"]) {
+                    rows.push({
+                      label: "Phone",
+                      value: closestPOI.tags.phone || closestPOI.tags["contact:phone"] || ""
+                    });
+                  }
+                  if (closestPOI.tags.website || closestPOI.tags["contact:website"]) {
+                    rows.push({
+                      label: "Website",
+                      value: closestPOI.tags.website || closestPOI.tags["contact:website"] || ""
+                    });
+                  }
+                  if (closestPOI.tags.opening_hours) {
+                    rows.push({ label: "Hours", value: closestPOI.tags.opening_hours });
+                  }
+                }
               }
+
+              attributeInfoOpenRef.current = true;
+              onAttributeInfoRef.current?.({
+                typeLabel: "Location",
+                title: boundaryName,
+                rows,
+              });
             } else if (boundaryFeature?.geometry) {
               // Boundary found but no name property — fall back to reverse geocode.
               try {
@@ -11215,18 +11407,31 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               }
             } else {
                 // No boundary found: reverse-geocode to get the name, then show a
-                // red pin like Google Maps (second image).
+                // red pin like Google Maps (second image). Also fetch nearby POIs
+                // from Overpass API to show place information like Google Maps.
                 let noBoundaryName = "Unknown location";
                 let noBoundaryAddress = "Address not found";
-                try {
-                  const geoRes = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`);
-                  const geoData = geoRes.ok ? await geoRes.json() : null;
+                let nearbyPOIs: OverpassPOI[] = [];
+
+                // Fetch reverse geocode and POIs in parallel
+                const [geoResult, poiResult] = await Promise.allSettled([
+                  fetch(`/api/geocode?lat=${lat}&lon=${lng}`).then(r => r.ok ? r.json() : null),
+                  fetch(`/api/overpass?lat=${lat}&lon=${lng}&radius=100&limit=5`).then(r => r.ok ? r.json() : null)
+                ]);
+
+                // Process geocode result
+                if (geoResult.status === "fulfilled" && geoResult.value) {
+                  const geoData = geoResult.value;
                   if (typeof geoData?.label === "string") noBoundaryAddress = geoData.label;
                   if (typeof geoData?.shortName === "string") noBoundaryName = geoData.shortName;
                   else if (typeof geoData?.label === "string") noBoundaryName = geoData.label;
-                } catch {
-                  // keep defaults
                 }
+
+                // Process POI result
+                if (poiResult.status === "fulfilled" && poiResult.value?.places) {
+                  nearbyPOIs = poiResult.value.places;
+                }
+
                 placeClickMarkerRef.current?.remove();
                 const pinEl = document.createElement("div");
                 pinEl.style.cssText =
@@ -11239,11 +11444,70 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 placeClickMarkerRef.current = new maplibregl.Marker({ element: pinEl, anchor: "bottom" })
                   .setLngLat([lng, lat])
                   .addTo(map);
+
+                // Build attribute info rows with POI details
+                const rows: { label: string; value: string }[] = [
+                  { label: "Address", value: noBoundaryAddress }
+                ];
+
+                // Add nearby POI information if available
+                if (nearbyPOIs.length > 0) {
+                  // Add closest POI as "Nearby" if it's very close (< 50m)
+                  const closestPOI = nearbyPOIs[0];
+                  if (closestPOI) {
+                    const distance = Math.round(
+                      haversineDistance(lat, lng, closestPOI.lat, closestPOI.lon)
+                    );
+                    if (distance < 50) {
+                      rows.push({
+                        label: "Place",
+                        value: `${closestPOI.name} (${formatCategory(closestPOI.type, closestPOI.category)})`
+                      });
+                    }
+                  }
+
+                  // Add phone/website from closest POI if available
+                  const poiWithContact = nearbyPOIs.find(p => p.tags.phone || p.tags.website || p.tags["contact:phone"]);
+                  if (poiWithContact) {
+                    if (poiWithContact.tags.phone || poiWithContact.tags["contact:phone"]) {
+                      rows.push({
+                        label: "Phone",
+                        value: poiWithContact.tags.phone || poiWithContact.tags["contact:phone"] || ""
+                      });
+                    }
+                    if (poiWithContact.tags.website || poiWithContact.tags["contact:website"]) {
+                      rows.push({
+                        label: "Website",
+                        value: poiWithContact.tags.website || poiWithContact.tags["contact:website"] || ""
+                      });
+                    }
+                    if (poiWithContact.tags.opening_hours) {
+                      rows.push({
+                        label: "Hours",
+                        value: poiWithContact.tags.opening_hours
+                      });
+                    }
+                  }
+
+                  // Add list of other nearby places
+                  const otherPOIs = nearbyPOIs.slice(0, 3);
+                  if (otherPOIs.length > 0) {
+                    const nearbyList = otherPOIs.map(p => {
+                      const dist = Math.round(haversineDistance(lat, lng, p.lat, p.lon));
+                      return `${p.name} (${dist}m)`;
+                    }).join(", ");
+                    rows.push({
+                      label: "Nearby",
+                      value: nearbyList
+                    });
+                  }
+                }
+
                 attributeInfoOpenRef.current = true;
                 onAttributeInfoRef.current?.({
                   typeLabel: "Location",
                   title: noBoundaryName,
-                  rows: [{ label: "Address", value: noBoundaryAddress }],
+                  rows,
                 });
               }
           })();
@@ -11569,7 +11833,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               : undefined;
 
             attributeInfoOpenRef.current = true;
-            onAttributeInfoRef.current?.({
+            const attrInfo = {
               typeLabel,
               title,
               rows,
@@ -11578,7 +11842,30 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               properties: props,
               hierarchy,
               adjacentParcels,
-            });
+            };
+            onAttributeInfoRef.current?.(attrInfo);
+            // For GP boundaries, asynchronously fetch the president/member name
+            // from the Panchamitra portal and append it to the panel.
+            if (isGpBoundary) {
+              const gpName = (props.gram_panchayat as string | undefined)?.trim();
+              const districtName = (props.district as string | undefined)?.trim();
+              const talukName = (props.taluk_panchayat as string | undefined)?.trim();
+              const villagesList = (props.villages as string | undefined)?.trim();
+              if (gpName && districtName) {
+                const params = new URLSearchParams({ district: districtName, gpName });
+                if (talukName) params.set("taluk", talukName);
+                if (villagesList) params.set("villages", villagesList);
+                fetch(`/api/datasets/gp-members?${params}`)
+                  .then((r) => r.json())
+                  .then((data) => {
+                    if (data.memberName) {
+                      rows.push({ label: "Gram Panchayat Member", value: data.memberName, bold: true });
+                      onAttributeInfoRef.current?.({ ...attrInfo, rows: [...rows] });
+                    }
+                  })
+                  .catch(() => { /* member data unavailable - leave panel as-is */ });
+              }
+            }
             return true;
           };
 
@@ -14364,6 +14651,59 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               console.error("Failed to load India boundary:", error);
             }
 
+            // Initialize interactive POI overlay - fetches nearby places from Overpass API
+            // and renders them as hoverable/clickable text labels (like Google Maps).
+            if (!cancelled) {
+              poiOverlayCleanupRef.current = createPOIOverlay(
+                map,
+                async (poi: POI, properties: Record<string, string>) => {
+                  // Show POI info in the attribute panel when clicked
+                  attributeInfoOpenRef.current = true;
+                  const rows: { label: string; value: string }[] = [];
+
+                  if (properties.label) {
+                    rows.push({ label: "Type", value: properties.label });
+                  }
+                  if (properties.phone) {
+                    rows.push({ label: "Phone", value: properties.phone });
+                  }
+                  if (properties.website) {
+                    rows.push({ label: "Website", value: properties.website });
+                  }
+                  if (properties.opening_hours) {
+                    rows.push({ label: "Hours", value: properties.opening_hours });
+                  }
+                  if (properties.address) {
+                    rows.push({ label: "Address", value: properties.address });
+                  }
+
+                  onAttributeInfoRef.current?.({
+                    typeLabel: "Place",
+                    title: poi.name,
+                    rows,
+                  });
+
+                  // Also drop a marker at the POI location
+                  placeClickMarkerRef.current?.remove();
+                  const maplibregl = await import("maplibre-gl");
+                  const el = document.createElement("div");
+                  el.style.cssText = "cursor:default;";
+                  const labelEl = document.createElement("div");
+                  labelEl.style.cssText =
+                    "color:#1a73e8;font:700 14px/1.3 system-ui,sans-serif;" +
+                    "text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff," +
+                    "0 0 4px #fff;white-space:nowrap;max-width:260px;overflow:hidden;" +
+                    "text-overflow:ellipsis;letter-spacing:0.01em;";
+                  labelEl.textContent = poi.name;
+                  el.appendChild(labelEl);
+                  placeClickMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "center" })
+                    .setLngLat([poi.lon, poi.lat])
+                    .addTo(map);
+                },
+                { minZoom: 12, radius: 300, limit: 40 }
+              );
+            }
+
             setIsLoading(false);
           });
 
@@ -14400,6 +14740,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
       return () => {
         cancelled = true;
+        if (poiOverlayCleanupRef.current) {
+          poiOverlayCleanupRef.current();
+          poiOverlayCleanupRef.current = null;
+        }
         if (aqiGridRendererRef.current) {
           aqiGridRendererRef.current.destroy();
           aqiGridRendererRef.current = null;
@@ -14428,14 +14772,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (!mapRef.current) return;
 
       const map = mapRef.current;
-
-      // The Terrain base layer needs the India DEM file on the server. When it's missing,
-      // every /api/terrain tile request 500s and the style fails to load - so probe first
-      // and stay on the current layer with a friendly notice instead of switching.
-      if (layer === "terrain" && !(await isTerrainDataAvailable())) {
-        setTerrainUnavailable(true);
-        return;
-      }
 
       // A raster-dem source cannot be removed while MapLibre is still using it for 3D terrain.
       removeIndiaTerrain(map);
@@ -14490,7 +14826,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             l.id.startsWith("bengaluru-") ||
             l.id.startsWith("extra-") ||
             AOI_LAYER_IDS.includes(l.id) ||
-            NAVIGATION_LAYER_IDS.includes(l.id),
+            NAVIGATION_LAYER_IDS.includes(l.id) ||
+            l.id.startsWith("overpass-pois"),
         )
         .map((l) => l.id);
 
@@ -14512,7 +14849,8 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           sourceId.startsWith("extra-") ||
           sourceId === AOI_SOURCE_ID ||
           sourceId === AOI_VERTICES_SOURCE_ID ||
-          NAVIGATION_SOURCE_IDS.includes(sourceId),
+          NAVIGATION_SOURCE_IDS.includes(sourceId) ||
+          sourceId === "overpass-pois",
       );
 
       // Get custom sources data
@@ -14572,26 +14910,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
 
         case "terrain":
           addIndiaTerrain(map, firstCustomLayerId);
-          map.addSource(TERRAIN_LABELS_SOURCE_ID, {
-            type: "raster",
-            tiles: TERRAIN_LABELS_TILES,
-            tileSize: 256,
-            attribution: "© Google",
-          });
-          // Same rule as satellite above - this overlay is Google-sourced place names, so it's
-          // only ever visible while "Find My Way" is active, regardless of the general "Place
-          // names" preference.
-          map.addLayer(
-            {
-              id: TERRAIN_LABELS_LAYER_ID,
-              type: "raster",
-              source: TERRAIN_LABELS_SOURCE_ID,
-              layout: {
-                visibility: placeLabelsVisibleRef.current && findMyWayActive ? "visible" : "none",
-              },
-            },
-            firstCustomLayerId
-          );
           map.setMaxZoom(22);
           break;
 
@@ -14952,6 +15270,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const map = mapRef.current;
     if (!map) return;
 
+    // Toggle POI overlay visibility (interactive labels from Overpass API)
+    const poiLayers = ["overpass-pois-labels", "overpass-pois-labels-hover", "overpass-pois-labels-clicked"];
+    for (const layerId of poiLayers) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+      }
+    }
+
     if (currentLayerRef.current === "default") {
       updateBaseLabelVisibility(
         map,
@@ -14962,22 +15288,12 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       return;
     }
 
-    // Satellite/terrain's place-name overlays are Google-sourced (see the comments in
-    // handleLayerChange's satellite/terrain cases) - only ever actually shown while "Find My
+    // Satellite's place-name overlay is Google-sourced (see the comments in
+    // handleLayerChange's satellite case) - only ever actually shown while "Find My
     // Way" is active, regardless of what this preference is set to. The preference itself
     // still gets tracked above so it's remembered for the next time Directions opens.
+    // Terrain intentionally has no place-name overlay at all - pure elevation shading.
     const googleLabelsVisible = visible && findMyWayActive;
-
-    if (currentLayerRef.current === "terrain") {
-      if (map.getLayer(TERRAIN_LABELS_LAYER_ID)) {
-        map.setLayoutProperty(
-          TERRAIN_LABELS_LAYER_ID,
-          "visibility",
-          googleLabelsVisible ? "visible" : "none"
-        );
-      }
-      return;
-    }
 
     if (currentLayerRef.current === "satellite" && map.getSource("satellite-base")) {
       // MapLibre can't update a raster source's tile URLs in place - swap it out for one
@@ -15071,16 +15387,16 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     // offer the user a fresh set of options mid-drive.
     if (distFromRoute > NAVIGATION_OFF_ROUTE_THRESHOLD_METERS) {
       const rerouted = await fetchRoutes([longitude, latitude], nav.destination, nav.mode);
-      if (rerouted) {
+      if (rerouted.ok) {
         navigationRef.current = {
           destination: nav.destination,
           destinationLabel: nav.destinationLabel,
           mode: nav.mode,
           iconMode: nav.iconMode,
-          routes: [rerouted[0]!],
+          routes: [rerouted.routes[0]!],
           selectedIndex: 0,
         };
-        drawNavigationRoutes(map, [rerouted[0]!], 0);
+        drawNavigationRoutes(map, [rerouted.routes[0]!], 0);
       }
       return false; // progress is computed against the fresh route on the next fix
     }
@@ -15113,6 +15429,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
     const nextManeuverStep = route.steps[stepIndex + 1];
     const afterNextStep = route.steps[stepIndex + 2];
 
+    setNavBannerVisible(true);
     onNavigationUpdateRef.current?.({
       destinationLabel: nav.destinationLabel,
       distanceRemainingMeters: arrived ? 0 : distanceRemaining,
@@ -15131,6 +15448,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
   };
 
     useImperativeHandle(ref, () => ({
+      getMap: () => mapRef.current,
       search: (query: string) => {
         const map = mapRef.current;
         if (!map) return;
@@ -15329,6 +15647,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       if (!navigator.geolocation) {
         console.error("Geolocation is not supported by this browser.");
         onLiveLocationChangeRef.current?.(false);
+        onLiveLocationErrorRef.current?.("Location isn't supported in this browser.");
         return;
       }
       // A second click while already tracking just re-centers on the last known fix
@@ -15394,9 +15713,14 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Live location error:", describeGeolocationError(error));
+          // A denied/unavailable/timed-out location is a normal, expected user
+          // outcome (not a bug) and is already handled gracefully below by
+          // resetting state - console.warn instead of .error so Next.js dev
+          // mode doesn't block the screen with its full-page error overlay.
+          console.warn("Live location error:", describeGeolocationError(error));
           liveLocationWatchIdRef.current = null;
           onLiveLocationChangeRef.current?.(false);
+          onLiveLocationErrorRef.current?.(friendlyGeolocationError(error));
         },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
       );
@@ -15446,8 +15770,9 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         const destResolved = await resolveDirectionsPoint(destination);
         if ("errorReason" in destResolved) return { ok: false, reason: destResolved.errorReason };
 
-        const routes = await fetchRoutes(originResolved.coord, destResolved.coord, mode);
-        if (!routes) return { ok: false, reason: "no-route" };
+        const fetched = await fetchRoutes(originResolved.coord, destResolved.coord, mode);
+        if (!fetched.ok) return { ok: false, reason: fetched.reason };
+        const routes = fetched.routes;
 
         // Build the preview payload before touching the map, so a bug in here (e.g. an
         // unexpected maneuver shape) surfaces as a normal failed result rather than an
@@ -15553,7 +15878,10 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           })();
         },
         (error) => {
-          console.error("Navigation location error:", describeGeolocationError(error));
+          // Same reasoning as the live-location watch above: a denied/
+          // unavailable/timed-out fix here is an expected user outcome, not
+          // a bug - console.warn avoids Next.js dev mode's blocking overlay.
+          console.warn("Navigation location error:", describeGeolocationError(error));
         },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
       );
@@ -15633,6 +15961,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         clearNavigationRouteLayers(map);
         map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
       }
+      setNavBannerVisible(false);
       onNavigationUpdateRef.current?.(null);
     },
     listBengaluruFiles: async () => {
@@ -15774,11 +16103,40 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       highlightSource?.setData({ type: "FeatureCollection", features: [] });
     },
     getWeatherMode: () => weatherMode,
-    setWeatherMode: (mode: WeatherMapMode) => setWeatherMode(mode),
+    setWeatherMode: (mode: WeatherMapMode) => {
+      setWeatherMode(mode);
+      // "Rain" (observed product, the default) renders through the RainViewer
+      // composite radar pipeline, which is gated on isRadarEnabled rather than
+      // weatherMode directly (see its effect above) - normally only flipped by
+      // the rich weather menu's own "Radar" checkbox. Callers that set the mode
+      // through this bridge instead (the mobile Weather Layers sheet, the
+      // desktop WeatherLayerToolbar) have no way to reach that checkbox, so
+      // without this, picking "Rain" updates weatherMode but nothing ever
+      // renders. Only ever turns radar ON here - never off, so it doesn't
+      // fight a user who independently left the checkbox on for another mode.
+      if (mode === "rain" && rainProduct === "observed") setIsRadarEnabled(true);
+    },
     isWeatherControlActive: () => isWeatherControlActive,
     setActiveMapPanel: (panel: "none" | "layers" | "weather" | "weather-details" | "my-environment" | "draw-aoi") => {
       setActiveMapPanel(panel);
       if (panel !== "weather" && panel !== "weather-details") setShowWeatherMenu(false);
+    },
+    openWeatherMenu: () => {
+      // Same atomic transition as clicking the Weather button directly - see
+      // its onClick below for why every one of these states moves together.
+      setActiveMapPanel("weather");
+      setWeatherDetailsActive(true);
+      setShowWeatherMenu(true);
+      setShowImdWarnings(false);
+    },
+    enableWeatherDefaults: () => {
+      setIsRadarEnabled(true);
+      setWeatherDetailsActive(true);
+      // IMD warnings intentionally stay off: when enabled they suppress the
+      // click-to-inspect weather summary (see the map click guard that bails
+      // while showImdWarnings is true), so the user couldn't tap a point and
+      // get the weather panel.
+      setShowImdWarnings(false);
     },
   }));
 
@@ -16422,20 +16780,33 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
       isWeatherControlActiveRef.current = isWeatherControlActive;
     }, [isWeatherControlActive]);
 
-    // ── Weather workspace terrain basemap ─────────────────────────────────────
-    // Replaces the normal basemap with a Mapterhorn (Re:Earth-fallback) DEM
-    // color-relief + hillshade canvas whenever any weather overlay is active.
-    // See ../../lib/weather/weatherTerrain.ts for the source/layer setup and
-    // provider resolution. The normal basemap is only hidden once the terrain
-    // source has actually finished loading tiles for the current view, so
-    // there's no blank/gray flash while a slow or unreachable provider loads.
+    // ── Weather workspace basemap ──────────────────────────────────────────────
+    // Weather overlays always sit over the plain OSM "Default" map, never bright
+    // satellite imagery, the 3D "terrain" basemap, or a topographic relief canvas -
+    // regardless of which base layer the user had selected beforehand. Readable
+    // roads/labels/place names behind the overlay read better than a distracting
+    // image or a relief map most people don't need for a weather glance.
     useEffect(() => {
       const map = mapRef.current;
       if (!map) return;
 
+      // addDefaultBaseLayers below calls map.addSource, which throws "Style is not
+      // done loading" if the style (initial load, or a basemap switch that's still
+      // settling) isn't ready yet - uncaught, this crashed the whole app the instant
+      // weather activated during that window (the actual reason picking Rain/Wind on
+      // mobile appeared to do nothing - the app died before anything could render).
+      // "idle" (not "load", which is strictly one-time) fires reliably whenever the
+      // style finishes loading/settling; bumping this tick re-runs the effect once
+      // it's actually safe to add sources, instead of duplicating the activation
+      // logic inside the listener.
+      if (!map.isStyleLoaded()) {
+        map.once("idle", () => setWeatherStyleReadyTick((t) => t + 1));
+        return;
+      }
+
       const active = isWeatherControlActive;
 
-      /** Layer IDs that form the current normal basemap and should be hidden during weather. */
+      /** Layer IDs that form the *real* selected basemap (satellite/terrain/default). */
       const getBasemapLayerIds = (): string[] => {
         const layer = currentLayerRef.current;
         if (layer === "satellite") return ["satellite-base-layer"];
@@ -16459,93 +16830,40 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         }
       };
 
+      const setOsmDefaultVisible = (visible: boolean) => {
+        if (!map.getLayer(OSM_NOLABELS_LAYER_ID)) {
+          if (!visible) return;
+          // Lazily add the OSM default tiles the first time weather needs them - the
+          // user may never have switched to the Default base layer themselves. Insert
+          // below every existing layer (custom overlays, boundaries, the real basemap
+          // being hidden above) so it renders as the bottom-most basemap, not on top.
+          addDefaultBaseLayers(map, map.getStyle().layers[0]?.id);
+        }
+        if (map.getLayer(OSM_NOLABELS_LAYER_ID)) {
+          map.setLayoutProperty(OSM_NOLABELS_LAYER_ID, "visibility", visible ? "visible" : "none");
+        }
+      };
+
       if (!active) {
-        // ── Deactivate weather terrain ──
+        // ── Deactivate weather workspace: restore whatever base layer was selected ──
         showBasemapLayers();
-        setWeatherTerrainVisible(map, false);
+        if (currentLayerRef.current !== "default") setOsmDefaultVisible(false);
         return;
       }
 
-      // ── Activate weather terrain ──
+      // ── Activate weather workspace ──
       // Weather is always a flat 2D cartographic effect, even if the user had the
       // 3D "terrain" basemap selected beforehand.
       removeIndiaTerrain(map);
+      hideBasemapLayers();
 
-      const revealTerrain = () => {
-        // Satellite (VIIRS) is polar-orbiting with swath gaps — opaque black
-        // JPEG tiles where no pass exists. Keep the basemap visible so it
-        // shows through those black gaps.
-        // Observed Cloud is multi-geostationary (Himawari + GOES-West/East)
-        // which does NOT have full global coverage — gaps exist between the
-        // satellite disks (e.g. over Africa/Europe). The basemap MUST stay
-        // visible so it shows through in those gaps.
-        // Vegetation (MODIS NDVI) is full-viewport and can replace the basemap.
-        const isFullCoverageImagery = weatherMode === "vegetation";
-        const needsBasemapBehind =
-          weatherMode === "satellite" || (weatherMode === "clouds" && cloudProduct === "observed");
-        setWeatherTerrainVisible(map, !isFullCoverageImagery && !needsBasemapBehind);
-        // Satellite VIIRS and observed cloud both have coverage gaps — keep
-        // the basemap visible so it fills those gaps naturally. Only hide the
-        // basemap for modes where the imagery truly covers the full viewport
-        // (vegetation/NDVI) or where weather-terrain serves as the background.
-        if (needsBasemapBehind) {
-          showBasemapLayers();
-        } else {
-          hideBasemapLayers();
-        }
-      };
-
-      /** Wires up the DEM source with `provider` and reveals it once ready; returns a cleanup fn. */
-      const activateWithProvider = (provider: WeatherTerrainProvider): (() => void) => {
-        ensureWeatherTerrain(map, provider);
-
-        if (isWeatherTerrainReady(map)) {
-          revealTerrain();
-          return () => {};
-        }
-
-        // Wait for the first `sourcedata` confirming the current view's tiles loaded
-        // so there is no flash of blank canvas between hiding the basemap and the
-        // terrain tiles arriving.
-        const onSourceData = (e: { sourceId?: string }) => {
-          if (e.sourceId !== WEATHER_TERRAIN_DEM_SOURCE_ID || !isWeatherTerrainReady(map)) return;
-          revealTerrain();
-          map.off("sourcedata", onSourceData);
-        };
-        map.on("sourcedata", onSourceData);
-        // Safety timeout: never leave the user staring at the (still-visible) normal
-        // basemap forever if tiles for this exact view never resolve.
-        const fallback = setTimeout(() => {
-          map.off("sourcedata", onSourceData);
-          revealTerrain();
-        }, 4000);
-        return () => {
-          map.off("sourcedata", onSourceData);
-          clearTimeout(fallback);
-        };
-      };
-
-      const cachedProvider = weatherTerrainProviderRef.current;
-      if (cachedProvider !== undefined) {
-        // Already resolved earlier this session (possibly null - both providers unreachable).
-        if (!cachedProvider) return undefined; // Safe failure: keep the normal basemap, no terrain.
-        return activateWithProvider(cachedProvider);
-      }
-
-      let cancelled = false;
-      let cleanupActivation: (() => void) | undefined;
-      resolveWeatherTerrainProvider().then((provider) => {
-        weatherTerrainProviderRef.current = provider;
-        if (cancelled) return;
-        if (!provider) return; // Both providers unreachable - keep the normal basemap.
-        cleanupActivation = activateWithProvider(provider);
-      });
-
-      return () => {
-        cancelled = true;
-        cleanupActivation?.();
-      };
-    }, [isWeatherControlActive, currentLayer, weatherMode, cloudProduct]);
+      // Vegetation (MODIS NDVI) is full-viewport imagery and can replace the basemap
+      // entirely. Every other mode - including satellite (VIIRS) and observed cloud,
+      // both of which have real coverage gaps (polar-orbiting swaths / non-global
+      // geostationary disks) - sits over the OSM default map, which also naturally
+      // fills those gaps.
+      setOsmDefaultVisible(weatherMode !== "vegetation");
+    }, [isWeatherControlActive, currentLayer, weatherMode, weatherStyleReadyTick]);
 
     // ── Weather workspace boundary de-emphasis ────────────────────────────────
     // The cyan India outline reads as too visually dominant next to Ventusky/MSN-
@@ -16682,7 +17000,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
         />
 
         {/* Layers Control */}
-        {!isLoading && !loadError && (
+        {!isLoading && !loadError && !hideLayersControl && (
           <LayersControl
             currentLayer={currentLayer}
             onLayerChange={handleLayerChange}
@@ -16691,20 +17009,32 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
             showBadgeIcon={false}
             placeLabelsVisible={placeLabelsVisible}
             onTogglePlaceLabels={applyPlaceLabelsVisible}
-            autoExpand={findMyWayActive}
+            autoExpand={false}
           />
         )}
 
         {/* Reset View - only shown once the map has been rotated/tilted away
           from the default north-up, flat orientation. Sits above the scale
-          bar (bottom-right, native MapLibre control). */}
+          bar (bottom-right, native MapLibre control) - except on mobile while
+          turn-by-turn navigation is up, where it moves to the top-left just
+          below the caller's route banner: bottom-right is under the user's
+          thumb mid-navigation, and the scale bar lives there too. */}
         {!isLoading && !loadError && mapTransformDirty && (
           <button
             type="button"
             onClick={handleResetView}
             aria-label="Reset map view to north-up"
             title="Reset view"
-            className="absolute bottom-16 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-white"
+            style={
+              navBannerVisible && navBannerBottom != null
+                ? ({ "--compass-top": `${navBannerBottom + 12}px` } as React.CSSProperties)
+                : undefined
+            }
+            className={`absolute z-10 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-700 shadow-lg backdrop-blur-sm transition-colors hover:bg-white ${
+              navBannerVisible
+                ? "left-4 top-[224px] max-md:top-[var(--compass-top,224px)] md:bottom-16 md:left-auto md:right-4 md:top-auto"
+                : "bottom-16 right-4"
+            }`}
           >
             <Compass className="h-4 w-4" />
           </button>
@@ -16991,7 +17321,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
               aria-expanded={showWeatherMenu}
               aria-label="Weather"
               title="Weather"
-              className={`flex h-11 w-11 items-center justify-center rounded-full border shadow-md backdrop-blur-md transition-all duration-150 hover:scale-[1.03] active:scale-95 ${
+              className={`hidden h-11 w-11 items-center justify-center rounded-full border shadow-md backdrop-blur-md transition-all duration-150 hover:scale-[1.03] active:scale-95 md:flex ${
                 isWeatherControlActive
                   ? "border-atlas-cobalt bg-atlas-cobalt text-white"
                   : "border-white/70 bg-white/90 text-gray-700 hover:bg-white"
@@ -17006,7 +17336,7 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
                 weatherMode !== "none") && (
               <div
                 role="menu"
-                className="bg-white/94 absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/70 shadow-xl backdrop-blur-sm"
+                className="bg-white/94 absolute left-0 top-full z-30 mt-2 hidden w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/70 shadow-xl backdrop-blur-sm md:block"
               >
                 <div className="max-h-[calc(100vh-7.5rem)] overflow-y-auto overscroll-contain p-4">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
@@ -18235,17 +18565,6 @@ export const IndiaMapViewer = forwardRef<IndiaMapViewerHandle, IndiaMapViewerPro
           </div>
         )}
 
-        {/* Terrain-unavailable notice - shown above the layers control when the user
-            picks Terrain but the India DEM file is missing on this server. */}
-        {terrainUnavailable && (
-          <div className="absolute bottom-24 left-6 z-30 max-w-72 rounded-xl bg-white/95 px-4 py-3 shadow-lg ring-1 ring-gray-200">
-            <p className="text-xs font-medium leading-relaxed text-gray-800">
-              Terrain view isn't available yet — the India DEM data file isn't on this
-              server. Add <span className="font-semibold">DEM_Terrain/India_DEM.tif</span>
-              (or set INDIA_DEM_PATH) to enable it.
-            </p>
-          </div>
-        )}
       </div>
     );
   },

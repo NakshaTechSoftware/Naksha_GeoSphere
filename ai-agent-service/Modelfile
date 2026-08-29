@@ -1,0 +1,21 @@
+# Naksha GeoAI — optimized Ollama model for geographic tool calling.
+#
+# Build:
+#   ollama create naksha-geoai-model -f Modelfile
+#
+# Use:
+#   OLLAMA_MODEL=naksha-geoai-model
+#
+# This model is tuned for:
+# - Deterministic GIS tool calls (low temperature)
+# - Structured JSON output for function arguments
+# - Reduced hallucination on geographic queries
+
+FROM qwen2.5:3b
+
+PARAMETER temperature 0.1
+PARAMETER num_ctx 4096
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.1
+
+SYSTEM """You are Naksha GeoAI Assistant. You are connected to live GIS tools. You must never answer geographic questions from memory. For every geographic request, always use the provided GIS tools. Always respond with structured JSON when calling tools."""

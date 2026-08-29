@@ -1,10 +1,7 @@
-import { LandingPage } from "@/components/landing/LandingPage";
-import { SessionRedirect } from "@/components/auth/SessionRedirect";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return (
-    <SessionRedirect>
-      <LandingPage />
-    </SessionRedirect>
-  );
+  // Temporarily skip the welcome/landing page and go directly to the explore page.
+  // The welcome page will be re-enabled in a future phase.
+  redirect("/explore");
 }

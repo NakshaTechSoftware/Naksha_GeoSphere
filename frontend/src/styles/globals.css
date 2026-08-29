@@ -241,3 +241,13 @@
     }
   }
 }
+
+/* MapLibre's scale control ("50 km") defaults to a 10px margin on every side.
+   Drop the bottom and right margins so it sits flush against the viewport
+   corner, matching Google Maps' scale indicator instead of floating away
+   from it. Extra specificity (repeated class + !important) is needed to beat
+   maplibre-gl.css's own rule, which loads after this file in the bundle. */
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-scale.maplibregl-ctrl-scale {
+  margin-bottom: 0 !important;
+  margin-right: 0 !important;
+}

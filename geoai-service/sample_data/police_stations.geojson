@@ -1,0 +1,35 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Indiranagar Police Station",
+        "category": "law_and_order",
+        "address": "100 Feet Rd, Indiranagar, Bengaluru",
+        "phone": "080-25203015"
+      },
+      "geometry": { "type": "Point", "coordinates": [77.6408, 12.9784] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Koramangala Police Station",
+        "category": "law_and_order",
+        "address": "80 Feet Rd, Koramangala, Bengaluru",
+        "phone": "080-25532100"
+      },
+      "geometry": { "type": "Point", "coordinates": [77.6245, 12.9352] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Cubbon Park Police Station",
+        "category": "law_and_order",
+        "address": "Kasturba Road, Bengaluru",
+        "phone": "080-22942222"
+      },
+      "geometry": { "type": "Point", "coordinates": [77.5946, 12.9784] }
+    }
+  ]
+}

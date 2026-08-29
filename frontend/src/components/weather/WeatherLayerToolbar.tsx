@@ -35,7 +35,7 @@ interface LayerDef {
   activeColor: string;
 }
 
-const LAYERS: LayerDef[] = [
+export const LAYERS: LayerDef[] = [
   { key: "temperature", label: "Temperature", icon: ThermometerIcon, color: "#EF4444", activeColor: "#DC2626" },
   { key: "rain", label: "Rain", icon: CloudRainIcon, color: "#3B82F6", activeColor: "#2563EB" },
   { key: "wind", label: "Wind", icon: WindIcon, color: "#06B6D4", activeColor: "#0891B2" },

@@ -37,6 +37,32 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Proxy all /api/v1/* requests (weather, auth, environment, …) to the FastAPI
+  // backend so the mobile APK can reach it through the cloudflare tunnel.
+  // Without this, calls to http://localhost:8000 from the phone's WebView fail
+  // because localhost there refers to the phone itself.
+  async rewrites() {
+    return [
+      {
+        source: "/api/v1/:path*",
+        destination: `${process.env.PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1/:path*`,
+      },
+      {
+        // GeoAI Agent Service — LLM chat + streaming
+        source: "/api/agent/:path*",
+        destination: `${process.env.AGENT_API_URL ?? "http://localhost:8200"}/api/:path*`,
+      },
+      {
+        // The agent service's actual liveness check lives at /health (no /api
+        // prefix), so the rule above can't reach it - a separate rewrite is
+        // needed rather than routing this through /api/agent/*. Exists so the
+        // "Nibo online" indicator can be a cheap GET instead of the full LLM
+        // agent turn a POST to /api/agent/chat would otherwise require.
+        source: "/api/agent-health",
+        destination: `${process.env.AGENT_API_URL ?? "http://localhost:8200"}/health`,
+      },
+    ];
+  },
   // Hide the floating Next.js dev-tools button (bottom-left "N" badge) that
   // otherwise shows in the dev build the mobile app loads via the tunnel.
   devIndicators: false,
@@ -47,13 +73,7 @@ const nextConfig: NextConfig = {
   // would otherwise infer the workspace root as E:\Naksha_GeoSphere and warn about it.
   // This app is standalone - pin the trace root to the frontend directory.
   outputFileTracingRoot: path.join(__dirname),
-  outputFileTracingIncludes: {
-    "/api/terrain/*": [
-      "../DEM_Terrain/India_DEM.tif",
-      "../DEM_Terrain/India_DEM_overview.tif",
-    ],
-  },
-  serverExternalPackages: ["geotiff", "sharp", "@capacitor/filesystem", "@capacitor/share"],
+  serverExternalPackages: ["sharp", "@capacitor/filesystem", "@capacitor/share"],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       // Capacitor packages only run inside Android/iOS WebViews.

@@ -65,9 +65,15 @@ export async function GET(request: NextRequest) {
 }
 
 // Reverse geocoding (lat/lon -> a human-readable place name/address) for the "Find My Way"
-// place-click card - same free Nominatim endpoint as the text search above, just its
-// "/reverse" sibling. Cached per rounded coordinate so re-clicking near the same spot (or
-// a click that lands on the exact same point twice) doesn't re-hit Nominatim.
+// place-click card and the Weather panel's "where you clicked" title. Primary source is
+// Photon (komoot's free, keyless OSM-based geocoder - https://photon.komoot.io), not
+// Nominatim: Nominatim's public instance enforces a hard per-IP rate limit/ban (~1 req/sec,
+// escalating to longer suspensions) that this environment kept tripping, breaking this
+// route outright. Nominatim's reverse endpoint is kept as a fallback for if Photon itself
+// is ever unreachable. Cached per rounded coordinate so re-clicking near the same spot (or
+// a click that lands on the exact same point twice) doesn't re-hit either service.
+const PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse";
+
 async function handleReverse(latParam: string, lonParam: string) {
   const lat = parseFloat(latParam);
   const lon = parseFloat(lonParam);
@@ -81,6 +87,58 @@ async function handleReverse(latParam: string, lonParam: string) {
     return NextResponse.json(cached.result);
   }
 
+  const result = (await reverseViaPhoton(lat, lon)) ?? (await reverseViaNominatim(lat, lon));
+  if (!result) {
+    return NextResponse.json({ label: null, shortName: null }, { status: 502 });
+  }
+
+  reverseCache.set(key, { at: Date.now(), result });
+  return NextResponse.json(result);
+}
+
+async function reverseViaPhoton(lat: number, lon: number): Promise<ReverseResult | null> {
+  try {
+    const params = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+    const response = await fetch(`${PHOTON_REVERSE_URL}?${params.toString()}`, {
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      features?: Array<{ properties?: Record<string, string> }>;
+    };
+    const props = data.features?.[0]?.properties;
+    if (!props) return null;
+
+    // Photon returns the single nearest OSM feature (could be a POI/house/street), with the
+    // containing area names attached as context on it regardless of that feature's own
+    // type - use those context fields directly rather than `name` (which is that specific
+    // feature's own name, e.g. a shop or post office, not a general area name).
+    const shortName =
+      props.district ??
+      props.locality ??
+      props.suburb ??
+      props.neighbourhood ??
+      props.city_district ??
+      props.village ??
+      props.town ??
+      props.city ??
+      props.county ??
+      props.state ??
+      null;
+    const label =
+      [props.name, props.street, props.district ?? props.locality, props.city, props.state, props.country]
+        .filter((part, index, all) => part && all.indexOf(part) === index)
+        .join(", ") || null;
+
+    return { label, shortName };
+  } catch (error) {
+    console.error("Photon reverse geocode lookup failed:", error);
+    return null;
+  }
+}
+
+async function reverseViaNominatim(lat: number, lon: number): Promise<ReverseResult | null> {
   try {
     const params = new URLSearchParams({
       format: "jsonv2",
@@ -92,32 +150,33 @@ async function handleReverse(latParam: string, lonParam: string) {
     const response = await fetch(`${NOMINATIM_REVERSE_URL}?${params.toString()}`, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     });
-    if (!response.ok) {
-      return NextResponse.json({ label: null, shortName: null }, { status: 502 });
-    }
+    if (!response.ok) return null;
 
     const data = (await response.json()) as {
       display_name?: string;
       address?: Record<string, string>;
     };
     const label = data.display_name ?? null;
-    // A short, "one place name" label for the map's on-click marker (Google shows just the
-    // place name there, not the full address) - the most specific named settlement Nominatim
-    // knows for this point, falling back to the first segment of the full address.
+    // Ordered most-specific first: within a city, Nominatim's address object includes BOTH
+    // the neighbourhood/suburb AND the containing city at once (e.g. "Chamarajpet" +
+    // "Bengaluru" for the same point) - checking city first would return just the city name
+    // instead of the actual locality.
     const address = data.address ?? {};
     const shortName =
-      address.city ??
-      address.town ??
-      address.village ??
+      address.neighbourhood ??
       address.suburb ??
+      address.quarter ??
+      address.village ??
+      address.town ??
+      address.city_district ??
+      address.city ??
       address.county ??
       label?.split(",")[0]?.trim() ??
       null;
-    const result: ReverseResult = { label, shortName };
-    reverseCache.set(key, { at: Date.now(), result });
-    return NextResponse.json(result);
+
+    return { label, shortName };
   } catch (error) {
-    console.error("Reverse geocode lookup failed:", error);
-    return NextResponse.json({ label: null, shortName: null }, { status: 500 });
+    console.error("Nominatim reverse geocode lookup failed:", error);
+    return null;
   }
 }

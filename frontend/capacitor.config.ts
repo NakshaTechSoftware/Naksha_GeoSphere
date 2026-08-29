@@ -16,7 +16,7 @@ const config: CapacitorConfig = {
     // the local Wi-Fi. NOTE: this trycloudflare URL is ephemeral - it changes every time
     // the tunnel restarts, so the APK only works while THIS tunnel instance is running.
     // For a stable URL, use a cloudflared named tunnel or a hosted server.
-    url: 'https://annotation-dash-aus-marine.trycloudflare.com',
+    url: 'https://airports-deck-newport-poster.trycloudflare.com',
     cleartext: true,
   },
   android: {

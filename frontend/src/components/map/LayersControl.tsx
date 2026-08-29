@@ -161,15 +161,6 @@ export function LayersControl({
           </div>
 
           {/* Place names checkbox toggle (desktop only) */}
-          <label className="flex w-fit items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-md max-md:hidden">
-            <input
-              type="checkbox"
-              className="accent-blue-500"
-              checked={placeLabelsVisible}
-              onChange={(e) => onTogglePlaceLabels?.(e.target.checked)}
-            />
-            Place names
-          </label>
         </div>
 
         {/* Collapsed anchor button */}

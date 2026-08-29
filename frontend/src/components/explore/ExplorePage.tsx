@@ -26,7 +26,8 @@ import {
 } from "@/lib/userSession";
 import { ExportFeatureModal } from "./ExportFeatureModal";
 import { UserProfile } from "./UserProfile";
-import { FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon, ToolsGridIcon } from "./AOIIcons";
+import {  FreeHandIcon, PolygonIcon, RectangleIcon, DrawAOIIcon, ToolsGridIcon } from "./AOIIcons";
+import { NiboIcon } from "./NiboIcon";
 import {
   ArrowUpDown,
   Bike,
@@ -37,6 +38,7 @@ import {
   CloudSun,
   Download,
   Footprints,
+  Layers,
   LocateFixed,
   MapPin,
   Motorbike,
@@ -44,11 +46,13 @@ import {
   Search,
   Menu,
   Mic,
+  Send,
+  Sparkles,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
-import { WeatherLayerToolbar, type WeatherLayerKey } from "../weather/WeatherLayerToolbar";
+import { type WeatherLayerKey, LAYERS } from "../weather/WeatherLayerToolbar";
 import { rankLocationEntries, rankStaticSuggestions } from "@/lib/geosearch";
 
 type UiTravelModeId = "driving" | "motorcycle" | "cycling" | "walking";
@@ -761,14 +765,22 @@ export function ExplorePage() {
 
   // Live Location
   const [liveLocationState, setLiveLocationState] = useState<"off" | "locating" | "active">("off");
+  // A failed attempt (denied permission, unavailable fix, timeout) otherwise looks
+  // identical to a click that did nothing - this surfaces the actual reason.
+  const [liveLocationError, setLiveLocationError] = useState<string | null>(null);
   const handleToggleLiveLocation = () => {
     if (liveLocationState === "off") {
+      setLiveLocationError(null);
       setLiveLocationState("locating");
       mapViewerRef.current?.startLiveLocation();
     } else if (liveLocationState === "active") {
       setLiveLocationState("off");
+      setLiveLocationError(null);
       mapViewerRef.current?.stopLiveLocation();
     } else {
+      // Re-locate while still locating - clear any previous attempt's error so
+      // the retry doesn't look like it failed again before it even ran.
+      setLiveLocationError(null);
       mapViewerRef.current?.startLiveLocation();
     }
   };
@@ -1015,7 +1027,9 @@ export function ExplorePage() {
             ? "Location access is blocked. Allow it in your browser's site settings, then try again."
             : reason === "geolocation-unavailable"
               ? "Couldn't determine your current location - check your device's location settings and try again."
-              : "Couldn't find a route between these points - one may be outside Karnataka, which is the only area with directions support right now."
+              : reason === "service-unavailable"
+                ? "The directions service isn't reachable right now - it may not be running on this machine. Start it and try again."
+                : "Couldn't find a route between these points - one may be outside Karnataka, which is the only area with directions support right now."
         );
         return;
       }
@@ -1032,8 +1046,28 @@ export function ExplorePage() {
   // Mobile-only bottom sheet that bundles Weather and Draw AOI behind a single
   // menu button, since the top toolbar has no room for both on narrow screens.
   const [showMobileTools, setShowMobileTools] = useState(false);
+  const [mobileWeatherDropdownOpen, setMobileWeatherDropdownOpen] = useState(false);
+  const mobileWeatherDropdownRef = useRef<HTMLDivElement>(null);
+  // Mobile-only "View Details" toggle - opens the WeatherDetailsPanel (rendered inside
+  // IndiaMapViewer when its activeMapPanel is "weather") as a bottom sheet.
+  const [mobileWeatherDetailsOpen, setMobileWeatherDetailsOpen] = useState(false);
+  // Whether a weather point has been clicked on the map (mobile) - flips the
+  // bottom button label between "Click" (nothing selected yet) and "View Details".
+  const [mobileWeatherPointSelected, setMobileWeatherPointSelected] = useState(false);
   const [aoiInfo, setAoiInfo] = useState<AOIResult | null>(null);
   const aoiMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close mobile weather dropdown when clicking outside
+  useEffect(() => {
+    if (!mobileWeatherDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (mobileWeatherDropdownRef.current && !mobileWeatherDropdownRef.current.contains(event.target as Node)) {
+        setMobileWeatherDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [mobileWeatherDropdownOpen]);
 
   // Weather toolbar - appears beside search bar when weather is active.
   const [showWeatherToolbar, setShowWeatherToolbar] = useState(false);
@@ -1085,8 +1119,11 @@ export function ExplorePage() {
   }, [rtcImageUrl, mobileSketchUrl]);
 
   const rtcTouchDistance = (touches: React.TouchList) => {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
+    const t0 = touches[0];
+    const t1 = touches[1];
+    if (!t0 || !t1) return 0;
+    const dx = t0.clientX - t1.clientX;
+    const dy = t0.clientY - t1.clientY;
     return Math.hypot(dx, dy);
   };
 
@@ -1095,6 +1132,8 @@ export function ExplorePage() {
       rtcPinchRef.current = { startDistance: rtcTouchDistance(e.touches), startZoom: rtcZoom };
       rtcPanRef.current = null;
     } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      if (!touch) return;
       const now = Date.now();
       if (now - rtcLastTapRef.current < 300) {
         rtcLastTapRef.current = 0;
@@ -1109,8 +1148,8 @@ export function ExplorePage() {
       }
       if (rtcZoom > 1) {
         rtcPanRef.current = {
-          startX: e.touches[0].clientX,
-          startY: e.touches[0].clientY,
+          startX: touch.clientX,
+          startY: touch.clientY,
           startPanX: rtcPan.x,
           startPanY: rtcPan.y,
         };
@@ -1124,11 +1163,13 @@ export function ExplorePage() {
       const ratio = distance / rtcPinchRef.current.startDistance;
       setRtcZoom(Math.min(5, Math.max(1, rtcPinchRef.current.startZoom * ratio)));
     } else if (e.touches.length === 1 && rtcPanRef.current) {
+      const touch = e.touches[0];
+      if (!touch) return;
       // Pan is applied in screen space (translate comes after scale in the
       // transform below), so raw screen-pixel deltas are used directly -
       // no need to compensate for the current zoom level.
-      const dx = e.touches[0].clientX - rtcPanRef.current.startX;
-      const dy = e.touches[0].clientY - rtcPanRef.current.startY;
+      const dx = touch.clientX - rtcPanRef.current.startX;
+      const dy = touch.clientY - rtcPanRef.current.startY;
       setRtcPan({
         x: rtcPanRef.current.startPanX + dx,
         y: rtcPanRef.current.startPanY + dy,
@@ -1139,6 +1180,347 @@ export function ExplorePage() {
   const handleRtcTouchEnd = (e: React.TouchEvent) => {
     if (e.touches.length < 2) rtcPinchRef.current = null;
     if (e.touches.length < 1) rtcPanRef.current = null;
+  };
+
+  // GeoAI Agent - floating chat assistant, bottom-right of the map.
+  // Wired to the AI Agent Service backend (OpenCode Zen / OpenAI / Ollama).
+  interface GeoAiMessage {
+    role: "user" | "assistant";
+    text: string;
+  }
+  interface GeoAiMapAction {
+    type: "marker" | "route" | "polygon" | "highlight" | "fly_to" | "multi_marker" | "add_layer";
+    coordinates?: number[];
+    label?: string;
+    geometry?: Record<string, unknown>;
+    distance_meters?: number;
+    duration_seconds?: number;
+    center?: number[];
+    zoom?: number;
+    markers?: { coordinates: number[]; label?: string }[];
+    layer_name?: string;
+    color?: string;
+    fill_opacity?: number;
+  }
+
+  /** Capture current map state as context for the AI agent. */
+  const captureMapContext = () => {
+    const map = mapViewerRef.current?.getMap();
+    if (!map) return null;
+    try {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      const b = map.getBounds();
+      return {
+        center: { lat: c.lat, lon: c.lng },
+        zoom: z,
+        bounds: b ? {
+          north: b.getNorth(),
+          south: b.getSouth(),
+          east: b.getEast(),
+          west: b.getWest(),
+        } : null,
+        active_layers: [],
+        selected_feature: null,
+      };
+    } catch {
+      return null;
+    }
+  };
+  const [geoAiOpen, setGeoAiOpen] = useState(false);
+  // Captured once, the moment the chat is opened - not per message. Location
+  // permission is already requested/granted elsewhere at page load (a
+  // permission-only prompt, no coordinate capture happens there), so this
+  // getCurrentPosition() call resolves immediately without a new browser
+  // prompt. Stored here and reused for every query in this chat session
+  // ("my police station", "my postal code", etc.) so the user never has to
+  // click the map's separate "Show my location" button for the bot to know
+  // where they are.
+  const [geoAiUserLocation, setGeoAiUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [geoAiInput, setGeoAiInput] = useState("");
+  const [geoAiMessages, setGeoAiMessages] = useState<GeoAiMessage[]>([
+    {
+      role: "assistant",
+      text: "Hi! I'm Nibo. Ask me about locations, boundaries, or land records on this map.",
+    },
+  ]);
+  const [geoAiThinking, setGeoAiThinking] = useState(false);
+  const [geoAiStreaming, setGeoAiStreaming] = useState(false);
+  const [geoAiSessionId, setGeoAiSessionId] = useState("");
+  const [geoAiOnline, setGeoAiOnline] = useState(false);
+  const geoAiMessagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Poll agent health status. Deliberately hits the lightweight /health
+  // endpoint (see next.config.ts's /api/agent-health rewrite), NOT a chat
+  // message - a previous version POSTed a "ping" message to /api/agent/chat,
+  // which runs a full LLM + tool-calling turn (llama.cpp/Ollama can take
+  // 10-30+ seconds per call). Since Ollama processes one request at a time
+  // (OLLAMA_NUM_PARALLEL=1), that meant a background poller was silently
+  // competing with real user messages for the same inference slot every 30s,
+  // and could itself hallucinate a tool call for the word "ping".
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch("/api/agent-health");
+        setGeoAiOnline(res.ok);
+      } catch {
+        setGeoAiOnline(false);
+      }
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
+  const geoAiAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!geoAiOpen) return;
+    geoAiMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [geoAiMessages, geoAiOpen, geoAiThinking]);
+
+  /** Apply a map_action from the agent response to the map. */
+  const applyGeoAiMapAction = (action: GeoAiMapAction) => {
+    if (!mapViewerRef.current) return;
+    const map = mapViewerRef.current.getMap();
+    if (!map) return;
+
+    switch (action.type) {
+      case "marker": {
+        const coords = action.coordinates;
+        if (coords && coords.length >= 2 && coords[0] != null && coords[1] != null) {
+          mapViewerRef.current.flyToPlace(
+            coords[1], coords[0], action.label || "Agent Result",
+          );
+        }
+        break;
+      }
+      case "multi_marker": {
+        if (action.markers && action.markers.length > 0) {
+          const first = action.markers[0]!;
+          const mc = first.coordinates;
+          if (mc && mc.length >= 2 && mc[0] != null && mc[1] != null) {
+            mapViewerRef.current.flyToPlace(
+              mc[1] as number, mc[0] as number, first.label || "Result",
+            );
+          }
+        }
+        break;
+      }
+      case "fly_to": {
+        const fc = action.center;
+        if (fc && fc.length >= 2 && fc[0] != null && fc[1] != null) {
+          map.flyTo({
+            center: [fc[0], fc[1]],
+            zoom: action.zoom ?? 14,
+            duration: 1200,
+          });
+        }
+        break;
+      }
+      case "route":
+      case "polygon":
+      case "highlight":
+      case "add_layer":
+        // These are handled by the map action handler or tool_result rendering
+        break;
+    }
+  };
+
+  /** Opens the chat and captures the user's location right away - permission
+   * was already requested elsewhere at page load, so this resolves without
+   * a new browser prompt. Runs once per open rather than per message; a
+   * fresh getCurrentPosition() in handleGeoAiSend still covers the case
+   * where this hasn't resolved yet (or failed) by the time the user sends
+   * their first message. */
+  const handleOpenGeoAi = () => {
+    setGeoAiOpen(true);
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setGeoAiUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        () => { /* permission denied/unavailable - handleGeoAiSend falls back to stored/map location */ },
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60_000 },
+      );
+    }
+  };
+
+  const handleGeoAiSend = async () => {
+    const text = geoAiInput.trim();
+    if (!text || geoAiStreaming) return;
+
+    setGeoAiMessages((prev) => [
+      ...prev,
+      { role: "user", text },
+      { role: "assistant", text: "__streaming__" },
+    ]);
+    setGeoAiInput("");
+    setGeoAiThinking(true);
+    setGeoAiStreaming(true);
+
+    // Abort any previous in-flight request
+    geoAiAbortRef.current?.abort();
+    const controller = new AbortController();
+    geoAiAbortRef.current = controller;
+
+    // Build user location: prefer the fix captured when the chat was opened
+    // (handleOpenGeoAi) - permission was already granted at page load, so
+    // that capture happens with no prompt and no per-message delay. Fall
+    // back to a fresh getCurrentPosition() only if that hasn't resolved yet
+    // (e.g. the user typed and sent immediately after opening) or failed.
+    let userLocation: { lat: number; lon: number } | null = geoAiUserLocation;
+    if (!userLocation) {
+      userLocation = await new Promise((resolve) => {
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+          resolve(null);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+          () => resolve(null),
+          { enableHighAccuracy: false, timeout: 3000, maximumAge: 60_000 },
+        );
+      });
+      if (userLocation) setGeoAiUserLocation(userLocation);
+    }
+    if (!userLocation) {
+      try {
+        const session = getStoredUserSession();
+        if (session?.preferredLocation) {
+          userLocation = {
+            lat: session.preferredLocation.latitude,
+            lon: session.preferredLocation.longitude,
+          };
+        }
+      } catch { /* ignore */ }
+    }
+
+    const sessionId = geoAiSessionId || crypto.randomUUID().slice(0, 16);
+    if (!geoAiSessionId) setGeoAiSessionId(sessionId);
+
+    let streamedAnswer = "";
+    let finalPayload: {
+      answer?: string;
+      tool_used?: string;
+      map_action?: GeoAiMapAction;
+    } | null = null;
+
+    try {
+      const res = await fetch("/api/agent/chat/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": "naksha-agent-key-2024",
+        },
+        body: JSON.stringify({
+          message: text,
+          session_id: sessionId,
+          user_location: userLocation,
+          map_context: captureMapContext(),
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        throw new Error(`Agent service returned ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let currentEvent = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (currentEvent === "answer_chunk") {
+              streamedAnswer += data;
+              // Update the streaming placeholder with accumulated text
+              setGeoAiMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.role === "assistant" && last.text === "__streaming__") {
+                  return [...prev.slice(0, -1), { role: "assistant", text: streamedAnswer }];
+                }
+                if (last && last.role === "assistant") {
+                  return [...prev.slice(0, -1), { role: "assistant", text: streamedAnswer }];
+                }
+                return [...prev, { role: "assistant", text: streamedAnswer }];
+              });
+            } else if (currentEvent === "answer_done") {
+              try {
+                finalPayload = JSON.parse(data);
+              } catch { /* ignore parse error */ }
+            } else if (currentEvent === "error") {
+              try {
+                const errData = JSON.parse(data);
+                streamedAnswer = errData.error || "Something went wrong.";
+              } catch {
+                streamedAnswer = "Something went wrong.";
+              }
+            }
+            currentEvent = "";
+          }
+        }
+      }
+
+      // Apply final answer and map_action
+      if (finalPayload) {
+        setGeoAiMessages((prev) => {
+          const answer = finalPayload!.answer || streamedAnswer || "No response.";
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return [...prev.slice(0, -1), { role: "assistant", text: answer }];
+          }
+          return [...prev, { role: "assistant", text: answer }];
+        });
+
+        if (finalPayload.map_action) {
+          applyGeoAiMapAction(finalPayload.map_action);
+        }
+      } else if (streamedAnswer) {
+        setGeoAiMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return [...prev.slice(0, -1), { role: "assistant", text: streamedAnswer }];
+          }
+          return [...prev, { role: "assistant", text: streamedAnswer }];
+        });
+      } else {
+        setGeoAiMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: "No response from the agent." },
+        ]);
+      }
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("GeoAI Agent error:", err);
+      const errorMsg = err instanceof Error ? err.message : "Connection failed.";
+      setGeoAiMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: `Sorry, I couldn't process that. ${errorMsg}` },
+      ]);
+    } finally {
+      setGeoAiThinking(false);
+      setGeoAiStreaming(false);
+    }
+  };
+
+  const handleGeoAiKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleGeoAiSend();
+    }
   };
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -2088,6 +2470,7 @@ export function ExplorePage() {
           }}
           onDrillContextChange={setDrillContext}
           hideWeatherControl={showFilters}
+          hideLayersControl={showDirections}
           onWeatherToolbarChange={(visible) => {
             setShowWeatherToolbar(visible);
             if (visible) {
@@ -2124,7 +2507,18 @@ export function ExplorePage() {
               : null
           }
           onLiveLocationChange={(active) => setLiveLocationState(active ? "active" : "off")}
+          onLiveLocationError={setLiveLocationError}
           onNavigationUpdate={setNavigationState}
+          onWeatherPanelClose={() => {
+            // Closing the sheet clears the clicked point and re-arms click-to-inspect
+            // (activeMapPanel back to "weather" keeps weatherDetailsActive true), so
+            // the next map tap loads a new place directly. The panel is idle-hidden
+            // on mobile, so re-arming doesn't resurface it.
+            setMobileWeatherDetailsOpen(false);
+            setMobileWeatherPointSelected(false);
+            mapViewerRef.current?.setActiveMapPanel("weather");
+          }}
+          onWeatherPointSelected={() => setMobileWeatherPointSelected(true)}
           onRequestDirections={(lat, lon, label) => {
             setShowDirections(true);
             setOriginPoint({ type: "current" });
@@ -2152,6 +2546,7 @@ export function ExplorePage() {
           {showDirections ? (
             <div
               ref={directionsFormRef}
+              data-directions-panel=""
               className="pointer-events-auto relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-md"
             >
               {navigationState ? (
@@ -2614,19 +3009,6 @@ export function ExplorePage() {
             </div>
           )}
 
-          {/* Weather layer toolbar - appears beside search bar when weather is active */}
-          {showWeatherToolbar && (
-            <WeatherLayerToolbar
-              activeLayer={weatherToolbarMode}
-              onLayerSelect={(layer) => {
-                const mode = layer ?? "none";
-                mapViewerRef.current?.setWeatherMode(mode as any);
-                setWeatherToolbarMode(layer);
-              }}
-              className="pointer-events-auto flex-shrink-0"
-            />
-          )}
-
           {/* Directions Button - desktop only; on mobile it moves into the
               bottom-left stack below so it doesn't crowd the search row. */}
           <button
@@ -2792,6 +3174,26 @@ export function ExplorePage() {
           </div>
         </div>
 
+        {/* Live-location failure toast - a denied/unavailable/timed-out GPS fix
+            otherwise looks identical to a click that did nothing. Shown above the
+            mobile locate stack; on desktop it drops below the top-right controls. */}
+        {liveLocationError && (
+          <div
+            role="alert"
+            className="absolute bottom-36 left-4 right-4 z-30 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-md md:bottom-auto md:left-auto md:right-4 md:top-20 md:max-w-sm"
+          >
+            <span className="flex-1">{liveLocationError}</span>
+            <button
+              type="button"
+              onClick={() => setLiveLocationError(null)}
+              aria-label="Dismiss location error"
+              className="flex-shrink-0 rounded-full p-0.5 text-red-400 hover:bg-red-100 hover:text-red-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Mobile Directions/Locate stack - bottom-left corner, Directions (GPS)
             above Show my location, so both stay reachable by thumb without
             crowding the search row at the top. */}
@@ -2828,6 +3230,7 @@ export function ExplorePage() {
         </div>
 
         {/* Mobile Tools Button - opens the bottom sheet bundling Weather + Draw AOI */}
+        {!showDirections && (
         <div className="absolute right-6 top-24 z-20 md:hidden">
           <button
             type="button"
@@ -2844,6 +3247,113 @@ export function ExplorePage() {
             <ToolsGridIcon className="h-5 w-5" />
           </button>
         </div>
+        )}
+
+        {/* Mobile Weather Layer Selector - appears below Tools button when weather is active */}
+        {!showDirections && showWeatherToolbar && (
+          <div ref={mobileWeatherDropdownRef} className="absolute right-6 top-36 z-20 md:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileWeatherDropdownOpen(!mobileWeatherDropdownOpen)}
+              aria-haspopup="dialog"
+              aria-expanded={mobileWeatherDropdownOpen}
+              aria-label="Weather layers"
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-md transition-colors hover:bg-gray-50"
+            >
+              <Layers className="h-5 w-5" />
+            </button>
+          </div>
+        )}
+
+        {/* Mobile "View Details" - opens the WeatherDetailsPanel as a bottom sheet.
+            The panel itself is hidden on mobile (its desktop anchor collides with
+            the search bar), so this button is the only way to reach it. */}
+        {!showDirections && weatherToolbarMode && !mobileWeatherDetailsOpen && (
+          <div className="absolute bottom-6 left-1/2 z-20 -translate-x-1/2 md:hidden">
+            <button
+              type="button"
+              onClick={() => {
+                if (!mobileWeatherPointSelected) return; // "Click" state: tap the map first
+                setMobileWeatherDetailsOpen(true);
+                mapViewerRef.current?.setActiveMapPanel("weather");
+              }}
+              aria-expanded={mobileWeatherDetailsOpen}
+              className={`flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium shadow-md transition-colors ${
+                mobileWeatherPointSelected
+                  ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                  : "border-gray-200 bg-white text-gray-700"
+              }`}
+            >
+              <CloudSun className="h-4 w-4" />
+              {mobileWeatherPointSelected ? "View Details" : "Click"}
+            </button>
+          </div>
+        )}
+
+        {/* Mobile Weather Layers bottom sheet */}
+        {mobileWeatherDropdownOpen && (
+          <div className="pointer-events-none fixed inset-0 z-40 md:hidden">
+            <div
+              aria-hidden
+              onClick={() => setMobileWeatherDropdownOpen(false)}
+              className="pointer-events-auto absolute inset-0 bg-black/40"
+            />
+            <div className="pointer-events-auto scrollbar-hide absolute inset-x-0 bottom-0 h-[40vh] overflow-y-auto rounded-t-2xl border-t border-gray-200 bg-white shadow-xl">
+              <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-gray-300" />
+              <div className="flex items-center justify-between px-5 pb-2 pt-3">
+                <h3 className="text-base font-semibold text-obsidian-graphite">Weather Layers</h3>
+                <button
+                  type="button"
+                  onClick={() => setMobileWeatherDropdownOpen(false)}
+                  aria-label="Close"
+                  className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="px-5 pb-6">
+                <div className="grid grid-cols-3 gap-3">
+                  {LAYERS.map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        const mode = weatherToolbarMode === key ? null : key;
+                        mapViewerRef.current?.setWeatherMode(mode as any);
+                        setWeatherToolbarMode(mode);
+                        if (mode !== null) {
+                          // Weather overlays only render while the viewer's activeMapPanel
+                          // is "weather" (weatherDetailsActive derives from it), so selecting
+                          // a layer on mobile must arm the panel too. The panel itself stays
+                          // hidden while idle on mobile (see WeatherDetailsPanel) - the
+                          // "Click" button below tells the user to tap the map.
+                          mapViewerRef.current?.enableWeatherDefaults();
+                          mapViewerRef.current?.setActiveMapPanel("weather");
+                          setMobileWeatherDetailsOpen(false);
+                          setMobileWeatherPointSelected(false);
+                        } else {
+                          // Layer deselected - disarm click-to-inspect entirely.
+                          mapViewerRef.current?.setActiveMapPanel("none");
+                          setMobileWeatherDetailsOpen(false);
+                          setMobileWeatherPointSelected(false);
+                        }
+                        setMobileWeatherDropdownOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 rounded-xl border px-3 py-3 text-xs transition-colors ${
+                        weatherToolbarMode === key
+                          ? "border-atlas-cobalt bg-atlas-cobalt text-white"
+                          : "border-gray-200 text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <Icon className="h-5 w-5 flex-shrink-0" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Mobile Tools bottom sheet - Weather + Draw AOI, opened from the Tools button above */}
         {showMobileTools && (
@@ -2869,21 +3379,6 @@ export function ExplorePage() {
 
               <div className="px-5 pb-6">
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
-                  Weather
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMobileTools(false);
-                    mapViewerRef.current?.openWeatherMenu();
-                  }}
-                  className="flex w-full items-center gap-3 rounded-xl border border-gray-200 px-4 py-3 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50"
-                >
-                  <CloudSun className="h-5 w-5 flex-shrink-0 text-atlas-cobalt" />
-                  Weather layers &amp; conditions
-                </button>
-
-                <p className="mb-2 mt-5 text-[11px] font-semibold uppercase tracking-[0.18em] text-atlas-cobalt">
                   Draw AOI
                 </p>
                 <div className="grid grid-cols-3 gap-3">
@@ -3032,6 +3527,7 @@ export function ExplorePage() {
                 owners={owners}
                 useCase={useCase}
                 adjacentPlots={adjacentPlots}
+                guidelineValue={guidelineValue}
                 onExport={() => setExportModalOpen(true)}
                 onViewRtc={(url) => setRtcImageUrl(url)}
                 onSketchClick={(url) =>
@@ -3312,6 +3808,25 @@ export function ExplorePage() {
                 </div>
               )}
             </div>
+
+            {/* Weather section - mobile only, moved from Tools bottom sheet */}
+            <div className="mt-4 border-t border-gray-200 pt-4 md:hidden">
+              <p className="mb-2 text-base font-semibold text-obsidian-graphite md:text-sm">
+                Weather
+              </p>
+              <label className="flex items-center text-base text-gray-600 md:text-sm">
+                <input
+                  type="checkbox"
+                  className="mr-2 accent-atlas-cobalt"
+                  checked={showWeatherToolbar}
+                  onChange={() => {
+                    setShowFilters(false);
+                    mapViewerRef.current?.enableWeatherDefaults();
+                  }}
+                />
+                Weather layers & conditions
+              </label>
+            </div>
           </div>
         </aside>
 
@@ -3356,6 +3871,110 @@ export function ExplorePage() {
               )}
             </div>
           </div>
+        )}
+
+        {/* GeoAI Agent - floating chat launcher + panel, bottom-right of the map */}
+        {geoAiOpen && (
+          <div className="fixed bottom-12 right-4 z-40 flex h-[min(34rem,calc(100vh-6rem))] w-[min(22rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl md:bottom-12 md:right-6">
+            <div className="flex items-center justify-between gap-3 border-b border-white/20 bg-atlas-cobalt px-4 py-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-full overflow-hidden"><NiboIcon size={40} /></div>
+                <div>
+                  <span className="text-base font-semibold text-white">Nibo</span>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <span className={`relative flex h-2 w-2 ${geoAiOnline ? "" : ""}`}>
+                      {geoAiOnline && (
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                      )}
+                      <span className={`relative inline-flex h-2 w-2 rounded-full ${geoAiOnline ? "bg-green-400" : "bg-red-400"}`} />
+                    </span>
+                    <span className="text-xs text-white/70">{geoAiOnline ? "Online" : "Offline"}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGeoAiOpen(false)}
+                aria-label="Close Nibo chat"
+                className="rounded-full p-1.5 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 scrollbar-hide">
+              {geoAiMessages.filter((msg) => msg.text !== "__streaming__").map((msg, i) => (
+                <div
+                  key={i}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] break-words rounded-2xl px-3 py-2 text-sm ${
+                      msg.role === "user"
+                        ? "rounded-br-sm bg-atlas-cobalt text-white"
+                        : "rounded-bl-sm bg-gray-100 text-obsidian-graphite"
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {geoAiThinking && (
+                <div className="flex justify-start">
+                  <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-gray-100 px-3 py-2">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
+                  </div>
+                </div>
+              )}
+              <div ref={geoAiMessagesEndRef} />
+            </div>
+
+            <div className="flex items-center gap-2 border-t border-gray-100 p-3">
+              <input
+                type="text"
+                value={geoAiInput}
+                onChange={(e) => setGeoAiInput(e.target.value)}
+                onKeyDown={handleGeoAiKeyDown}
+                placeholder={geoAiStreaming ? "Nibo is thinking..." : "Ask Nibo..."}
+                disabled={geoAiStreaming}
+                className="flex-1 rounded-full border border-gray-200 px-3.5 py-2 text-sm text-obsidian-graphite outline-none focus:border-atlas-cobalt disabled:opacity-50"
+              />
+              {geoAiStreaming ? (
+                <button
+                  type="button"
+                  onClick={() => geoAiAbortRef.current?.abort()}
+                  aria-label="Stop response"
+                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-red-500 text-white transition-opacity hover:bg-red-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleGeoAiSend}
+                  disabled={!geoAiInput.trim()}
+                  aria-label="Send message"
+                  className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-atlas-cobalt text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!geoAiOpen && (
+          <button
+            type="button"
+            onClick={handleOpenGeoAi}
+            aria-label="Open Nibo"
+            className="fixed bottom-12 right-4 z-40 flex items-center justify-center bg-purple-700 shadow-xl transition-transform hover:scale-105 hover:bg-purple-600 md:right-6"
+            style={{ width: 60, height: 60, borderRadius: 30, overflow: "hidden" }}
+          >
+            <NiboIcon size={60} />
+          </button>
         )}
       </main>
     </div>

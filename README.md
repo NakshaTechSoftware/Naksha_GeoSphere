@@ -1,252 +1,626 @@
 # Naksha GeoSphere — The Geospatial Data Marketplace
 
-> **Status: Engineering Foundation (Phase 0).** This repository currently
-> contains a production-oriented *platform foundation* — not the marketplace
-> itself. No purchasing, payments, authentication, or dataset-fulfillment
-> logic is implemented yet. See [Future Development Phases](#17-future-development-phases).
-
-## 1. Project Overview
-
-Naksha GeoSphere is a premium geospatial data marketplace where users will be
-able to search a location, explore available raster/vector datasets, preview
-them on an interactive map, select an Area of Interest (AOI), see a
-calculated price, purchase the dataset, and receive a securely clipped and
-packaged download.
-
-This repository is the **foundation** that the full product will be built
-on: a working local development environment, a modular-monolith API, a
-background geospatial worker, object storage, CI/CD, and documentation —
-all wired together and validated end-to-end.
-
-## 2. Current Scope
-
-**In scope (this phase):**
-
-- Monorepo layout (frontend, API, worker, shared packages, infrastructure)
-- Local Docker Compose stack (Postgres/PostGIS, Redis, MinIO, Mailpit)
-- Optional remote storage mode: Postgres/Redis/object storage can run on a
-  separate LAN machine instead (see
-  [infrastructure/storage-server/](infrastructure/storage-server/))
-- FastAPI skeleton with liveness/readiness/aggregated health endpoints
-- Celery worker skeleton with example tasks and dedicated queues
-- Alembic migration enabling PostGIS + pgcrypto
-- Next.js starter page with branding, service-status cards, and a MapLibre
-  placeholder
-- Linting, type checking, unit tests, CI workflows
-- Documentation: architecture, security, geospatial standards, deployment
-
-**Explicitly out of scope (future phases):** authentication, authorization,
-payments, dataset catalog, AOI selection/pricing, order fulfillment,
-clipping/conversion pipelines, licensing, notifications.
-
-## 3. Architecture Summary
-
-```
-                 ┌──────────────┐        ┌──────────────────┐
-   Browser ───▶  │  apps/web    │──────▶ │  services/api    │
-                 │  (Next.js)   │  REST  │  (FastAPI)       │
-                 └──────────────┘        └───────┬──────────┘
-                                                  │
-                        ┌─────────────────────────┼─────────────────────┐
-                        ▼                         ▼                     ▼
-                ┌───────────────┐        ┌────────────────┐   ┌──────────────────┐
-                │ PostgreSQL /  │        │     Redis       │   │  services/worker  │
-                │   PostGIS     │◀──────▶│ (broker/cache)  │◀─▶│    (Celery)       │
-                └───────────────┘        └────────────────┘   └─────────┬─────────┘
-                                                                          ▼
-                                                                  ┌───────────────┐
-                                                                  │ MinIO / S3     │
-                                                                  │ object storage │
-                                                                  └───────────────┘
-```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full breakdown,
-data flow, and future AOI-purchase / secure-download flows.
-
-## 4. Technology Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js, React, TypeScript, pnpm, Tailwind CSS, Vitest, React Testing Library, Playwright (scaffold), MapLibre GL JS |
-| Backend | Python, FastAPI, Pydantic, Pydantic Settings, SQLAlchemy 2.x (async), asyncpg, Alembic, Ruff, MyPy, Pytest |
-| Worker | Celery, Redis, GDAL, Rasterio, GeoPandas, Shapely, PyProj, Fiona |
-| Database | PostgreSQL + PostGIS + pgcrypto |
-| Object storage | MinIO (dev) / S3-compatible (prod) |
-| Mail testing | Mailpit |
-| Containers | Docker, Docker Compose, multi-stage Dockerfiles |
-| CI/CD | GitHub Actions |
-
-Pinned versions are listed in [SETUP_REPORT.md](SETUP_REPORT.md).
-
-## 5. Prerequisites
-
-- Docker Desktop (with Docker Compose v2) — **the only hard requirement**
-- Git
-- Node.js ≥ 20 (only needed if you want to run frontend tooling *outside*
-  Docker)
-- Python ≥ 3.12 (only needed to run backend tooling *outside* Docker)
-
-You do **not** need PostgreSQL, Redis, or MinIO installed locally — they run
-entirely inside Docker.
-
-## 6. Windows PowerShell Setup
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
-```
-
-## 7. Linux/macOS Setup
-
-```bash
-chmod +x ./scripts/bootstrap.sh
-./scripts/bootstrap.sh
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
-```
-
-## 8. Docker Startup
-
-```bash
-# Start everything (development profile: hot reload, source mounts)
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
-
-# Tail logs
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml logs -f
-
-# Stop everything
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml down
-```
-
-## 9. Storage Modes: Local vs Remote
-
-By default this machine runs **everything**, including PostgreSQL,
-Redis, and object storage, in Docker alongside the app (**local
-storage mode** — the commands above).
-
-For a more production-like topology, PostgreSQL/Redis/object storage
-can instead run on a **separate machine on the LAN** (see
-[infrastructure/storage-server/](infrastructure/storage-server/)), with
-this machine running only `web`, `api`, `worker`, and `mailpit`
-(**remote storage mode**):
-
-```bash
-docker compose -f compose.yaml -f compose.dev.yaml -f compose.remote-storage.yaml up --build -d
-```
-
-This requires the variables in
-[.env.remote-storage.example](.env.remote-storage.example) to be merged
-into your `.env`, matching the storage server's own `.env.storage`
-exactly. **Never combine `compose.local-storage.yaml` and
-`compose.remote-storage.yaml` in the same command** — pick one mode.
-
-| Mode | Files | What runs here |
-|---|---|---|
-| Local storage (default) | `compose.yaml` + `compose.local-storage.yaml` + `compose.local-storage.dev.yaml` + `compose.dev.yaml` | web, api, worker, mailpit, postgres, redis, minio, minio-init |
-| Remote storage | `compose.yaml` + `compose.dev.yaml` + `compose.remote-storage.yaml` | web, api, worker, mailpit only |
-
-## 10. Service URLs (local development)
-
-| Service | URL | Notes |
-|---|---|---|
-| Frontend | http://localhost:3000 | Next.js |
-| API | http://localhost:8000 | FastAPI |
-| API Docs | http://localhost:8000/docs | Swagger UI (dev only) |
-| PostgreSQL | localhost:5434 | local storage mode only — maps to container port 5432 |
-| Redis | localhost:6380 | local storage mode only — maps to container port 6379 |
-| MinIO API | http://localhost:9000 | local storage mode only |
-| MinIO Console | http://localhost:9001 | local storage mode only |
-| Mailpit UI | http://localhost:8025 | Captured local emails |
-| Mailpit SMTP | localhost:1025 | Dev SMTP relay |
-
-In remote storage mode, PostgreSQL/Redis/object storage are reachable at
-the storage server's own address instead (e.g. `192.168.10.81:5544` —
-see [infrastructure/storage-server/README.md](infrastructure/storage-server/README.md)).
-
-All host ports are configurable via `.env` (see below) in case of local port
-conflicts.
-
-## 11. Environment Configuration
-
-Copy [.env.example](.env.example) to `.env` (the bootstrap scripts do this
-for you and generate local secrets). Every variable is documented inline.
-Full reference: [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md).
-For remote storage mode, also see [.env.remote-storage.example](.env.remote-storage.example).
-
-**Never commit a real `.env` file.** It is excluded via `.gitignore`.
-
-## 12. Database Migrations
-
-```bash
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec api alembic upgrade head
-```
-
-(Drop `-f compose.local-storage.yaml -f compose.local-storage.dev.yaml`
-and add `-f compose.remote-storage.yaml` if running in remote storage
-mode.)
-
-The initial migration enables the `postgis` and `pgcrypto` extensions. No
-marketplace schema exists yet.
-
-## 13. Running Tests
-
-```bash
-# Frontend
-pnpm --filter @naksha/web test
-pnpm --filter @naksha/web test:e2e   # Playwright scaffold
-
-# Backend
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec api pytest
-
-# Worker
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec worker pytest
-```
-
-## 14. Worker Validation
-
-```bash
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml exec worker \
-  celery -A worker.main call system.ping
-```
-
-## 15. Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| Port already in use | Change the relevant `*_HOST_PORT` value in `.env`, then `docker compose ... up -d` again |
-| `/api/v1/health/ready` reports a dependency as `unavailable` | Run `docker compose ps` to confirm the dependency container is healthy; check `docker compose logs <service>` |
-| Frontend shows "API unavailable" | Confirm `NEXT_PUBLIC_API_URL` in `.env` matches the API's published port |
-| Alembic can't connect | Local storage mode: confirm `DATABASE_URL` host is `postgres` (the Compose service name). Remote storage mode: confirm `DATABASE_HOST`/`DATABASE_PORT` in `.env` match the storage server exactly |
-| MinIO buckets missing | Local storage mode: check the `minio-init` container logs. Remote storage mode: run `check-storage.ps1` on the storage server |
-
-Run `./scripts/check-health.ps1` or `./scripts/check-health.sh` for an
-automated diagnostic pass (local storage mode). For remote storage mode,
-run `infrastructure/storage-server/scripts/check-storage.ps1` **on the
-storage-server machine**.
-
-## 16. Security Warning
-
-The default `.env.example` values (database password, MinIO keys, secret
-key) are **local-development placeholders only**. The bootstrap scripts
-generate random local secrets so you never run with the literal example
-text. **Never reuse these values, or any value from a development `.env`,
-in a staging or production environment.** See [docs/SECURITY.md](docs/SECURITY.md).
-
-## 17. Future Development Phases
-
-This foundation intentionally excludes marketplace logic. Planned phases:
-
-1. Authentication & authorization, organizations, RBAC
-2. Dataset catalog & metadata ingestion (STAC-aligned)
-3. Interactive map search, AOI drawing, and pricing engine
-4. Orders, payments, and licensing
-5. Clipping/conversion processing pipelines (raster, vector, LiDAR)
-6. Secure, short-lived signed download delivery
-7. Notifications, audit logging, admin console
-8. Production cloud deployment (Terraform modules are scaffolded but
-   unprovisioned — see [infrastructure/README.md](infrastructure/README.md))
+> **Status: Engineering Foundation + AI Agent Integration.** This repository contains
+> a production-oriented platform foundation with an integrated AI-powered GeoGIS copilot
+> ("Nibo") that understands natural-language geographic questions and automatically
+> orchestrates GIS tool calls.
 
 ---
 
-For system design details see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-For geospatial conventions see [docs/GEOSPATIAL_STANDARDS.md](docs/GEOSPATIAL_STANDARDS.md).
-For the full validation record of this foundation, see [SETUP_REPORT.md](SETUP_REPORT.md).
+## 1. Project Overview
+
+Naksha GeoSphere is a premium geospatial data marketplace with an integrated AI assistant
+that can answer geographic questions, find nearby places, show administrative boundaries,
+calculate routes, and visualize results on an interactive MapLibre GL map.
+
+### What's Built
+
+- **Frontend** — Next.js + MapLibre GL interactive map with AI chat panel ("Nibo")
+- **AI Agent Service** — LLM-powered reasoning layer with tool calling (Ollama/Qwen2.5 local, OpenAI, OpenCode Zen)
+- **GeoAI Tool Adapter** — Spatial query middleware between AI and PostGIS/MinIO
+- **GIS Backend** — FastAPI + PostGIS + MinIO + Celery worker
+- **Spatial Context Engine** — AI understands live map state (center, zoom, layers, selected features)
+- **Streaming Chat** — Real-time SSE responses with map visualization actions
+
+---
+
+## 2. Architecture
+
+```
+                    ┌─────────────────────┐
+                    │   Browser / Mobile   │
+                    │  (Next.js + MapLibre)│
+                    └─────────┬───────────┘
+                              │
+                    ┌─────────▼───────────┐
+                    │   AI Agent Service   │  ← Nibo chat, streaming, tool calling
+                    │   (port 8200)        │
+                    └─────────┬───────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌─────────────┐ ┌───────────┐ ┌──────────────┐
+       │ LLM Provider│ │   Redis   │ │ GeoAI Tool   │
+       │ (Ollama/    │ │ (memory)  │ │ Adapter      │
+       │  OpenAI)    │ └───────────┘ │ (port 8100)  │
+       └─────────────┘               └──────┬───────┘
+                                            │
+                                ┌───────────┼───────────┐
+                                ▼           ▼           ▼
+                         ┌──────────┐ ┌─────────┐ ┌─────────┐
+                         │ PostGIS  │ │  MinIO  │ │  OSRM   │
+                         │ (5544)   │ │ (9000)  │ │(5001-3) │
+                         └──────────┘ └─────────┘ └─────────┘
+```
+
+---
+
+## 3. Prerequisites
+
+### Required
+
+| Tool | Version | Purpose |
+|---|---|---|
+| **Docker Desktop** | Latest | Runs all backend services |
+| **Git** | Latest | Clone the repository |
+| **Python** | 3.11 or 3.12 | AI Agent Service local dev |
+| **Node.js** | ≥ 20 | Frontend local dev (optional) |
+| **pnpm** | Latest | Frontend package manager |
+
+### Optional (for local LLM)
+
+| Tool | Purpose |
+|---|---|
+| **Ollama** | Local LLM inference (runs inside Docker) |
+
+> **Note:** You do NOT need PostgreSQL, Redis, or MinIO installed locally — they run inside Docker.
+
+---
+
+## 4. Quick Start (5 minutes)
+
+### Step 1: Clone and configure
+
+```bash
+git clone <repo-url>
+cd Naksha_GeoSphere
+
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your settings (see Section 5 for all variables)
+# Minimum required: POSTGRES_PASSWORD and MINIO_ACCESS_KEY / MINIO_SECRET_KEY
+```
+
+### Step 2: Start the core stack
+
+```bash
+# Windows
+docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
+
+# Linux/macOS
+docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
+```
+
+### Step 3: Start Ollama (local AI)
+
+```bash
+# Start Ollama container with Qwen2.5-3B model
+docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama
+docker exec ollama ollama pull qwen2.5:3b
+```
+
+### Step 4: Start the GeoAI Tool Adapter
+
+```bash
+cd geoai-service
+
+# Create .env from template
+cp .env.example .env
+# Edit .env — see Section 5 for database credentials
+
+# Start
+docker compose up --build -d
+cd ..
+```
+
+### Step 5: Start the AI Agent Service
+
+```bash
+cd ai-agent-service
+
+# Create virtual environment
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env
+cp .env.example .env
+# Edit .env — see Section 5 for LLM and Redis settings
+
+# Start the agent
+uvicorn app.main:app --host 127.0.0.1 --port 8200 --reload
+cd ..
+```
+
+### Step 6: Verify everything works
+
+```bash
+# Core stack health
+curl http://localhost:8000/api/v1/health
+
+# GeoAI Tool Adapter
+curl http://localhost:8100/health
+
+# AI Agent Service
+curl http://localhost:8200/health
+
+# Frontend
+open http://localhost:3000
+```
+
+---
+
+## 5. Environment Variables
+
+### Core Stack (.env at repo root)
+
+| Variable | Required | Description |
+|---|---|---|
+| `POSTGRES_PASSWORD` | ✅ | PostgreSQL password |
+| `MINIO_ACCESS_KEY` | ✅ | MinIO access key |
+| `MINIO_SECRET_KEY` | ✅ | MinIO secret key |
+| `POSTGRES_HOST_PORT` | | DB port (default: 5434) |
+| `REDIS_HOST_PORT` | | Redis port (default: 6380) |
+| `NEXT_PUBLIC_API_URL` | | Frontend→API URL (default: http://localhost:8000) |
+
+### Remote Storage Server (if using separate DB machine)
+
+| Variable | Example | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://geosphere_app:PASSWORD@192.168.10.81:5544/naksha_geosphere` | PostGIS connection |
+| `REDIS_URL` | `redis://:PASSWORD@192.168.10.81:6390/2` | Redis connection |
+| `MINIO_ENDPOINT` | `192.168.10.81:9000` | MinIO server |
+| `S3_ACCESS_KEY` | `geosphere_storage` | MinIO/S3 access key |
+| `S3_SECRET_KEY` | `...` | MinIO/S3 secret key |
+
+### GeoAI Tool Adapter (geoai-service/.env)
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ | Same PostGIS as core stack |
+| `REDIS_URL` | ✅ | Same Redis, different DB index (/2) |
+| `MINIO_ENDPOINT` | ✅ | Same MinIO as core stack |
+| `MINIO_ACCESS_KEY` | ✅ | Same as core stack |
+| `MINIO_SECRET_KEY` | ✅ | Same as core stack |
+| `GEOAI_API_KEYS` | ✅ | API key for auth (generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"`) |
+| `GEOAI_HOST_PORT` | | Port to expose (default: 8100) |
+
+### AI Agent Service (ai-agent-service/.env)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `LLM_PROVIDER` | ✅ | `openai` | LLM provider: `ollama`, `openai`, or `opencode` |
+| `OLLAMA_URL` | If using Ollama | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | If using Ollama | `qwen2.5:3b` | Ollama model name |
+| `OPENAI_API_KEY` | If using OpenAI | | OpenAI API key |
+| `OPENCODE_API_KEY` | If using OpenCode | | OpenCode Zen API key |
+| `GEOAI_BASE_URL` | ✅ | `http://localhost:8100` | GeoAI Tool Adapter URL |
+| `GEOAI_API_KEY` | ✅ | | Must match `GEOAI_API_KEYS` in geoai-service |
+| `REDIS_URL` | ✅ | | Redis for conversation memory |
+| `AGENT_API_KEYS` | | | Comma-separated keys for frontend auth |
+| `MAX_TOOL_ROUNDS` | | `10` | Max LLM tool-calling iterations |
+
+---
+
+## 6. Running the Services
+
+### Full Stack (Docker)
+
+```bash
+# Start everything
+docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
+
+# View logs
+docker compose logs -f
+
+# Stop everything
+docker compose down
+```
+
+### AI Agent Service (Local)
+
+```bash
+cd ai-agent-service
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+
+# Development with auto-reload
+uvicorn app.main:app --host 127.0.0.1 --port 8200 --reload
+
+# Production
+uvicorn app.main:app --host 0.0.0.0 --port 8200 --workers 4
+```
+
+### GeoAI Tool Adapter (Docker)
+
+```bash
+cd geoai-service
+docker compose up --build -d
+
+# View logs
+docker compose logs -f geoai-service
+```
+
+### Ollama (Local LLM)
+
+```bash
+# Pull model (first time only)
+docker exec ollama ollama pull qwen2.5:3b
+
+# Verify model is available
+docker exec ollama ollama list
+
+# Test inference
+docker exec ollama ollama run qwen2.5:3b "Say hello"
+```
+
+---
+
+## 7. Features
+
+### AI Chat (Nibo)
+
+- **Natural language queries** — "Find police stations near me", "Which district is this?"
+- **Context-aware** — AI understands current map state (center, zoom, layers, selected features)
+- **Streaming responses** — Real-time token-by-token via Server-Sent Events
+- **Map visualization** — Automatic markers, routes, polygons on the map
+
+### Supported Commands
+
+| User Intent | Example | Tool Used |
+|---|---|---|
+| Find nearby places | "Find hospital near me" | `find_nearest_place` |
+| Administrative boundaries | "Which district am I in?" | `query_spatial_layer` |
+| Navigation | "Navigate to Mysore Palace" | `get_route` + `search_place` |
+| Address lookup | "What is this address?" | `reverse_geocode` |
+| Place search | "Find Bangalore Palace" | `search_place` |
+
+### Map Actions
+
+| Action Type | Description |
+|---|---|
+| `marker` | Single pin on the map |
+| `multi_marker` | Multiple pins (e.g., nearby results) |
+| `route` | Polyline between two points |
+| `polygon` / `highlight` | Area highlight with fill |
+| `fly_to` | Animate camera to location |
+| `add_layer` | Add GeoJSON data layer |
+
+### Spatial Context Engine
+
+When a user asks "Find police stations here", the AI uses:
+- **Map center** — resolves "here" to coordinates
+- **Zoom level** — understands detail level
+- **Active layers** — knows what data is visible
+- **Selected feature** — uses clicked feature properties
+
+---
+
+## 8. API Reference
+
+### AI Agent Service (port 8200)
+
+#### `POST /api/chat/stream` (Recommended)
+
+Stream a geographic answer as Server-Sent Events.
+
+```bash
+curl -X POST http://localhost:8200/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Find police station near me",
+    "user_location": {"lat": 12.9716, "lon": 77.5946},
+    "map_context": {
+      "center": {"lat": 12.9716, "lon": 77.5946},
+      "zoom": 15,
+      "active_layers": ["roads", "buildings"]
+    },
+    "session_id": "test-1"
+  }'
+```
+
+**SSE Events:**
+```
+event: answer_chunk
+data: The
+
+event: answer_chunk
+data:  nearest
+
+event: tool_call
+data: {"name": "find_nearest_place", "arguments": "..."}
+
+event: tool_result
+data: {"status": "success", "results": [...]}
+
+event: answer_done
+data: {"answer": "...", "tool_used": "...", "map_action": {...}}
+```
+
+#### `POST /api/chat` (Standard)
+
+```bash
+curl -X POST http://localhost:8200/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hi", "session_id": "test-1"}'
+```
+
+#### `GET /health`
+
+```bash
+curl http://localhost:8200/health
+# {"status":"ok","service":"Naksha GeoAI Agent Service","version":"1.0.0"}
+```
+
+#### `GET /agent/info`
+
+```bash
+curl http://localhost:8200/agent/info
+# {"provider":"ollama","model":"qwen2.5:3b","base_url":"http://localhost:11434","geoai_url":"http://localhost:8100"}
+```
+
+### GeoAI Tool Adapter (port 8100)
+
+#### `GET /geoai/tools/definitions`
+
+Returns OpenAI function-calling compatible tool schemas.
+
+#### `POST /geoai/tools/execute`
+
+Execute a GIS tool.
+
+```bash
+curl -X POST http://localhost:8100/geoai/tools/execute \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"name": "find_nearest_place", "arguments": {"category": "police_station", "latitude": 12.9716, "longitude": 77.5946, "radius": 5000}}'
+```
+
+---
+
+## 9. LLM Provider Switching
+
+Switch between providers by changing one environment variable — no code changes needed.
+
+| Provider | `LLM_PROVIDER` | Model | API |
+|---|---|---|---|
+| **Ollama (Local)** | `ollama` | `qwen2.5:3b` | `http://localhost:11434` |
+| **OpenAI (Cloud)** | `openai` | `gpt-4.1` | OpenAI API |
+| **OpenCode Zen** | `opencode` | `mimo-v2.5-free` | OpenCode API |
+
+### Switch to Ollama (Recommended for dev)
+
+```bash
+# ai-agent-service/.env
+LLM_PROVIDER=ollama
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:3b
+```
+
+### Switch to OpenAI
+
+```bash
+# ai-agent-service/.env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-key
+OPENAI_MODEL=gpt-4.1
+```
+
+---
+
+## 10. Frontend Integration
+
+The frontend (Next.js) communicates with the AI Agent Service via a proxy rewrite.
+
+### Proxy Configuration (frontend/next.config.ts)
+
+```typescript
+async rewrites() {
+  return [
+    {
+      source: "/api/agent/:path*",
+      destination: `${process.env.AGENT_API_URL ?? "http://localhost:8200"}/api/:path*`,
+    },
+  ];
+}
+```
+
+### Docker Configuration
+
+The frontend runs inside Docker and needs `AGENT_API_URL` to reach the host machine:
+
+```yaml
+# compose.dev.yaml
+web:
+  environment:
+    AGENT_API_URL: http://host.docker.internal:8200
+```
+
+### Key Frontend Components
+
+| Component | Location | Purpose |
+|---|---|---|
+| `ExplorePage.tsx` | `frontend/src/components/explore/` | Main map + chat UI |
+| `MapContextProvider.tsx` | `frontend/src/components/geoai/` | Captures live map state |
+| `MapActionHandler.tsx` | `frontend/src/components/geoai/` | Executes map actions from AI |
+| `IndiaMapViewer.tsx` | `frontend/src/components/explore/` | MapLibre GL map component |
+
+---
+
+## 11. Project Structure
+
+```
+Naksha_GeoSphere/
+├── ai-agent-service/              # AI Agent (Nibo)
+│   ├── app/
+│   │   ├── agent/
+│   │   │   ├── agent.py           # Main orchestration loop
+│   │   │   ├── context.py         # Spatial Context Resolver
+│   │   │   ├── executor.py        # Tool execution engine
+│   │   │   ├── prompts.py         # Context-aware system prompt
+│   │   │   ├── memory.py          # Redis conversation memory
+│   │   │   └── analytics.py       # Query analytics logging
+│   │   ├── llm/
+│   │   │   ├── provider.py        # Abstract LLM provider
+│   │   │   ├── openai_provider.py # OpenAI implementation
+│   │   │   ├── ollama_provider.py # Ollama implementation
+│   │   │   ├── opencode_provider.py # OpenCode Zen implementation
+│   │   │   └── factory.py         # Provider factory
+│   │   ├── geoai/
+│   │   │   ├── client.py          # httpx client to GeoAI service
+│   │   │   └── tools.py           # Tool definition loader
+│   │   ├── schemas/
+│   │   │   ├── chat_models.py     # API request/response models
+│   │   │   └── map_actions.py     # Extended map action types
+│   │   ├── api/chat.py            # Chat + streaming endpoints
+│   │   ├── cache/redis.py         # Redis connection + memory
+│   │   └── config/settings.py     # Pydantic settings
+│   ├── tests/                     # 70 tests
+│   ├── requirements.txt
+│   └── .env.example
+│
+├── geoai-service/                 # GeoAI Tool Adapter
+│   ├── app/
+│   │   ├── api/tools.py           # Tool definitions + dispatcher
+│   │   ├── services/              # nearby, spatial, geocode, minio
+│   │   ├── database/models.py     # PostGIS POI models
+│   │   └── schemas/
+│   ├── migrations/
+│   ├── docker-compose.yml
+│   └── .env.example
+│
+├── frontend/                      # Next.js + MapLibre GL
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── explore/           # Map, chat, search UI
+│   │   │   └── geoai/             # MapContextProvider, MapActionHandler
+│   │   ├── lib/config.ts
+│   │   └── app/
+│   ├── next.config.ts
+│   └── Dockerfile
+│
+├── services/
+│   ├── api/                       # FastAPI backend
+│   └── worker/                    # Celery worker
+│
+├── infrastructure/                # Docker, Terraform, routing
+├── compose.yaml                   # Base Docker Compose
+├── compose.dev.yaml               # Development overlay
+├── compose.prod.yaml              # Production overlay
+└── .env.example                   # Environment template
+```
+
+---
+
+## 12. Testing
+
+### AI Agent Service (70 tests)
+
+```bash
+cd ai-agent-service
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+```
+
+### GeoAI Tool Adapter
+
+```bash
+cd geoai-service
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest -v
+```
+
+### Frontend
+
+```bash
+cd frontend
+pnpm install
+pnpm test
+```
+
+---
+
+## 13. Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| **Agent returns 500** | Agent service not running | Start with `uvicorn app.main:app --port 8200` |
+| **"Agent service returned 500" in browser** | Frontend can't reach agent | Set `AGENT_API_URL=http://host.docker.internal:8200` in compose.dev.yaml |
+| **GeoAI returns 500 on tool call** | PostGIS tables don't exist | Run migrations: `python migrations/run_migrations.py` in geoai-service |
+| **Ollama 400 Bad Request** | Tool arguments format wrong | Ensure `arguments` is a dict, not JSON string (already fixed in code) |
+| **Redis connection error** | Redis not running or wrong URL | Check `REDIS_URL` in .env matches your Redis instance |
+| **OpenAI 429 Rate Limit** | API quota exhausted | Switch to Ollama: `LLM_PROVIDER=ollama` |
+| **Frontend shows "coming soon"** | Agent service not wired | Ensure `AGENT_API_URL` is set in web container env |
+| **Port conflict** | Another process using port | Change `*_HOST_PORT` in .env |
+
+### Checking Service Health
+
+```bash
+# Core stack
+docker compose ps
+
+# GeoAI Tool Adapter
+curl http://localhost:8100/health
+
+# AI Agent Service
+curl http://localhost:8200/health
+curl http://localhost:8200/agent/info
+
+# Ollama
+curl http://localhost:11434/api/tags
+```
+
+---
+
+## 14. Security Notes
+
+- **Never commit `.env` files** — they are excluded via `.gitignore`
+- **API keys** — Use unique keys for each service, rotate regularly
+- **LLM keys** — Never expose `OPENAI_API_KEY` or `OPENCODE_API_KEY` to the frontend
+- **GeoAI isolation** — The AI agent only sees `/geoai/*` endpoints, never raw DB credentials
+- **Rate limiting** — Both GeoAI and Agent services implement per-key rate limiting
+
+---
+
+## 15. Development Workflow
+
+### Adding a new GIS tool
+
+1. Add tool definition to `geoai-service/app/api/tools.py::TOOL_DEFINITIONS`
+2. Implement the handler in the appropriate service file
+3. Add test in `geoai-service/tests/`
+4. The AI agent will automatically pick up the new tool via dynamic loading
+
+### Adding a new LLM provider
+
+1. Create `ai-agent-service/app/llm/new_provider.py` implementing `LLMProvider`
+2. Add provider to `ai-agent-service/app/llm/factory.py`
+3. Add config fields to `ai-agent-service/app/config/settings.py`
+4. Add tests in `ai-agent-service/tests/`
+
+### Modifying the AI system prompt
+
+Edit `ai-agent-service/app/agent/prompts.py` — the `SYSTEM_PROMPT` variable.
+
+---
+
+## 16. License
+
+[Add your license here]

@@ -95,22 +95,15 @@ cp .env.example .env
 ### Step 2: Start the core stack
 
 ```bash
-# Windows
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
-
-# Linux/macOS
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
+docker compose -f compose.yaml -f compose.dev.yaml up --build -d
 ```
 
-### Step 3: Start Ollama (local AI)
+> There is no `compose.local-storage*.yaml` in this repo — the two files above are
+> the whole core stack (Postgres/PostGIS, Redis, MinIO, OSRM, the FastAPI `api`,
+> the Celery `worker`, and the Next.js `web` frontend). See `compose.remote-storage.yaml`
+> only if you're pointing at a separate database machine instead of the Docker-local one.
 
-```bash
-# Start Ollama container with Qwen2.5-3B model
-docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama
-docker exec ollama ollama pull qwen2.5:3b
-```
-
-### Step 4: Start the GeoAI Tool Adapter
+### Step 3: Start the GeoAI Tool Adapter
 
 ```bash
 cd geoai-service
@@ -124,31 +117,58 @@ docker compose up --build -d
 cd ..
 ```
 
-### Step 5: Start the AI Agent Service
+### Step 4: Start the AI Agent Service (and Ollama)
+
+The agent's own `docker compose.yml` already starts Ollama for you (it's a
+`depends_on` service) — **do not** also `docker run --name ollama ...` separately,
+that will conflict with it.
 
 ```bash
 cd ai-agent-service
 
-# Create virtual environment
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Create .env
+# Create .env from template
 cp .env.example .env
-# Edit .env — see Section 5 for LLM and Redis settings
+# Edit .env — see Section 5. The defaults use LLM_PROVIDER=ollama, which needs
+# no API key at all, so this works out of the box for local dev.
 
-# Start the agent
-uvicorn app.main:app --host 127.0.0.1 --port 8200 --reload
+# Start (also brings up the ollama service automatically)
+docker compose up --build -d
+
+# First time only: pull the model into the now-running ollama container
+docker exec $(docker compose ps -q ollama) ollama pull qwen2.5:3b
 cd ..
 ```
 
-### Step 6: Verify everything works
+> ⚠️ **Known gotcha: `docker compose up` fails with "network ... declared as
+> external, but could not be found".** `ai-agent-service/docker-compose.yml`
+> joins an external network named literally `naksha-network`, but Compose
+> actually creates the core stack's network as `<project-name>_naksha-network`
+> (e.g. `naksha_geosphere_naksha-network` if you cloned into a folder called
+> `Naksha_GeoSphere`, since Compose derives the project name from the folder).
+> If you hit this, either rename your clone folder to `naksha_geosphere` (all
+> lowercase - simplest, since that's what the checked-in `.env`/scripts assume)
+> and re-run Step 2, or run `docker network ls | grep naksha` to see the real
+> name Step 2 actually created, then temporarily override it for your own
+> machine with `docker compose -p <that-project-name> up --build -d` here in
+> `ai-agent-service/`. **Don't just rename the `naksha-network:` key in
+> `docker-compose.yml`** to "fix" it - that's shared, checked-in config and
+> would just move the mismatch onto whoever pulls that change next; this is
+> really a one-line fix in the compose file itself, worth raising with
+> whoever owns this service rather than patching around per-machine.
+>
+> **No NVIDIA GPU?** The `ollama` service in `ai-agent-service/docker-compose.yml`
+> requests an NVIDIA GPU (`deploy.resources.reservations.devices`). Without one
+> (and the NVIDIA Container Toolkit installed), `docker compose up` for this file
+> will fail outright with a "could not select device driver" error. Either install
+> the toolkit, or delete/comment out that `deploy:` block — Ollama runs fine on
+> CPU, just slower. Alternatively, skip Ollama entirely and set
+> `LLM_PROVIDER=openai` (or `opencode`) with a real API key instead.
+>
+> **Prefer running the agent outside Docker for `--reload` dev?** See
+> "AI Agent Service (Local, outside Docker)" in Section 6 — you'll still need
+> Ollama running somehow (Docker or a native install) if `LLM_PROVIDER=ollama`.
+
+### Step 5: Verify everything works
 
 ```bash
 # Core stack health
@@ -159,6 +179,10 @@ curl http://localhost:8100/health
 
 # AI Agent Service
 curl http://localhost:8200/health
+curl http://localhost:8200/agent/info   # confirms which LLM provider/model it's using
+
+# Ollama (only relevant if LLM_PROVIDER=ollama)
+curl http://localhost:11434/api/tags
 
 # Frontend
 open http://localhost:3000
@@ -220,30 +244,17 @@ open http://localhost:3000
 
 ## 6. Running the Services
 
-### Full Stack (Docker)
+### Core Stack (Docker)
 
 ```bash
 # Start everything
-docker compose -f compose.yaml -f compose.local-storage.yaml -f compose.local-storage.dev.yaml -f compose.dev.yaml up --build -d
+docker compose -f compose.yaml -f compose.dev.yaml up --build -d
 
 # View logs
-docker compose logs -f
+docker compose -f compose.yaml -f compose.dev.yaml logs -f
 
 # Stop everything
-docker compose down
-```
-
-### AI Agent Service (Local)
-
-```bash
-cd ai-agent-service
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-
-# Development with auto-reload
-uvicorn app.main:app --host 127.0.0.1 --port 8200 --reload
-
-# Production
-uvicorn app.main:app --host 0.0.0.0 --port 8200 --workers 4
+docker compose -f compose.yaml -f compose.dev.yaml down
 ```
 
 ### GeoAI Tool Adapter (Docker)
@@ -256,17 +267,50 @@ docker compose up --build -d
 docker compose logs -f geoai-service
 ```
 
-### Ollama (Local LLM)
+### AI Agent Service + Ollama (Docker)
 
 ```bash
-# Pull model (first time only)
-docker exec ollama ollama pull qwen2.5:3b
+cd ai-agent-service
+docker compose up --build -d
+
+# View logs
+docker compose logs -f ai-agent-service
+docker compose logs -f ollama
+```
+
+### AI Agent Service (Local, outside Docker)
+
+Useful for faster `--reload` iteration on the agent code itself. Ollama (or
+whichever LLM provider you're using) still needs to be reachable — either
+start just the `ollama` service from the compose file above
+(`docker compose up -d ollama`), or point `OLLAMA_URL`/`OPENAI_API_KEY`/etc.
+at an already-running instance.
+
+```bash
+cd ai-agent-service
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+cp .env.example .env       # edit as needed
+
+# Development with auto-reload
+uvicorn app.main:app --host 127.0.0.1 --port 8200 --reload
+
+# Production
+uvicorn app.main:app --host 0.0.0.0 --port 8200 --workers 4
+```
+
+### Ollama model management
+
+```bash
+# Pull a model (first time only) - into the compose-managed container
+docker exec $(docker compose -f ai-agent-service/docker-compose.yml ps -q ollama) ollama pull qwen2.5:3b
 
 # Verify model is available
-docker exec ollama ollama list
+curl http://localhost:11434/api/tags
 
-# Test inference
-docker exec ollama ollama run qwen2.5:3b "Say hello"
+# Test inference directly
+docker exec $(docker compose -f ai-agent-service/docker-compose.yml ps -q ollama) ollama run qwen2.5:3b "Say hello"
 ```
 
 ---
@@ -436,20 +480,40 @@ async rewrites() {
       source: "/api/agent/:path*",
       destination: `${process.env.AGENT_API_URL ?? "http://localhost:8200"}/api/:path*`,
     },
+    {
+      // Nibo's "online" indicator - a cheap GET, not a full agent turn.
+      source: "/api/agent-health",
+      destination: `${process.env.AGENT_API_URL ?? "http://localhost:8200"}/health`,
+    },
   ];
 }
 ```
 
 ### Docker Configuration
 
-The frontend runs inside Docker and needs `AGENT_API_URL` to reach the host machine:
+The `web` container needs `AGENT_API_URL` set to something IT can reach the agent
+service through - `localhost` inside a container means the container itself, not
+your host machine, so the default (`http://localhost:8200`) will never work there.
 
 ```yaml
-# compose.dev.yaml
+# compose.dev.yaml (as currently checked in)
 web:
   environment:
-    AGENT_API_URL: http://host.docker.internal:8200
+    AGENT_API_URL: ${AGENT_API_URL:-http://192.168.10.42:8200}
 ```
+
+> ⚠️ **Known gotcha for a new machine.** That fallback IP (`192.168.10.42`) is one
+> specific developer's LAN address, not something portable - it will not resolve
+> on your machine or your teammates'. **Don't edit `compose.dev.yaml` to "fix"
+> this for everyone** (a shared file shouldn't hardcode any one person's IP);
+> instead override it for your own machine, either:
+> - Add `AGENT_API_URL=http://host.docker.internal:8200` to your root `.env`
+>   (works out of the box on Docker Desktop for Windows/macOS; on Linux add
+>   `extra_hosts: ["host.docker.internal:host-gateway"]` to the `web` service
+>   first, or run this override some other way), or
+> - Point it at `ai-agent-service`'s actual reachable address on your network/
+>   container setup (its own container DNS name if it's joined to
+>   `naksha-network`, e.g. `http://ai-agent-service:8000`, or your own LAN IP).
 
 ### Key Frontend Components
 
@@ -490,7 +554,7 @@ Naksha_GeoSphere/
 │   │   ├── api/chat.py            # Chat + streaming endpoints
 │   │   ├── cache/redis.py         # Redis connection + memory
 │   │   └── config/settings.py     # Pydantic settings
-│   ├── tests/                     # 70 tests
+│   ├── tests/                     # 79 tests
 │   ├── requirements.txt
 │   └── .env.example
 │
@@ -529,7 +593,7 @@ Naksha_GeoSphere/
 
 ## 12. Testing
 
-### AI Agent Service (70 tests)
+### AI Agent Service (79 tests)
 
 ```bash
 cd ai-agent-service
@@ -561,8 +625,10 @@ pnpm test
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **Agent returns 500** | Agent service not running | Start with `uvicorn app.main:app --port 8200` |
-| **"Agent service returned 500" in browser** | Frontend can't reach agent | Set `AGENT_API_URL=http://host.docker.internal:8200` in compose.dev.yaml |
+| **Agent returns 500** | Agent service not running | Start with `uvicorn app.main:app --port 8200` (or `docker compose up` in `ai-agent-service/`) |
+| **"Agent service returned 500" / agent-health keeps failing in browser** | Frontend container can't reach agent | Override `AGENT_API_URL` for your machine — see "Docker Configuration" in Section 10, **don't hardcode your IP into `compose.dev.yaml`** |
+| **`docker compose up` in `ai-agent-service/` fails: network declared as external, but could not be found** | Network name mismatch between `ai-agent-service/docker-compose.yml` and what Step 2 actually created | See the callout under Quick Start Step 4 |
+| **`docker compose up` in `ai-agent-service/` fails: could not select device driver "nvidia"** | No NVIDIA GPU / Container Toolkit on this machine | See the callout under Quick Start Step 4 |
 | **GeoAI returns 500 on tool call** | PostGIS tables don't exist | Run migrations: `python migrations/run_migrations.py` in geoai-service |
 | **Ollama 400 Bad Request** | Tool arguments format wrong | Ensure `arguments` is a dict, not JSON string (already fixed in code) |
 | **Redis connection error** | Redis not running or wrong URL | Check `REDIS_URL` in .env matches your Redis instance |
